@@ -13,6 +13,7 @@ const APP_FILES = [
   "./app/export.js",
   "./app/hash.js",
   "./app/limits.js",
+  "./app/map.js",
   "./app/sha256.js",
   "./app/seed.js",
   "./app/sniff.js",

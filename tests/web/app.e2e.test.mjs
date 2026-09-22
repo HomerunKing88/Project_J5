@@ -95,8 +95,18 @@ class Cdp {
     await this.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
     await this.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
   }
+  /** getBoundingClientRect 중심을 실제 마우스로 누른다 (SVG 자식은 DOM.getBoxModel 이 불확실하다). */
+  async clickRect(selector) {
+    const r = await this.eval(`(() => { const n = document.querySelector(${JSON.stringify(selector)}); n.scrollIntoView({ block: 'center' }); const b = n.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; })()`);
+    await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: r.x, y: r.y });
+    await this.send("Input.dispatchMouseEvent", { type: "mousePressed", x: r.x, y: r.y, button: "left", clickCount: 1 });
+    await this.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: r.x, y: r.y, button: "left", clickCount: 1 });
+  }
   close() { try { this.ws.close(); } catch {} this.proc.kill(); }
 }
+
+// 마커 중심을 svg 기준 좌표로 (스크롤에 영향받지 않게)
+const MARKER_POS = "(() => { const s = document.getElementById('map-svg').getBoundingClientRect(); return Array.from(document.querySelectorAll('#map-svg g.pt')).map(g => { const b = g.querySelector('.dot').getBoundingClientRect(); return [g.dataset.assetId, b.left + b.width / 2 - s.left, b.top + b.height / 2 - s.top]; }); })()";
 
 async function waitForDownloads(dir, count, ms = 15000) {
   const end = Date.now() + ms;
@@ -131,6 +141,29 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     // 시드
     await cdp.eval("document.getElementById('load-synthetic').click(); 'ok'");
     await cdp.waitFor("document.querySelectorAll('#asset-list li button').length === 5");
+    // 지도 (J5-005): 위치점 4개, 주소만 있는 물건 1개는 목록에서만. 마커 탭 → 관측 시작, 확대 → 좌표 변화, 전체 보기 → 복귀
+    await cdp.waitFor("document.querySelectorAll('#map-svg g.pt').length === 4");
+    assert.match(await cdp.eval("document.getElementById('map-note').textContent"), /위치점 4개 표시 \(가상 4 · 실제 0\) · 위치점 없는 물건 1개/);
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.pt.synthetic').length"), 4, "가상자료 마커 표시");
+    assert.match(await cdp.eval("document.querySelector('#map-svg .layer-scale text').textContent"), /^\d+ m$/, "축척 막대");
+    const pos0 = await cdp.eval(MARKER_POS);
+    const svgBox = await cdp.eval("(b => [b.width, b.height])(document.getElementById('map-svg').getBoundingClientRect())");
+    for (const [, x, y] of pos0) assert.ok(x > 0 && x < svgBox[0] && y > 0 && y < svgBox[1], `마커가 지도 안에 있다 ${x},${y}`);
+    await cdp.clickRect('#map-svg g.pt[data-asset-id="7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a51"] .hit');
+    await cdp.waitFor("!document.getElementById('sec-observe').hidden");
+    assert.equal(await cdp.eval("document.getElementById('target-label').textContent"), "가상 물건 2", "마커 탭으로 관측 대상 선택");
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.pt.sel').length"), 1);
+    assert.equal(await cdp.eval("document.querySelector('#map-svg g.pt.sel').dataset.assetId"), "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a51");
+    await cdp.eval("document.getElementById('cancel-observation').click(); 'ok'");
+    await cdp.waitFor("document.getElementById('sec-observe').hidden && document.querySelectorAll('#map-svg g.pt.sel').length === 0");
+    await cdp.clickRect("#map-zoom-in");
+    const pos1 = await cdp.eval(MARKER_POS);
+    assert.ok(pos1.some((p, i) => Math.abs(p[1] - pos0[i][1]) > 1 || Math.abs(p[2] - pos0[i][2]) > 1), "확대 후 마커 좌표 변화");
+    const orderX = (ps) => [...ps].sort((a, b) => a[1] - b[1]).map((p) => p[0]);
+    assert.deepEqual(orderX(pos1), orderX(pos0), "확대해도 동서 순서 유지");
+    await cdp.clickRect("#map-fit");
+    const pos2 = await cdp.eval(MARKER_POS);
+    for (let i = 0; i < pos0.length; i++) { assert.ok(Math.abs(pos2[i][1] - pos0[i][1]) < 0.5 && Math.abs(pos2[i][2] - pos0[i][2]) < 0.5, "전체 보기로 복귀"); }
     // 관측 (사진 1장, 태그 1개)
     const photo = join(tmp, "front.png");
     writeFileSync(photo, png1x1([0, 128, 255]));
@@ -162,6 +195,16 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.waitFor("document.querySelectorAll('#asset-list li button').length === 2");
     await cdp.waitFor("document.querySelectorAll('#record-list li').length === 1");
     assert.ok((await cdp.eval("document.getElementById('record-list').textContent")).includes("현재 시드에 없는 물건"));
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.pt').length"), 2, "시드 교체 후 지도도 2개");
+    // 주소만 있는 시드: 지도에는 점이 없고 목록으로 선택한다
+    const seedAddr = join(tmp, "seed-addr.json");
+    writeFileSync(seedAddr, JSON.stringify([seedAll[2]]));
+    await cdp.setFiles("#seed-file", [seedAddr]);
+    await cdp.waitFor("document.querySelectorAll('#asset-list li button').length === 1");
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.pt').length"), 0);
+    assert.match(await cdp.eval("document.getElementById('map-note').textContent"), /위치점 있는 물건이 없다\. 목록에서 선택한다/);
+    await cdp.setFiles("#seed-file", [seed2]);
+    await cdp.waitFor("document.querySelectorAll('#asset-list li button').length === 2");
     // 잘못된 시드 파일은 거절되고 목록이 바뀌지 않는다
     const seedBad = join(tmp, "seed-bad.json");
     writeFileSync(seedBad, JSON.stringify([{ ...seedAll[0], extra: 1 }]));
@@ -174,6 +217,27 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.navigate(`${base}/index.html`);
     await cdp.waitFor("document.querySelectorAll('#record-list li').length === 1");
     assert.ok((await cdp.eval("document.getElementById('status-line').textContent")).includes("관측 1"));
+    await cdp.waitFor("document.querySelectorAll('#map-svg g.pt').length === 4");
+    // 지도 실패 시 목록: SVG 요소 생성만 막아(저장소에서 createElementNS 는 map.js 만 쓴다) 지도가 못 뜨는 상황을 만든다.
+    // 앱은 안내만 남기고 목록·기록은 그대로여야 하며 콘솔 오류를 내지 않아야 한다.
+    const { identifier: stub } = await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `
+      const orig = document.createElementNS.bind(document);
+      document.createElementNS = (ns, name) => { if (String(ns).endsWith('/svg')) throw new Error('e2e: SVG 생성 불가'); return orig(ns, name); };` });
+    await cdp.navigate(`${base}/index.html`);
+    await cdp.waitFor("document.getElementById('map-note').textContent.includes('지도 표시 불가')");
+    assert.match(await cdp.eval("document.getElementById('map-note').textContent"), /지도 표시 불가: e2e: SVG 생성 불가\. 목록에서 선택한다/);
+    await cdp.waitFor("document.querySelectorAll('#asset-list li button').length === 5");
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.pt').length"), 0);
+    assert.equal(await cdp.eval("document.querySelectorAll('#record-list li').length"), 1, "지도 실패해도 기록 목록 유지");
+    await cdp.eval("document.querySelectorAll('#asset-list li button')[2].click(); 'ok'");
+    await cdp.waitFor("!document.getElementById('sec-observe').hidden");
+    assert.equal(await cdp.eval("document.getElementById('target-label').textContent"), "가상 물건 3", "지도 없이 목록으로 선택");
+    await cdp.eval("document.getElementById('cancel-observation').click(); 'ok'");
+    assert.deepEqual(cdp.errors, [], "지도 실패 경로에서 콘솔 오류 없음");
+    await cdp.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: stub });
+    await cdp.navigate(`${base}/index.html`);
+    await cdp.waitFor("document.querySelectorAll('#map-svg g.pt').length === 4");
+    await cdp.waitFor("document.querySelectorAll('#record-list li').length === 1");
     // 내보내기: 묶음 준비 → 파일 저장(다운로드) → j5 inspect ok → 저장 확인 → 내보냄 표시
     const dl = join(tmp, "dl"); mkdirSync(dl);
     await cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: dl, eventsEnabled: true });

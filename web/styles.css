@@ -19,3 +19,17 @@ ul.plain li button { margin-left: 8px; }
 .tags label { display: inline-block; margin: 2px 10px 2px 0; font-size: .9rem; }
 .photo-item { border: 1px dashed #8886; border-radius: 6px; padding: 6px; margin: 6px 0; }
 .badge { display: inline-block; border: 1px solid #8888; border-radius: 10px; padding: 0 8px; font-size: .8rem; margin-left: 6px; }
+/* 지도 (J5-005): SVG 점 지도. 스타일은 여기에만 둔다 (CSP style-src 'self', 인라인 style 금지). */
+#map-svg { display: block; width: 100%; height: 280px; border: 1px solid #8886; border-radius: 6px; background: #8880;
+  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; cursor: grab; }
+.pt .hit { fill: none; pointer-events: all; }
+.pt .dot { fill: currentColor; stroke: Canvas; stroke-width: 1.5; }
+.pt.synthetic .dot { fill: Canvas; stroke: currentColor; stroke-dasharray: 3 2; }
+.pt text { font-size: 12px; fill: currentColor; paint-order: stroke; stroke: Canvas; stroke-width: 3px; pointer-events: none; }
+.layer-scale line { stroke: currentColor; stroke-width: 2; }
+.layer-scale text { font-size: 11px; fill: currentColor; }
+.map-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.map-controls button { min-width: 44px; }
+.lg { display: inline-block; width: 12px; height: 12px; border-radius: 50%; vertical-align: middle; margin-left: 6px; }
+.lg-syn { border: 1px dashed currentColor; }
+.lg-real { background: currentColor; }
