@@ -1,10 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "j5"
-version = "0.0.0"
+version = "0.1.0"
 description = "종로5가 투자지도: PC용 수집·반영·검증·백업 도구"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["jsonschema==4.23.0"]
+
+[project.scripts]
+j5 = "j5.cli:main"
+
+[tool.setuptools]
+packages = ["j5", "j5.package"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 addopts = "-q"

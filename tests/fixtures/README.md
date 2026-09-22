@@ -3,7 +3,7 @@
 모두 가상자료다. `python tests/fixtures/make_packages.py`로 결정적으로 다시 만든다. 사진은 1x1 PNG다.
 
 - `assets.seed.synthetic.json`: 가상 물건 5개. 좌표·주소는 가상값이다.
-- `packages/<case>/`: ZIP을 풀어 놓은 형태의 패키지. ZIP 생성·검사(J5-007·008)는 이 디렉터리를 입력으로 시험한다.
+- `packages/<case>/`: ZIP을 풀어 놓은 형태의 패키지. `python -m j5 inspect <폴더>`로 검사할 수 있고, 테스트는 같은 폴더를 ZIP으로 묶어서도 검사한다.
 
 | case | 내용 | 기대 결과 (걸러내는 단계) |
 |---|---|---|
