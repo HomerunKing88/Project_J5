@@ -1,0 +1,15 @@
+:root { color-scheme: light dark; font-family: -apple-system, system-ui, sans-serif; line-height: 1.45; }
+body { margin: 0; padding: 16px; max-width: 720px; margin-inline: auto; }
+h1 { font-size: 1.3rem; margin: 0 0 8px; }
+h2 { font-size: 1.05rem; margin: 20px 0 6px; }
+section { border: 1px solid #8884; border-radius: 8px; padding: 12px; margin: 12px 0; }
+button, input[type=file] { font-size: 1rem; padding: 8px 12px; margin: 4px 0; }
+button { border: 1px solid #8888; border-radius: 6px; background: transparent; color: inherit; }
+button:disabled { opacity: .5; }
+pre { white-space: pre-wrap; word-break: break-all; font-size: .85rem; background: #8881; padding: 8px; border-radius: 6px; }
+.muted { color: #888; font-size: .9rem; }
+.ok { color: #2a7; } .bad { color: #c33; } .warn { color: #c80; }
+label { display: block; margin: 6px 0; }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+td, th { border-bottom: 1px solid #8883; padding: 4px 6px; text-align: left; vertical-align: top; }
+textarea { width: 100%; box-sizing: border-box; font-size: 1rem; }
