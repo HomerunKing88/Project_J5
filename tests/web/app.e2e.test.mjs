@@ -70,7 +70,15 @@ class Cdp {
       else if (d.method === "Log.entryAdded" && d.params.entry.level === "error") this.errors.push(d.params.entry.text.slice(0, 300));
     };
   }
-  send(method, params = {}) { return new Promise((res, rej) => { const i = ++this.id; this.pending.set(i, (d) => d.error ? rej(new Error(d.error.message)) : res(d.result)); this.ws.send(JSON.stringify({ id: i, method, params })); }); }
+  send(method, params = {}, timeoutMs = 20000) {
+    // 응답이 없는 명령은 멈춤 대신 오류로 끝낸다 (CI 에서 무한 대기 방지).
+    return new Promise((res, rej) => {
+      const i = ++this.id;
+      const timer = setTimeout(() => { this.pending.delete(i); rej(new Error(`CDP ${method} 응답 없음 (${timeoutMs}ms)`)); }, timeoutMs);
+      this.pending.set(i, (d) => { clearTimeout(timer); d.error ? rej(new Error(`${method}: ${d.error.message}`)) : res(d.result); });
+      this.ws.send(JSON.stringify({ id: i, method, params }));
+    });
+  }
   async eval(expression) { const r = await this.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error(r.exceptionDetails.text + " " + (r.exceptionDetails.exception?.description || "")); return r.result.value; }
   async waitFor(expression, ms = 8000) { const end = Date.now() + ms; while (Date.now() < end) { if (await this.eval(expression)) return true; await new Promise((r) => setTimeout(r, 100)); } throw new Error("timeout: " + expression); }
   async navigate(url) { await this.send("Page.navigate", { url }); await this.waitFor("document.readyState === 'complete'"); }

@@ -83,7 +83,24 @@ export function planBatches(records, photoMeta, limits = LIMITS) {
   return { batches, errors };
 }
 
+export const STUDY_ID_MAX = 100; // package_manifest.schema.json 의 study_id maxLength
+
+/** study_id 가 manifest 계약(1~100자, 앞뒤 공백 없음)에 맞지 않으면 사유를 돌려준다. */
+export function studyIdError(studyId) {
+  if (typeof studyId !== "string" || studyId.length === 0) return "study_id 를 입력해야 한다";
+  if (studyId !== studyId.trim()) return "study_id 앞뒤 공백을 제거해야 한다";
+  if (studyId.length > STUDY_ID_MAX) return `study_id 는 ${STUDY_ID_MAX}자 이하여야 한다 (현재 ${studyId.length}자)`;
+  return null;
+}
+
+/** 내보내기 계획에 아직 만들지 않은 묶음이 남아 있는가. */
+export function hasRemainingBatches(plan) {
+  return !!(plan && Array.isArray(plan.batches) && Number.isInteger(plan.k) && plan.k < plan.batches.length);
+}
+
 export function buildManifest({ studyId, dataMode, packageId, createdAt, files }) {
+  const idErr = studyIdError(studyId);
+  if (idErr) throw new Error(idErr);
   return {
     format: "j5field",
     schema_version: PACKAGE_SCHEMA_VERSION,
@@ -128,12 +145,16 @@ export async function buildPackage(batch, recordsById, { loadPhoto, studyId, dat
   for (const sha of batch.shas) {
     const p = await loadPhoto(sha);
     if (!p) throw new Error(`사진 없음 ${sha}`);
-    const buf = new Uint8Array(await p.blob.arrayBuffer());
+    // 버퍼는 해시·CRC 계산에만 쓰고 버린다. ZIP 데이터 파트는 원본 Blob 이라 한 번에 사진 하나의 버퍼만 존재한다.
+    const blob = p.blob instanceof Blob ? p.blob : new Blob([p.blob]);
+    const buf = new Uint8Array(await blob.arrayBuffer());
     const digest = await sha256Hex(buf);
     if (digest !== sha) throw new Error(`사진 해시 불일치 ${sha.slice(0, 12)}…`);
+    const size = buf.length;
+    const crc = crc32(buf);
     const name = photoPath(sha, p.ext);
-    photoEntries.push({ name, size: buf.length, crc32: crc32(buf), data: buf });
-    files.push({ path: name, bytes: buf.length, sha256: sha });
+    photoEntries.push({ name, size, crc32: crc, data: blob });
+    files.push({ path: name, bytes: size, sha256: sha });
   }
   photoEntries.sort((a, b) => (a.name < b.name ? -1 : 1));
   files.sort((a, b) => (a.path === OBS_NAME ? -1 : b.path === OBS_NAME ? 1 : a.path < b.path ? -1 : 1));

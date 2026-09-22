@@ -6,7 +6,7 @@ import { uuid4, isUuid } from "./uuid.js";
 import { isoWithOffset, fromDatetimeLocal, toDatetimeLocal, localDate } from "./time.js";
 import { buildEvent, validateEvent, lineBytes, PHOTO_TAGS, PHOTO_TAG_LABEL, CHANGE_STATUS_LABEL, PHOTO_LIMIT } from "./event.js";
 import { validateSeed } from "./seed.js";
-import { selectRecords, planBatches, buildPackage } from "./export.js";
+import { selectRecords, planBatches, buildPackage, hasRemainingBatches, studyIdError } from "./export.js";
 
 export const APP_VERSION = "0.1.0";
 const $ = (id) => document.getElementById(id);
@@ -42,7 +42,8 @@ async function loadSettings() {
 async function saveSettings() {
   const studyId = $("study-id").value.trim();
   const route = $("route-version").value.trim();
-  if (!studyId) return text($("settings-note"), "study_id 를 입력해야 한다", "bad");
+  const idErr = studyIdError(studyId);
+  if (idErr) return text($("settings-note"), idErr, "bad");
   if (route && !isUuid(route)) return text($("settings-note"), "경로 버전 ID 는 UUID 형식이어야 한다", "bad");
   await state.store.setMeta("study_id", studyId);
   await state.store.setMeta("data_mode", $("data-mode").value);
@@ -242,8 +243,8 @@ async function exportPrepare() {
   $("export-prepare").disabled = true;
   try {
     if (state.export?.url) { URL.revokeObjectURL(state.export.url); state.export.url = null; }
-    const plan = state.export?.batches && state.export.k < state.export.batches.length && state.export.attempted === false && state.export.package
-      ? state.export : await exportPlan();
+    // 기존 계획에 남은 묶음이 있으면 그 계획의 k번째 묶음을 만든다. "묶음 준비" 버튼은 state.export 를 비워 새 계획을 잡는다.
+    const plan = hasRemainingBatches(state.export) ? state.export : await exportPlan();
     if (!plan) return;
     if (!plan.batches.length) { state.export = null; $("export-save").disabled = true; $("export-confirm").disabled = true; return exportNote("내보낼 기록이 없다", "muted"); }
     const k = plan.k;

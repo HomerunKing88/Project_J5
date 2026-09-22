@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { selectRecords, planBatches, buildPackage, exportFilename, sanitizeStudyId, buildManifest } from "../../web/app/export.js";
+import { selectRecords, planBatches, buildPackage, exportFilename, sanitizeStudyId, buildManifest, studyIdError, hasRemainingBatches, STUDY_ID_MAX } from "../../web/app/export.js";
 import { buildEvent, lineBytes } from "../../web/app/event.js";
 import { uuid4 } from "../../web/app/uuid.js";
 import { LIMITS } from "../../web/app/limits.js";
@@ -102,6 +102,25 @@ test("buildPackage: j5 inspect 통과, 재내보내기 바이트 동일, 사진 
   const tampered = new Map(store); tampered.set(sha(p1), { blob: new Blob([png(7)]), ext: "png" });
   await assert.rejects(buildPackage(batches[0], byId, { loadPhoto: (s) => tampered.get(s), studyId: "s", dataMode: "synthetic" }), /해시 불일치/);
   await assert.rejects(buildPackage(batches[0], byId, { loadPhoto: () => undefined, studyId: "s", dataMode: "synthetic" }), /사진 없음/);
+});
+
+test("study_id 는 manifest 계약(1~100자) 을 지켜야 한다", () => {
+  assert.equal(studyIdError("j5-synthetic-study"), null);
+  assert.equal(studyIdError("a".repeat(STUDY_ID_MAX)), null);
+  assert.match(studyIdError("a".repeat(STUDY_ID_MAX + 1)), /100자 이하/);
+  assert.match(studyIdError(""), /입력/);
+  assert.match(studyIdError(" x"), /공백/);
+  assert.throws(() => buildManifest({ studyId: "a".repeat(101), dataMode: "synthetic", packageId: "p", createdAt: "c", files: [] }), /100자 이하/);
+});
+
+test("묶음 진행: 확인 후에도 같은 계획의 다음 묶음으로 간다", () => {
+  const plan = { batches: [{}, {}, {}], k: 0, package: null };
+  const seq = [];
+  while (hasRemainingBatches(plan)) { seq.push(`${plan.k + 1}of${plan.batches.length}`); plan.k += 1; plan.package = null; }
+  assert.deepEqual(seq, ["1of3", "2of3", "3of3"]);
+  assert.equal(hasRemainingBatches(null), false);
+  assert.equal(hasRemainingBatches({ batches: [], k: 0 }), false);
+  assert.equal(hasRemainingBatches({ batches: [{}], k: 1 }), false);
 });
 
 test("파일명·manifest", () => {
