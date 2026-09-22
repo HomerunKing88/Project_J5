@@ -19,3 +19,13 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: pip install -r requirements-dev.txt
       - run: python -m pytest -W error::UserWarning
+
+  web:
+    # 웹 모듈 단위 테스트. 앱 실행에는 Node가 필요 없고, 테스트 실행에만 쓴다 (npm 의존성 없음).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node --test "tests/web/**/*.test.mjs"
