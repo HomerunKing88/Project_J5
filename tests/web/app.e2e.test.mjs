@@ -124,7 +124,9 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.send("Network.emulateNetworkConditions", { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
     await cdp.navigate(`${base}/index.html`);
     await cdp.waitFor("document.querySelectorAll('#record-list li').length === 1");
-    assert.ok((await cdp.eval("document.getElementById('status-line').textContent")).includes("오프라인"));
+    // 실제로 네트워크가 막혔는지: 캐시 목록에 없는 시드 파일 요청은 실패해야 한다 (navigator.onLine 은 에뮬레이션에서 신뢰할 수 없음)
+    assert.equal(await cdp.eval("fetch('data/assets.seed.synthetic.json', { cache: 'no-store' }).then(() => 'reachable').catch(() => 'blocked')"), "blocked");
+    assert.ok((await cdp.eval("document.getElementById('status-line').textContent")).includes("관측 1"));
     await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
     // IndexedDB 내용을 패키지 폴더로 꺼내 PC 검사기로 확인
     const dump = await cdp.eval(`(async () => {
