@@ -6,10 +6,11 @@ import { uuid4, isUuid } from "./uuid.js";
 import { isoWithOffset, fromDatetimeLocal, toDatetimeLocal, localDate } from "./time.js";
 import { buildEvent, validateEvent, lineBytes, PHOTO_TAGS, PHOTO_TAG_LABEL, CHANGE_STATUS_LABEL, PHOTO_LIMIT } from "./event.js";
 import { validateSeed } from "./seed.js";
+import { selectRecords, planBatches, buildPackage, hasRemainingBatches, studyIdError } from "./export.js";
 
 export const APP_VERSION = "0.1.0";
 const $ = (id) => document.getElementById(id);
-const state = { store: null, assets: [], target: null, photos: [], saving: false };
+const state = { store: null, assets: [], target: null, photos: [], saving: false, export: null };
 
 function text(el, value, cls) {
   el.textContent = value;
@@ -41,7 +42,8 @@ async function loadSettings() {
 async function saveSettings() {
   const studyId = $("study-id").value.trim();
   const route = $("route-version").value.trim();
-  if (!studyId) return text($("settings-note"), "study_id 를 입력해야 한다", "bad");
+  const idErr = studyIdError(studyId);
+  if (idErr) return text($("settings-note"), idErr, "bad");
   if (route && !isUuid(route)) return text($("settings-note"), "경로 버전 ID 는 UUID 형식이어야 한다", "bad");
   await state.store.setMeta("study_id", studyId);
   await state.store.setMeta("data_mode", $("data-mode").value);
@@ -214,13 +216,118 @@ async function doSaveObservation() {
   await renderRecords();
 }
 
+// ---- 내보내기 ----
+// state.export = { studyId, dataMode, batches, errors, k, package, url, attempted }
+function exportNote(msg, cls = "") { text($("export-note"), msg, cls); }
+
+async function exportPlan() {
+  const [studyId, dataMode] = await Promise.all([state.store.getMeta("study_id"), state.store.getMeta("data_mode")]);
+  if (!studyId) { exportNote("설정에서 study_id 를 먼저 저장해야 한다", "bad"); return null; }
+  const records = await state.store.listEvents();
+  const sel = selectRecords(records, { studyId, dataMode: dataMode ?? "synthetic", includeExported: $("include-exported").checked });
+  const meta = await state.store.photoMeta();
+  const { batches, errors } = planBatches(sel.selected, meta);
+  const photoCount = new Set(batches.flatMap((b) => b.shas)).size;
+  const est = batches.reduce((s, b) => s + b.estBytes, 0);
+  text($("export-summary"), `대상 ${sel.selected.length}건 · 사진 ${photoCount}장 · 예상 ${fmtBytes(est)} · 묶음 ${batches.length}개` +
+    (sel.excludedExported ? ` · 이미 내보낸 ${sel.excludedExported}건 제외` : "") + (sel.otherContext ? ` · 다른 study/모드 ${sel.otherContext}건 제외` : ""));
+  $("export-errors").replaceChildren(...errors.map((e) => el("li", { class: "bad", text: `${e.event_id.slice(0, 8)}… 제외: ${e.reason}` })));
+  return { studyId, dataMode: dataMode ?? "synthetic", batches, errors, k: 0, package: null, url: null, attempted: false, recordsById: new Map(sel.selected.map((r) => [r.event_id, r])) };
+}
+
+function fmtBytes(n) {
+  return n >= 1e6 ? (n / 1e6).toFixed(1) + " MB" : n >= 1e3 ? (n / 1e3).toFixed(0) + " KB" : n + " B";
+}
+
+async function exportPrepare() {
+  $("export-prepare").disabled = true;
+  try {
+    if (state.export?.url) { URL.revokeObjectURL(state.export.url); state.export.url = null; }
+    // 기존 계획에 남은 묶음이 있으면 그 계획의 k번째 묶음을 만든다. "묶음 준비" 버튼은 state.export 를 비워 새 계획을 잡는다.
+    const plan = hasRemainingBatches(state.export) ? state.export : await exportPlan();
+    if (!plan) return;
+    if (!plan.batches.length) { state.export = null; $("export-save").disabled = true; $("export-confirm").disabled = true; return exportNote("내보낼 기록이 없다", "muted"); }
+    const k = plan.k;
+    const batch = plan.batches[k];
+    exportNote(`묶음 ${k + 1}/${plan.batches.length} 만드는 중…`, "muted");
+    const pkg = await buildPackage(batch, plan.recordsById, {
+      loadPhoto: async (sha) => { const p = await state.store.getPhoto(sha); return p ? { blob: p.blob, ext: p.ext } : undefined; },
+      studyId: plan.studyId, dataMode: plan.dataMode, k: k + 1, n: plan.batches.length,
+    });
+    plan.package = pkg; plan.attempted = false;
+    state.export = plan;
+    $("export-save").textContent = `파일 저장 ${k + 1}/${plan.batches.length}`;
+    $("export-save").disabled = false;
+    $("export-confirm").disabled = true;
+    exportNote(`묶음 ${k + 1}/${plan.batches.length} 준비됨: ${pkg.filename} (${fmtBytes(pkg.bytes)}, 관측 ${pkg.eventIds.length}건, 사진 ${pkg.photoCount}장)`, "ok");
+  } catch (e) {
+    exportNote("묶음 준비 실패: " + (e?.message || e), "bad");
+  } finally {
+    $("export-prepare").disabled = false;
+  }
+}
+
+function exportSave() {
+  // 사용자 클릭 안에서 동기적으로 다운로드를 건다 (iOS Safari 는 제스처 밖 다운로드를 막는다).
+  const ex = state.export;
+  if (!ex?.package) return;
+  if (ex.url) URL.revokeObjectURL(ex.url);
+  ex.url = URL.createObjectURL(ex.package.blob);
+  const a = document.createElement("a");
+  a.href = ex.url;
+  a.download = ex.package.filename;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  ex.attempted = true;
+  state.store.appendExport({
+    package_id: ex.package.packageId, created_at: ex.package.createdAt, filename: ex.package.filename,
+    study_id: ex.studyId, data_mode: ex.dataMode, event_ids: ex.package.eventIds, photo_count: ex.package.photoCount, bytes: ex.package.bytes,
+  }).then(renderExportHistory).catch((e) => exportNote("이력 기록 실패: " + e, "bad"));
+  $("export-confirm").disabled = false;
+  exportNote(`${ex.package.filename} 저장을 요청했다. '파일' 앱 등에서 실제로 저장됐는지 확인한 뒤 "파일 저장 확인"을 누른다. 확인 전에는 내보냄으로 표시하지 않는다.`, "warn");
+}
+
+async function exportConfirm() {
+  const ex = state.export;
+  if (!ex?.package || !ex.attempted) return;
+  $("export-confirm").disabled = true;
+  try {
+    await state.store.markExported(ex.package.eventIds, ex.package.packageId, new Date().toISOString());
+  } catch (e) {
+    $("export-confirm").disabled = false;
+    return exportNote("상태 갱신 실패: " + (e?.message || e), "bad");
+  }
+  if (ex.url) { URL.revokeObjectURL(ex.url); ex.url = null; }
+  ex.k += 1; ex.package = null; ex.attempted = false;
+  $("export-save").disabled = true;
+  await renderRecords();
+  await renderExportHistory();
+  if (ex.k < ex.batches.length) {
+    exportNote(`묶음 ${ex.k}/${ex.batches.length} 확인됨. 다음 묶음을 준비한다.`, "ok");
+    await exportPrepare();
+  } else {
+    exportNote(`묶음 ${ex.batches.length}개 모두 확인됨 (내보냄). PC 반영 여부는 이 화면에서 알 수 없다.`, "ok");
+    state.export = null;
+  }
+}
+
+async function renderExportHistory() {
+  const list = await state.store.listExports();
+  $("export-history").replaceChildren(...list.slice().reverse().map((e) => el("li", {},
+    el("div", { text: `${e.filename} · 관측 ${e.event_ids.length}건 · 사진 ${e.photo_count}장 · ${fmtBytes(e.bytes)}` }),
+    el("div", { class: e.confirmed_at ? "ok" : "warn", text: e.confirmed_at ? `저장 확인 ${e.confirmed_at}` : "저장 미확인 (다시 내보낼 수 있음)" }),
+  )));
+  if (!list.length) $("export-history").append(el("li", { class: "muted", text: "없음" }));
+}
+
 // ---- 목록·상태 ----
 async function renderRecords() {
   const events = await state.store.listEvents();
   const labels = new Map(state.assets.map((a) => [a.asset_id, a.label]));
   $("record-list").replaceChildren(...events.map((r) => el("li", {},
     el("div", {}, el("strong", { text: labels.get(r.asset_id) ?? r.asset_label ?? r.asset_id }),
-      el("span", { class: "badge", text: r.status === "saved" ? "저장됨" : "내보냄" }),
+      el("span", { class: "badge", text: r.status === "saved" ? "저장됨" : `내보냄 ${(r.exported_in?.[r.exported_in.length - 1] ?? "").slice(0, 8)}` }),
       el("span", { class: "badge", text: `${r.data_mode} · ${r.study_id}` }),
       labels.has(r.asset_id) ? el("span") : el("span", { class: "warn", text: " (현재 시드에 없는 물건)" })),
     el("div", { class: "muted", text: `${CHANGE_STATUS_LABEL[r.event.payload.change_status]} · ${r.event.observed_at} · 사진 ${r.event.attachment_refs.length}장` }),
@@ -256,12 +363,17 @@ async function main() {
   await loadSettings();
   await renderAssets();
   await renderRecords();
+  await renderExportHistory();
   $("save-settings").addEventListener("click", saveSettings);
   $("load-synthetic").addEventListener("click", loadSyntheticSeed);
   $("seed-file").addEventListener("change", (e) => loadSeedFile(e.target));
   $("photos").addEventListener("change", (e) => addPhotos(e.target));
   $("save-observation").addEventListener("click", saveObservation);
   $("cancel-observation").addEventListener("click", () => { $("sec-observe").hidden = true; state.target = null; });
+  $("export-prepare").addEventListener("click", () => { state.export = null; exportPrepare(); });
+  $("export-save").addEventListener("click", exportSave);
+  $("export-confirm").addEventListener("click", exportConfirm);
+  $("include-exported").addEventListener("change", () => { state.export = null; $("export-save").disabled = true; $("export-confirm").disabled = true; exportNote("", ""); });
   $("date-only").addEventListener("change", (e) => { $("observed-at").type = e.target.checked ? "date" : "datetime-local"; $("observed-at").value = e.target.checked ? localDate() : toDatetimeLocal(); });
   window.addEventListener("online", refreshStatus);
   window.addEventListener("offline", refreshStatus);

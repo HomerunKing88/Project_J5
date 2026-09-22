@@ -33,4 +33,5 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements-dev.txt
       # e2e 는 runner 의 Chrome(google-chrome) 을 CDP 로 구동하고, 저장된 관측을 j5 inspect 로 검사한다
-      - run: node --test "tests/web/**/*.test.mjs"
+      - run: node --test --test-timeout=180000 "tests/web/**/*.test.mjs"
+        timeout-minutes: 10

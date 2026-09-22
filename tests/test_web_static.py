@@ -76,5 +76,5 @@ def test_no_html_string_injection_in_js():
 
 
 def test_no_vendor_yet():
-    """고정 배포본(MapLibre·fflate)은 해당 단계(J5-005·007)에서 검증 후 넣는다."""
+    """외부 고정 배포본은 아직 없다. ZIP 은 자체 STORED 작성기(ADR-11), 지도(MapLibre)는 J5-005 에서 검증 후 넣는다."""
     assert not (WEB / "vendor").exists()

@@ -1,12 +1,14 @@
 # web/
 
-정적 앱. HTML·CSS·JavaScript ES Modules, 외부 통신 없음(각 페이지에 CSP `default-src 'self'`). 앱 실행에 Node.js·번들러를 요구하지 않는다. 고정 버전 MapLibre·fflate 배포본은 해당 단계(J5-005·007)에서 검증 후 `web/vendor/`에 넣는다. 실사진·실데이터·API 키는 넣지 않는다.
+정적 앱. HTML·CSS·JavaScript ES Modules, 외부 통신 없음(각 페이지에 CSP `default-src 'self'`). 앱 실행에 Node.js·번들러를 요구하지 않는다. 외부 코드는 아직 없다. 지도(MapLibre) 고정 배포본은 J5-005에서 검증 후 `web/vendor/`에 넣고, ZIP은 자체 작성기를 쓴다(ADR-11). 실사진·실데이터·API 키는 넣지 않는다.
 
 ## 파일
 
 - `index.html` + `app/main.js`: R1a 현장 기록 앱 (J5-006). 설정(study_id·자료 모드·경로 버전 ID) → 시드 불러오기(가상 5개 또는 기기의 파일) → 물건 선택 → 관측 저장(상태·시각/날짜·설명·사진·태그) → 저장 목록. 지도 없이 동작한다.
 - `app/db.js`: IndexedDB(`j5`, v1). 스토어 meta·assets·events(객체 + 고정 행 바이트 + 해시)·photos(sha256 → Blob). 관측과 사진은 한 트랜잭션으로 저장하고 실패 시 '저장됨'으로 표시하지 않는다. 자동 삭제 없음.
 - `app/event.js`: 이벤트 작성·정규화(키 정렬·압축·비ASCII 보존 + LF)·검증. 정규화 바이트는 `tests/fixtures/make_packages.py`와 같다.
+- `app/export.js`: 내보내기(J5-007). 현재 study_id·자료 모드의 기록을 골라 한도(§3.3)에 맞춰 묶음을 나누고, 고정 행 바이트·참조 사진·manifest 로 `.j5field.zip` 을 만든다. 파일 저장 뒤 "파일 저장 확인"을 눌러야 기록이 `내보냄`이 된다.
+- `app/zip.js`: STORED 전용 ZIP 작성기(ADR-11). `app/limits.js`: §3.3 한도 상수.
 - `app/sha256.js`, `app/uuid.js`, `app/time.js`: 순수 sha256 폴백, UUID v4, 오프셋 있는 ISO 시각.
 - `sw.js`: 최소 앱 캐시. 앱 실행 파일만 캐시하고 시드·사진·데이터는 캐시하지 않는다. 보안 컨텍스트에서만 등록된다.
 - `data/assets.seed.synthetic.json`: 가상 시드 (tests/fixtures 와 동일).

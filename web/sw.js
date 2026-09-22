@@ -10,12 +10,15 @@ const APP_FILES = [
   "./app/main.js",
   "./app/db.js",
   "./app/event.js",
+  "./app/export.js",
   "./app/hash.js",
+  "./app/limits.js",
   "./app/sha256.js",
   "./app/seed.js",
   "./app/sniff.js",
   "./app/time.js",
   "./app/uuid.js",
+  "./app/zip.js",
 ];
 
 self.addEventListener("install", (e) => {

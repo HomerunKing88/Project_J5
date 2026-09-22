@@ -5,7 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, extname, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -70,12 +70,49 @@ class Cdp {
       else if (d.method === "Log.entryAdded" && d.params.entry.level === "error") this.errors.push(d.params.entry.text.slice(0, 300));
     };
   }
-  send(method, params = {}) { return new Promise((res, rej) => { const i = ++this.id; this.pending.set(i, (d) => d.error ? rej(new Error(d.error.message)) : res(d.result)); this.ws.send(JSON.stringify({ id: i, method, params })); }); }
+  send(method, params = {}, timeoutMs = 20000) {
+    // 응답이 없는 명령은 멈춤 대신 오류로 끝낸다 (CI 에서 무한 대기 방지).
+    return new Promise((res, rej) => {
+      const i = ++this.id;
+      const timer = setTimeout(() => { this.pending.delete(i); rej(new Error(`CDP ${method} 응답 없음 (${timeoutMs}ms)`)); }, timeoutMs);
+      this.pending.set(i, (d) => { clearTimeout(timer); d.error ? rej(new Error(`${method}: ${d.error.message}`)) : res(d.result); });
+      this.ws.send(JSON.stringify({ id: i, method, params }));
+    });
+  }
   async eval(expression) { const r = await this.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error(r.exceptionDetails.text + " " + (r.exceptionDetails.exception?.description || "")); return r.result.value; }
   async waitFor(expression, ms = 8000) { const end = Date.now() + ms; while (Date.now() < end) { if (await this.eval(expression)) return true; await new Promise((r) => setTimeout(r, 100)); } throw new Error("timeout: " + expression); }
   async navigate(url) { await this.send("Page.navigate", { url }); await this.waitFor("document.readyState === 'complete'"); }
   async setFiles(selector, files) { const { root } = await this.send("DOM.getDocument"); const { nodeId } = await this.send("DOM.querySelector", { nodeId: root.nodeId, selector }); await this.send("DOM.setFileInputFiles", { nodeId, files }); }
+  /** 실제 마우스 이벤트로 클릭한다 (다운로드에는 사용자 활성화가 필요하다). */
+  async clickSelector(selector) {
+    await this.eval(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({ block: 'center' }); 'ok'`);
+    const { root } = await this.send("DOM.getDocument");
+    const { nodeId } = await this.send("DOM.querySelector", { nodeId: root.nodeId, selector });
+    const { model } = await this.send("DOM.getBoxModel", { nodeId });
+    const q = model.content;
+    const x = (q[0] + q[2] + q[4] + q[6]) / 4, y = (q[1] + q[3] + q[5] + q[7]) / 4;
+    await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+    await this.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
+    await this.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+  }
   close() { try { this.ws.close(); } catch {} this.proc.kill(); }
+}
+
+async function waitForDownloads(dir, count, ms = 15000) {
+  const end = Date.now() + ms;
+  let last = null;
+  while (Date.now() < end) {
+    const files = readdirSync(dir).filter((f) => f.endsWith(".j5field.zip")).sort((a, b) => statSync(join(dir, a)).mtimeMs - statSync(join(dir, b)).mtimeMs);
+    const partial = readdirSync(dir).some((f) => f.endsWith(".crdownload"));
+    if (files.length >= count && !partial) {
+      const newest = files[files.length - 1];
+      const size = statSync(join(dir, newest)).size;
+      if (last === `${newest}:${size}` && size > 0) return newest;
+      last = `${newest}:${size}`;
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error(`다운로드 ${count}개를 기다리다 시간 초과: ${readdirSync(dir).join(",")}`);
 }
 
 const chrome = findChrome();
@@ -137,6 +174,49 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.navigate(`${base}/index.html`);
     await cdp.waitFor("document.querySelectorAll('#record-list li').length === 1");
     assert.ok((await cdp.eval("document.getElementById('status-line').textContent")).includes("관측 1"));
+    // 내보내기: 묶음 준비 → 파일 저장(다운로드) → j5 inspect ok → 저장 확인 → 내보냄 표시
+    const dl = join(tmp, "dl"); mkdirSync(dl);
+    await cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: dl, eventsEnabled: true });
+    await cdp.eval("document.getElementById('export-prepare').click(); 'ok'");
+    await cdp.waitFor("!document.getElementById('export-save').disabled");
+    assert.match(await cdp.eval("document.getElementById('export-summary').textContent"), /대상 1건 · 사진 1장/);
+    await cdp.clickSelector("#export-save");
+    const zip1 = await waitForDownloads(dl, 1);
+    assert.match(zip1, /^e2e-study-\d{8}-\d{6}-1of1-[0-9a-f]{8}\.j5field\.zip$/);
+    const insp = spawnSync("python3", ["-m", "j5", "inspect", join(dl, zip1), "--seed", join(ROOT, "tests/fixtures/assets.seed.synthetic.json"), "--study-id", "e2e-study", "--json"], { cwd: ROOT, encoding: "utf8" });
+    if (insp.error?.code !== "ENOENT") {
+      assert.equal(insp.status, 0, insp.stdout + insp.stderr);
+      const rep = JSON.parse(insp.stdout);
+      assert.equal(rep.verdict, "ok", insp.stdout);
+      assert.equal(rep.kind, "zip");
+      assert.equal(rep.counts.events, 1);
+      assert.equal(rep.counts.photos_referenced, 1);
+    }
+    // 저장 확인 전에는 아직 저장됨
+    assert.ok((await cdp.eval("document.getElementById('record-list').textContent")).includes("저장됨"));
+    await cdp.waitFor("!document.getElementById('export-confirm').disabled");
+    await cdp.eval("document.getElementById('export-confirm').click(); 'ok'");
+    await cdp.waitFor("document.getElementById('export-note').textContent.includes('모두 확인됨')");
+    assert.ok((await cdp.eval("document.getElementById('record-list').textContent")).includes("내보냄"));
+    assert.match(await cdp.eval("document.getElementById('export-history').textContent"), /저장 확인/);
+    // 다시 내보내기(내보낸 기록 포함): observations.jsonl 바이트가 같다
+    await cdp.eval("document.getElementById('include-exported').click(); document.getElementById('export-prepare').click(); 'ok'");
+    await cdp.waitFor("!document.getElementById('export-save').disabled");
+    await cdp.clickSelector("#export-save");
+    const zip2 = await waitForDownloads(dl, 2);
+    assert.notEqual(zip1, zip2);
+    const cmp = spawnSync("python3", ["-c", `
+import sys, zipfile, hashlib, json
+a, b = (zipfile.ZipFile(p) for p in sys.argv[1:3])
+h = lambda z: hashlib.sha256(z.read("observations.jsonl")).hexdigest()
+ma, mb = (json.loads(z.read("manifest.json")) for z in (a, b))
+print(json.dumps({"same_obs": h(a) == h(b), "same_pkg": ma["package_id"] == mb["package_id"], "names": sorted(a.namelist()) == sorted(b.namelist())}))
+`, join(dl, zip1), join(dl, zip2)], { encoding: "utf8" });
+    if (cmp.error?.code !== "ENOENT") {
+      assert.equal(cmp.status, 0, cmp.stderr);
+      assert.deepEqual(JSON.parse(cmp.stdout), { same_obs: true, same_pkg: false, names: true });
+    }
+    // 두 번째 시도는 확인하지 않고 둔다 → 이력에 '저장 미확인' 이 남고 기록 상태는 그대로 내보냄
     // 오프라인 재접속: 정적 서버를 실제로 내린 뒤에도 서비스 워커 캐시로 앱이 뜨고 기록이 남는다 (127.0.0.1 은 보안 컨텍스트).
     // CDP 네트워크 에뮬레이션은 서비스 워커의 요청에 적용되지 않으므로 서버를 내린다.
     await cdp.waitFor("navigator.serviceWorker.ready.then(() => true)");
@@ -158,10 +238,11 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       const all = (s) => new Promise((res, rej) => { const r = db.transaction(s).objectStore(s).getAll(); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
       const events = await all('events'); const photos = await all('photos');
       const b64 = async (blob) => { const buf = new Uint8Array(await blob.arrayBuffer()); let s = ''; for (const x of buf) s += String.fromCharCode(x); return btoa(s); };
-      return { events: events.map(e => ({ line: Array.from(e.line), hash: e.event_hash, status: e.status, study_id: e.study_id, data_mode: e.data_mode })), photos: await Promise.all(photos.map(async p => ({ sha256: p.sha256, ext: p.ext, b64: await b64(p.blob) }))) };
+      return { events: events.map(e => ({ line: Array.from(e.line), hash: e.event_hash, status: e.status, study_id: e.study_id, data_mode: e.data_mode, exported_in: e.exported_in })), photos: await Promise.all(photos.map(async p => ({ sha256: p.sha256, ext: p.ext, b64: await b64(p.blob) }))) };
     })()`);
     assert.equal(dump.events.length, 1);
-    assert.equal(dump.events[0].status, "saved");
+    assert.equal(dump.events[0].status, "exported", "저장 확인 후 내보냄");
+    assert.equal(dump.events[0].exported_in.length, 1, "미확인 두 번째 시도는 exported_in 에 들어가지 않음");
     assert.equal(dump.events[0].study_id, "e2e-study", "기록에 study_id 고정");
     assert.equal(dump.events[0].data_mode, "synthetic", "기록에 data_mode 고정");
     const pkg = join(tmp, "pkg"); mkdirSync(join(pkg, "photos"), { recursive: true });
