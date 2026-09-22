@@ -1,0 +1,15 @@
+{
+  "format": "j5field",
+  "schema_version": "1.0.0",
+  "study_id": "j5-synthetic-study",
+  "package_id": "5e5e0000-0000-4000-8000-000000000006",
+  "created_at": "2026-09-22T09:00:00+09:00",
+  "data_mode": "synthetic",
+  "files": [
+    {
+      "path": "observations.jsonl",
+      "bytes": 679,
+      "sha256": "78f7849bec69a3be590bd9e261e82b50d2f8b093b47010bba19e2e284831eb27"
+    }
+  ]
+}

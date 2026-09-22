@@ -1,0 +1,20 @@
+{
+  "format": "j5field",
+  "schema_version": "1.0.0",
+  "study_id": "j5-synthetic-study",
+  "package_id": "5e5e0000-0000-4000-8000-000000000002",
+  "created_at": "2026-09-22T09:00:00+09:00",
+  "data_mode": "synthetic",
+  "files": [
+    {
+      "path": "observations.jsonl",
+      "bytes": 1780,
+      "sha256": "7d8d40268e2c51025e0c2e41fcd9709b86088ec0edc908e973398a6aebab8b8d"
+    },
+    {
+      "path": "photos/b1ff9c8ea3a780bad09b346c423d2d0e46815926879b18e841d928376a946640.png",
+      "bytes": 69,
+      "sha256": "b1ff9c8ea3a780bad09b346c423d2d0e46815926879b18e841d928376a946640"
+    }
+  ]
+}
