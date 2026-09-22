@@ -118,16 +118,21 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.navigate(`${base}/index.html`);
     await cdp.waitFor("document.querySelectorAll('#record-list li').length === 1");
     assert.ok((await cdp.eval("document.getElementById('status-line').textContent")).includes("관측 1"));
-    // 오프라인 재접속: 서비스 워커 캐시로 앱이 뜨고 기록이 남는다 (127.0.0.1 은 보안 컨텍스트)
+    // 오프라인 재접속: 정적 서버를 실제로 내린 뒤에도 서비스 워커 캐시로 앱이 뜨고 기록이 남는다 (127.0.0.1 은 보안 컨텍스트).
+    // CDP 네트워크 에뮬레이션은 서비스 워커의 요청에 적용되지 않으므로 서버를 내린다.
     await cdp.waitFor("navigator.serviceWorker.ready.then(() => true)");
     await cdp.waitFor("caches.keys().then(k => k.length > 0)");
-    await cdp.send("Network.emulateNetworkConditions", { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+    srv.closeAllConnections();
+    await new Promise((r) => srv.close(r));
     await cdp.navigate(`${base}/index.html`);
     await cdp.waitFor("document.querySelectorAll('#record-list li').length === 1");
-    // 실제로 네트워크가 막혔는지: 캐시 목록에 없는 시드 파일 요청은 실패해야 한다 (navigator.onLine 은 에뮬레이션에서 신뢰할 수 없음)
+    // 캐시 목록에 없는 시드 파일 요청은 실패해야 한다 (서비스 워커가 데이터를 캐시하지 않음). 이 탐침이 남기는 로드 실패 로그는 예상된 것이라 걷어낸다.
+    const errorsBefore = cdp.errors.length;
     assert.equal(await cdp.eval("fetch('data/assets.seed.synthetic.json', { cache: 'no-store' }).then(() => 'reachable').catch(() => 'blocked')"), "blocked");
+    await new Promise((r) => setTimeout(r, 200));
+    const probeLogs = cdp.errors.splice(errorsBefore);
+    assert.ok(probeLogs.every((e) => e.includes("ERR_FAILED") || e.includes("Failed to load resource")), probeLogs.join("; "));
     assert.ok((await cdp.eval("document.getElementById('status-line').textContent")).includes("관측 1"));
-    await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
     // IndexedDB 내용을 패키지 폴더로 꺼내 PC 검사기로 확인
     const dump = await cdp.eval(`(async () => {
       const db = await new Promise((res, rej) => { const r = indexedDB.open('j5', 1); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
@@ -156,6 +161,7 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     }
     assert.deepEqual(cdp.errors, [], "브라우저 콘솔 오류 없음");
   } finally {
-    cdp.close(); srv.close();
+    cdp.close();
+    try { srv.closeAllConnections(); srv.close(); } catch {}
   }
 });
