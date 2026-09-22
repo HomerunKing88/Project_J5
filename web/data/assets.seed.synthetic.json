@@ -1,0 +1,55 @@
+[
+  {
+    "asset_id": "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a50",
+    "label": "가상 물건 1",
+    "location_point": [
+      126.9986,
+      37.5702
+    ],
+    "data_mode": "synthetic",
+    "created_at": "2026-09-22",
+    "notes": null
+  },
+  {
+    "asset_id": "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a51",
+    "label": "가상 물건 2",
+    "location_point": [
+      126.9991,
+      37.5705
+    ],
+    "data_mode": "synthetic",
+    "created_at": "2026-09-22",
+    "notes": null
+  },
+  {
+    "asset_id": "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a52",
+    "label": "가상 물건 3",
+    "address": "서울 종로구 가상로 3 (가상 주소)",
+    "data_mode": "synthetic",
+    "created_at": "2026-09-22",
+    "notes": null
+  },
+  {
+    "asset_id": "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a53",
+    "label": "가상 물건 4",
+    "location_point": [
+      126.9997,
+      37.5709
+    ],
+    "address": "서울 종로구 가상로 4 (가상 주소)",
+    "data_mode": "synthetic",
+    "created_at": "2026-09-22",
+    "notes": null
+  },
+  {
+    "asset_id": "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a54",
+    "label": "가상 물건 5",
+    "location_point": [
+      127.0003,
+      37.5712
+    ],
+    "data_mode": "synthetic",
+    "created_at": "2026-09-22",
+    "notes": null
+  }
+]

@@ -28,4 +28,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      # e2e 는 runner 의 Chrome(google-chrome) 을 CDP 로 구동하고, 저장된 관측을 j5 inspect 로 검사한다
       - run: node --test "tests/web/**/*.test.mjs"
