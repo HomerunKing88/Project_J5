@@ -60,7 +60,7 @@ async function probeEnv() {
   const envTable = $("env");
   envTable.replaceChildren(...lines.map(([k, v, c]) => row(k, String(v), c)));
   if (!env.secure_context) {
-    $("env-note").textContent = "http로 열려 crypto.subtle을 쓸 수 없다. 해시는 계산하지 않는다. 실제 앱은 HTTPS 배포를 전제한다(ADR-01).";
+    $("env-note").textContent = "http로 열려 crypto.subtle을 쓸 수 없다. 해시는 순수 JS 폴백으로 계산한다(느릴 수 있음). 실제 앱은 HTTPS 배포를 전제한다(ADR-01).";
   }
   show();
 }
@@ -108,6 +108,7 @@ async function onPick(input, source) {
       const t2 = performance.now();
       rec.sha256 = await sha256Hex(buf);
       rec.hash_ms = rec.sha256 ? Math.round(performance.now() - t2) : null;
+      rec.hash_method = subtleAvailable() ? "crypto.subtle" : "pure_js";
       rec.blob_url = URL.createObjectURL(new Blob([buf], { type: file.type || "application/octet-stream" }));
     }
     rec.total_ms = Math.round(performance.now() - t0);

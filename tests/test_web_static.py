@@ -31,10 +31,40 @@ def test_every_page_has_csp_and_no_inline_script():
 
 
 def test_no_network_apis_in_js():
+    """외부 통신 금지. fetch 는 같은 출처의 상대경로 리터럴만, 서비스 워커는 main.js 등록과 sw.js 만 허용."""
     for p in web_files(".js"):
         text = p.read_text(encoding="utf-8")
-        for token in ("fetch(", "XMLHttpRequest", "WebSocket", "navigator.sendBeacon", "serviceWorker"):
-            assert token not in text, f"{p}: {token} 사용 금지 (R1a 뼈대에서는 외부 통신·서비스 워커 없음)"
+        for token in ("XMLHttpRequest", "WebSocket", "navigator.sendBeacon", "EventSource"):
+            assert token not in text, f"{p}: {token} 사용 금지"
+        for m in re.finditer(r"\bfetch\(\s*([^)]*)", text):
+            arg = m.group(1).strip()
+            if p.name == "sw.js":
+                assert arg.startswith("e.request"), f"{p}: 서비스 워커는 받은 요청만 전달"
+            else:
+                assert re.match(r'^"(\./)?[a-z][a-z0-9_./-]*"', arg), f"{p}: fetch 는 상대경로 리터럴만 허용: {arg}"
+        if "serviceWorker" in text:
+            assert p.name in ("main.js", "sw.js"), f"{p}: 서비스 워커는 main.js 등록·sw.js 만"
+
+
+def test_service_worker_caches_only_app_files():
+    """ADR-01: 서비스 워커에는 앱 실행 파일만 캐시한다. 시드·사진·데이터는 넣지 않는다."""
+    sw = (WEB / "sw.js").read_text(encoding="utf-8")
+    files = re.findall(r'"(\./[^"]*)"', sw.split("APP_FILES")[1].split("];")[0])
+    assert files, "APP_FILES 비어 있음"
+    for f in files:
+        rel = f[2:] or "index.html"
+        assert not rel.startswith(("data/", "photos/")), f"데이터 캐시 금지: {f}"
+        assert (WEB / rel).is_file(), f"캐시 목록의 파일이 없음: {f}"
+    for js in web_files(".js"):
+        rel = js.relative_to(WEB).as_posix()
+        if rel not in ("sw.js", "app/devtest.js"):
+            assert f"./{rel}" in files, f"앱 모듈이 캐시 목록에 없음: {rel}"
+
+
+def test_bundled_seed_matches_fixture():
+    a = (WEB / "data" / "assets.seed.synthetic.json").read_bytes()
+    b = (Path(__file__).resolve().parent / "fixtures" / "assets.seed.synthetic.json").read_bytes()
+    assert a == b, "web/data 의 가상 시드는 tests/fixtures 와 같아야 한다"
 
 
 def test_no_html_string_injection_in_js():

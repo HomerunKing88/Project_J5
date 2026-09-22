@@ -6,6 +6,6 @@
 - `test_j5_003_schemas.py`: 스키마 3종과 fixture 검증, 관측↔시드 asset_id 연결 확인.
 - `test_j5_008_inspect.py` / `test_j5_008_copy.py`: PC 검사 도구. fixture 9종(폴더·ZIP)과 적대적 ZIP, CLI 종료 코드, 독립 사본.
 - `test_web_static.py`: web/ 정적 앱 규칙(외부 URL·인라인 스크립트·네트워크 API 금지, CSP).
-- `web/*.test.mjs`: 웹 모듈 단위 테스트. `node --test "tests/web/**/*.test.mjs"` (Node는 테스트 전용).
+- `web/*.test.mjs`: 웹 모듈 단위 테스트와 브라우저 e2e(`app.e2e.test.mjs`, 헤드리스 Chromium + CDP, 없으면 건너뜀). `node --test "tests/web/**/*.test.mjs"` (Node는 테스트 전용).
 - `conftest.py`: fixture 폴더를 결정적으로 ZIP으로 묶는 헬퍼.
 - `fixtures/`: 정상·중복·손상·미지원 입력 예제. 목록과 기대 결과는 `fixtures/README.md`.
