@@ -14,6 +14,18 @@ function fmtBytes(n) {
   return n >= 1e6 ? (n / 1e6).toFixed(2) + " MB" : n >= 1e3 ? (n / 1e3).toFixed(1) + " KB" : n + " B";
 }
 
+function row(label, value, cls = "") {
+  // 파일명 등 외부 값은 textContent 로만 넣는다. HTML 문자열 삽입을 쓰지 않는다.
+  const tr = document.createElement("tr");
+  const th = document.createElement("th");
+  th.textContent = label;
+  const td = document.createElement("td");
+  td.textContent = value;
+  if (cls) td.className = cls;
+  tr.append(th, td);
+  return tr;
+}
+
 async function probeEnv() {
   const env = {
     user_agent: navigator.userAgent,
@@ -45,7 +57,8 @@ async function probeEnv() {
     ["persisted", env.storage_persisted, ""],
     ["온라인", env.online, ""],
   ];
-  $("env").innerHTML = lines.map(([k, v, c]) => `<tr><th>${k}</th><td class="${c}">${String(v)}</td></tr>`).join("");
+  const envTable = $("env");
+  envTable.replaceChildren(...lines.map(([k, v, c]) => row(k, String(v), c)));
   if (!env.secure_context) {
     $("env-note").textContent = "http로 열려 crypto.subtle을 쓸 수 없다. 해시는 계산하지 않는다. 실제 앱은 HTTPS 배포를 전제한다(ADR-01).";
   }
@@ -113,14 +126,16 @@ function renderPhoto(rec) {
   else if (rec.over_limit) verdict = `20MB 초과 (${fmtBytes(rec.bytes)}). 작은 묶음으로 나눠야 함`;
   else verdict = "지원 형식";
   const div = document.createElement("div");
-  div.innerHTML = `<table>
-    <tr><th>출처</th><td>${rec.source}</td></tr>
-    <tr><th>이름 / 보고된 type</th><td>${rec.name} / ${rec.reported_type ?? "-"}</td></tr>
-    <tr><th>크기</th><td>${fmtBytes(rec.bytes)} (${rec.bytes})</td></tr>
-    <tr><th>매직바이트 판정</th><td class="${cls}">${rec.sniffed ?? "unknown"} · ${verdict}</td></tr>
-    <tr><th>sha256</th><td>${rec.sha256 ?? "(계산 안 함)"}</td></tr>
-    <tr><th>읽기/해시 ms</th><td>${rec.read_ms ?? "-"} / ${rec.hash_ms ?? "-"}</td></tr>
-  </table>`;
+  const table = document.createElement("table");
+  table.append(
+    row("출처", rec.source),
+    row("이름 / 보고된 type", `${rec.name} / ${rec.reported_type ?? "-"}`),
+    row("크기", `${fmtBytes(rec.bytes)} (${rec.bytes})`),
+    row("매직바이트 판정", `${rec.sniffed ?? "unknown"} · ${verdict}`, cls),
+    row("sha256", rec.sha256 ?? "(계산 안 함)"),
+    row("읽기/해시 ms", `${rec.read_ms ?? "-"} / ${rec.hash_ms ?? "-"}`),
+  );
+  div.append(table);
   if (rec.blob_url) {
     const a = document.createElement("a");
     a.href = rec.blob_url;
@@ -133,14 +148,34 @@ function renderPhoto(rec) {
 }
 
 function logSave(kind, filename) {
-  results.saves.push({ kind, filename, at: new Date().toISOString(), confirmed_by_user: false });
+  const entry = { id: results.saves.length + 1, kind, filename, at: new Date().toISOString(), confirmed_by_user: false };
+  results.saves.push(entry);
+  renderSaves();
   show();
+  return entry;
+}
+
+function renderSaves() {
+  // 저장 시도마다 확인 체크박스를 따로 둔다. 하나를 확인해도 다른 시도가 확인된 것으로 기록하지 않는다.
+  const list = $("saves");
+  list.replaceChildren(...results.saves.map((s) => {
+    const label = document.createElement("label");
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = s.confirmed_by_user;
+    box.addEventListener("change", () => { s.confirmed_by_user = box.checked; show(); });
+    label.append(box, ` #${s.id} ${s.kind} · ${s.filename} · '파일' 앱에서 열어 확인함`);
+    return label;
+  }));
 }
 
 function saveResults() {
+  // 저장 시도를 먼저 기록해 이 파일 자체에 자신의 시도(미확인 상태)가 들어가게 한다.
+  // 확인 체크 후 다시 저장하면 그 파일에 이전 시도의 확인 상태가 담긴다. 마지막 파일이 최종 증거다.
   results.user_notes = $("notes").value;
   results.finished_at = new Date().toISOString();
   const name = `j5-devtest-${results.finished_at.replace(/[:.]/g, "-")}.json`;
+  logSave("results_json", name);
   const blob = new Blob([JSON.stringify(results, null, 2)], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
@@ -148,7 +183,6 @@ function saveResults() {
   document.body.append(a);
   a.click();
   a.remove();
-  logSave("results_json", name);
 }
 
 async function copyResults() {
@@ -164,10 +198,6 @@ $("pick-library").addEventListener("change", (e) => onPick(e.target, "library"))
 $("pick-camera").addEventListener("change", (e) => onPick(e.target, "camera"));
 $("save").addEventListener("click", saveResults);
 $("copy").addEventListener("click", copyResults);
-$("confirm-save").addEventListener("change", (e) => {
-  results.saves.forEach((s) => { s.confirmed_by_user = e.target.checked; });
-  show();
-});
 window.addEventListener("online", () => { results.env.online = true; show(); });
 window.addEventListener("offline", () => { results.env.online = false; show(); });
 probeEnv();

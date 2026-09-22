@@ -37,6 +37,14 @@ def test_no_network_apis_in_js():
             assert token not in text, f"{p}: {token} 사용 금지 (R1a 뼈대에서는 외부 통신·서비스 워커 없음)"
 
 
+def test_no_html_string_injection_in_js():
+    """파일명 등 외부 값이 DOM 에 마크업으로 들어가지 않도록 innerHTML·outerHTML·insertAdjacentHTML 을 쓰지 않는다."""
+    for p in web_files(".js"):
+        text = p.read_text(encoding="utf-8")
+        for token in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"):
+            assert token not in text, f"{p}: {token} 사용 금지"
+
+
 def test_no_vendor_yet():
     """고정 배포본(MapLibre·fflate)은 해당 단계(J5-005·007)에서 검증 후 넣는다."""
     assert not (WEB / "vendor").exists()
