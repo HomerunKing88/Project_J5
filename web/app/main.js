@@ -5,10 +5,11 @@ import { sha256Hex } from "./hash.js";
 import { uuid4, isUuid } from "./uuid.js";
 import { isoWithOffset, fromDatetimeLocal, toDatetimeLocal, localDate } from "./time.js";
 import { buildEvent, validateEvent, lineBytes, PHOTO_TAGS, PHOTO_TAG_LABEL, CHANGE_STATUS_LABEL, PHOTO_LIMIT } from "./event.js";
+import { validateSeed } from "./seed.js";
 
 export const APP_VERSION = "0.1.0";
 const $ = (id) => document.getElementById(id);
-const state = { store: null, assets: [], target: null, photos: [] };
+const state = { store: null, assets: [], target: null, photos: [], saving: false };
 
 function text(el, value, cls) {
   el.textContent = value;
@@ -50,23 +51,14 @@ async function saveSettings() {
 }
 
 // ---- 시드 ----
-function validateSeed(seed) {
-  if (!Array.isArray(seed) || seed.length === 0) return "배열이 아니거나 비어 있음";
-  for (const a of seed) {
-    if (!isUuid(a.asset_id)) return `asset_id 가 UUID 가 아님: ${a.asset_id}`;
-    if (typeof a.label !== "string" || !a.label) return "label 누락";
-    if (!("location_point" in a) && !("address" in a)) return `${a.label}: 위치점 또는 주소 필요`;
-    if (!["synthetic", "private_real"].includes(a.data_mode)) return `${a.label}: data_mode`;
-  }
-  return null;
-}
-
 async function loadSeedObject(seed, source) {
-  const err = validateSeed(seed);
-  if (err) return text($("seed-note"), "시드 오류: " + err, "bad");
-  await state.store.putAssets(seed, source);
-  text($("seed-note"), `${seed.length}개 물건 불러옴 (${source})`, "ok");
+  // 스키마 전체 규칙으로 검증한다. 시드는 통째로 교체하며 저장된 관측은 건드리지 않는다.
+  const errs = validateSeed(seed);
+  if (errs.length) return text($("seed-note"), "시드 오류: " + errs.slice(0, 5).join("; ") + (errs.length > 5 ? ` 외 ${errs.length - 5}건` : ""), "bad");
+  await state.store.replaceAssets(seed, source);
+  text($("seed-note"), `${seed.length}개 물건 불러옴 (${source}). 이전 시드의 물건은 목록에서 제거됨`, "ok");
   await renderAssets();
+  await renderRecords();
 }
 
 async function loadSyntheticSeed() {
@@ -160,6 +152,19 @@ function renderPhotos() {
 }
 
 async function saveObservation() {
+  // 빠른 두 번 탭으로 같은 관측이 두 번 저장되지 않게 첫 비동기 작업 전에 잠근다.
+  if (state.saving) return;
+  state.saving = true;
+  $("save-observation").disabled = true;
+  try {
+    await doSaveObservation();
+  } finally {
+    state.saving = false;
+    $("save-observation").disabled = false;
+  }
+}
+
+async function doSaveObservation() {
   const note = $("note").value;
   const status = $("change-status").value;
   const dateOnly = $("date-only").checked;
@@ -174,18 +179,26 @@ async function saveObservation() {
   if (uniq.size !== good.length) problems.push("같은 사진이 두 번 선택됨");
   if (problems.length) return text($("observe-note"), problems.join(". "), "bad");
 
-  const routeVersionId = (await state.store.getMeta("route_version_id")) || null;
+  const [routeVersionId, studyId, dataMode] = await Promise.all([
+    state.store.getMeta("route_version_id"), state.store.getMeta("study_id"), state.store.getMeta("data_mode"),
+  ]);
+  if (!studyId) return text($("observe-note"), "설정에서 study_id 를 먼저 저장해야 한다", "bad");
+  if (state.target.data_mode !== (dataMode ?? "synthetic")) {
+    return text($("observe-note"), `물건의 자료 모드(${state.target.data_mode})와 설정(${dataMode ?? "synthetic"})이 다르다. 설정을 맞춘 뒤 저장`, "bad");
+  }
   const ev = buildEvent({
     eventId: uuid4(), assetId: state.target.asset_id, observedAt, precision: dateOnly ? "date" : "datetime",
-    deviceCreatedAt: isoWithOffset(), routeVersionId, changeStatus: status, note: note.trim() ? note : null,
+    deviceCreatedAt: isoWithOffset(), routeVersionId: routeVersionId || null, changeStatus: status, note: note.trim() ? note : null,
     attachments: [...uniq.values()].map((p) => ({ sha256: p.sha256, ext: p.ext, bytes: p.bytes, tags: [...p.tags] })),
   });
   const errs = validateEvent(ev);
   if (errs.length) return text($("observe-note"), "저장 불가: " + errs.join(", "), "bad");
 
   const line = lineBytes(ev);
+  // 저장 시점의 study_id·data_mode 를 기록에 고정한다. 나중에 설정을 바꿔도 이 기록의 맥락은 바뀌지 않는다 (J5-007 은 이 값으로 묶는다).
   const record = {
     event_id: ev.event_id, asset_id: ev.asset_id, event: ev, line, event_hash: await sha256Hex(line),
+    study_id: studyId, data_mode: dataMode ?? "synthetic", asset_label: state.target.label,
     saved_at: new Date().toISOString(), status: "saved", exported_in: [],
   };
   const photos = [...uniq.values()].map((p) => ({ sha256: p.sha256, ext: p.ext, bytes: p.bytes, blob: p.blob, created_at: record.saved_at }));
@@ -206,8 +219,10 @@ async function renderRecords() {
   const events = await state.store.listEvents();
   const labels = new Map(state.assets.map((a) => [a.asset_id, a.label]));
   $("record-list").replaceChildren(...events.map((r) => el("li", {},
-    el("div", {}, el("strong", { text: labels.get(r.asset_id) ?? r.asset_id }),
-      el("span", { class: "badge", text: r.status === "saved" ? "저장됨" : "내보냄" })),
+    el("div", {}, el("strong", { text: labels.get(r.asset_id) ?? r.asset_label ?? r.asset_id }),
+      el("span", { class: "badge", text: r.status === "saved" ? "저장됨" : "내보냄" }),
+      el("span", { class: "badge", text: `${r.data_mode} · ${r.study_id}` }),
+      labels.has(r.asset_id) ? el("span") : el("span", { class: "warn", text: " (현재 시드에 없는 물건)" })),
     el("div", { class: "muted", text: `${CHANGE_STATUS_LABEL[r.event.payload.change_status]} · ${r.event.observed_at} · 사진 ${r.event.attachment_refs.length}장` }),
     r.event.payload.note ? el("div", { text: r.event.payload.note }) : el("span"),
     el("div", { class: "muted", text: `event ${r.event_id.slice(0, 8)}… · 해시 ${(r.event_hash || "").slice(0, 12)}…` }),

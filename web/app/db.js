@@ -50,12 +50,14 @@ export class Store {
     await done(tx);
   }
 
-  /** 시드 물건을 넣는다. 같은 asset_id 는 덮어쓰되 events 는 건드리지 않는다. */
-  async putAssets(assets, source) {
+  /** 활성 시드를 통째로 교체한다 (한 트랜잭션). events·photos 는 건드리지 않는다. */
+  async replaceAssets(assets, source) {
     const tx = this.db.transaction(["assets", "meta"], "readwrite");
     const s = tx.objectStore("assets");
-    for (const a of assets) s.put({ ...a, source });
+    s.clear();
+    for (const a of assets) s.add({ ...a, source });
     tx.objectStore("meta").put(new Date().toISOString(), "seed_loaded_at");
+    tx.objectStore("meta").put(source, "seed_source");
     await done(tx);
   }
 

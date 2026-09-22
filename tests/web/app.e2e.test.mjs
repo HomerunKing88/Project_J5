@@ -103,8 +103,11 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.setFiles("#photos", [photo]);
     await cdp.waitFor("document.querySelectorAll('#photo-list .photo-item').length === 1 && document.querySelector('#photo-list .tags')");
     await cdp.eval("document.querySelector('#photo-list .tags input').click(); 'ok'");
-    await cdp.eval("document.getElementById('save-observation').click(); 'ok'");
+    // 빠른 두 번 탭: 한 건만 저장돼야 한다
+    await cdp.eval("const b = document.getElementById('save-observation'); b.click(); b.click(); 'ok'");
     await cdp.waitFor("document.getElementById('observe-note').textContent.startsWith('저장됨')");
+    await cdp.waitFor("document.querySelectorAll('#record-list li').length === 1");
+    assert.equal(await cdp.eval("document.querySelectorAll('#record-list li').length"), 1, "두 번 탭에 한 건만 저장");
     // 미지원 사진(HEIC 시그니처)은 오류로 표시되고 저장이 막힌다
     const heic = join(tmp, "x.heic");
     writeFileSync(heic, Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from("ftypheic"), Buffer.alloc(20)]));
@@ -114,6 +117,22 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.eval("document.getElementById('change-status').value = 'no_change'; document.getElementById('save-observation').click(); 'ok'");
     await cdp.waitFor("document.getElementById('observe-note').textContent.includes('오류가 있는 사진')");
     await cdp.eval("document.getElementById('cancel-observation').click(); 'ok'");
+    // 시드 교체(기기 파일, 물건 2개): 이전 물건은 목록에서 빠지고 기록은 남는다
+    const seedAll = JSON.parse(readFileSync(join(ROOT, "tests/fixtures/assets.seed.synthetic.json"), "utf8"));
+    const seed2 = join(tmp, "seed2.json");
+    writeFileSync(seed2, JSON.stringify(seedAll.slice(3)));
+    await cdp.setFiles("#seed-file", [seed2]);
+    await cdp.waitFor("document.querySelectorAll('#asset-list li button').length === 2");
+    await cdp.waitFor("document.querySelectorAll('#record-list li').length === 1");
+    assert.ok((await cdp.eval("document.getElementById('record-list').textContent")).includes("현재 시드에 없는 물건"));
+    // 잘못된 시드 파일은 거절되고 목록이 바뀌지 않는다
+    const seedBad = join(tmp, "seed-bad.json");
+    writeFileSync(seedBad, JSON.stringify([{ ...seedAll[0], extra: 1 }]));
+    await cdp.setFiles("#seed-file", [seedBad]);
+    await cdp.waitFor("document.getElementById('seed-note').textContent.includes('시드 오류')");
+    assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li button').length"), 2);
+    await cdp.eval("document.getElementById('load-synthetic').click(); 'ok'");
+    await cdp.waitFor("document.querySelectorAll('#asset-list li button').length === 5");
     // 재접속: 기록 유지
     await cdp.navigate(`${base}/index.html`);
     await cdp.waitFor("document.querySelectorAll('#record-list li').length === 1");
@@ -139,10 +158,12 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       const all = (s) => new Promise((res, rej) => { const r = db.transaction(s).objectStore(s).getAll(); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
       const events = await all('events'); const photos = await all('photos');
       const b64 = async (blob) => { const buf = new Uint8Array(await blob.arrayBuffer()); let s = ''; for (const x of buf) s += String.fromCharCode(x); return btoa(s); };
-      return { events: events.map(e => ({ line: Array.from(e.line), hash: e.event_hash, status: e.status })), photos: await Promise.all(photos.map(async p => ({ sha256: p.sha256, ext: p.ext, b64: await b64(p.blob) }))) };
+      return { events: events.map(e => ({ line: Array.from(e.line), hash: e.event_hash, status: e.status, study_id: e.study_id, data_mode: e.data_mode })), photos: await Promise.all(photos.map(async p => ({ sha256: p.sha256, ext: p.ext, b64: await b64(p.blob) }))) };
     })()`);
     assert.equal(dump.events.length, 1);
     assert.equal(dump.events[0].status, "saved");
+    assert.equal(dump.events[0].study_id, "e2e-study", "기록에 study_id 고정");
+    assert.equal(dump.events[0].data_mode, "synthetic", "기록에 data_mode 고정");
     const pkg = join(tmp, "pkg"); mkdirSync(join(pkg, "photos"), { recursive: true });
     const obs = Buffer.concat(dump.events.map((e) => Buffer.from(e.line)));
     assert.equal(createHash("sha256").update(obs).digest("hex"), dump.events[0].hash, "저장된 해시 = 행 바이트(LF 포함) 해시");

@@ -1,6 +1,7 @@
 // 최소 앱 캐시 (ADR-01: 서비스 워커에는 앱 실행 파일만 캐시한다). 사진·관측·시드 파일은 캐시하지 않는다.
 // 버전을 올리면 이전 캐시를 지운다. 네트워크 없이도 아래 파일로 앱이 뜬다.
-const CACHE = "j5-app-v0.1.0";
+const CACHE_PREFIX = "j5-app-";
+const CACHE = CACHE_PREFIX + "v0.1.0";
 const APP_FILES = [
   "./",
   "./index.html",
@@ -11,6 +12,7 @@ const APP_FILES = [
   "./app/event.js",
   "./app/hash.js",
   "./app/sha256.js",
+  "./app/seed.js",
   "./app/sniff.js",
   "./app/time.js",
   "./app/uuid.js",
@@ -21,7 +23,8 @@ self.addEventListener("install", (e) => {
 });
 
 self.addEventListener("activate", (e) => {
-  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
+  // 같은 origin 의 다른 앱 캐시는 건드리지 않는다. 이 앱의 이전 버전 캐시만 지운다.
+  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k.startsWith(CACHE_PREFIX) && k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
 });
 
 self.addEventListener("fetch", (e) => {
