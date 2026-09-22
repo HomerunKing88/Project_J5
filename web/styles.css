@@ -12,3 +12,4 @@ pre { white-space: pre-wrap; word-break: break-all; font-size: .85rem; backgroun
 label { display: block; margin: 6px 0; }
 table { border-collapse: collapse; width: 100%; font-size: .9rem; }
 td, th { border-bottom: 1px solid #8883; padding: 4px 6px; text-align: left; vertical-align: top; }
+textarea { width: 100%; box-sizing: border-box; font-size: 1rem; }
