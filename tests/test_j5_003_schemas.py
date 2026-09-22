@@ -184,8 +184,19 @@ def test_unknown_asset_passes_schema_but_fails_seed_link():
 def test_change_observed_requires_photo_or_note():
     (_, ev), = read_events(PACKAGES / "invalid_change_without_evidence")
     assert errors(EVENT_V, ev)
+    ev["payload"]["note"] = "   "
+    assert errors(EVENT_V, ev), "공백만 있는 설명은 근거가 아니다"
     ev["payload"]["note"] = "설명만 있음"
     assert errors(EVENT_V, ev) == []
+
+
+def test_manifest_rejects_unsupported_schema_version():
+    manifest = json.loads((PACKAGES / "valid" / "manifest.json").read_text(encoding="utf-8"))
+    for bad in ["2.0.0", "1.0", "1.0.0-beta", "0.9.9"]:
+        manifest["schema_version"] = bad
+        assert errors(MANIFEST_V, manifest), bad
+    manifest["schema_version"] = "1.0.0"
+    assert errors(MANIFEST_V, manifest) == []
 
 
 # ---- 이벤트 스키마 세부 규칙 ----

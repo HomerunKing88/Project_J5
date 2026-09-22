@@ -9,9 +9,9 @@
   "properties": {
     "format": { "type": "string", "const": "j5field" },
     "schema_version": {
-      "description": "package_schema 버전. 현재 1.0.0",
+      "description": "package_schema 버전. 지원 버전만 허용하며 새 버전은 스키마 개정 시 추가한다",
       "type": "string",
-      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+      "enum": ["1.0.0"]
     },
     "study_id": { "type": "string", "minLength": 1, "maxLength": 100 },
     "package_id": {

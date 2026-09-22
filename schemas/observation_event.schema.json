@@ -45,7 +45,7 @@
       "then": {
         "anyOf": [
           { "properties": { "attachment_refs": { "minItems": 1 } } },
-          { "properties": { "payload": { "properties": { "note": { "type": "string", "minLength": 1 } }, "required": ["note"] } } }
+          { "properties": { "payload": { "properties": { "note": { "type": "string", "minLength": 1, "pattern": "\\S" } }, "required": ["note"] } } }
         ]
       }
     }
