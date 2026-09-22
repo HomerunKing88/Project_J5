@@ -1,0 +1,18 @@
+# 가상 fixture (J5-003)
+
+모두 가상자료다. `python tests/fixtures/make_packages.py`로 결정적으로 다시 만든다. 사진은 1x1 PNG다.
+
+- `assets.seed.synthetic.json`: 가상 물건 5개. 좌표·주소는 가상값이다.
+- `packages/<case>/`: ZIP을 풀어 놓은 형태의 패키지. ZIP 생성·검사(J5-007·008)는 이 디렉터리를 입력으로 시험한다.
+
+| case | 내용 | 기대 결과 (걸러내는 단계) |
+|---|---|---|
+| valid | 이벤트 3개, 사진 2장(한 장은 두 이벤트 공유), 날짜 정밀도 1건 | 반영 |
+| duplicate_same_content | 같은 event_id·같은 바이트 행 반복 | 두 번째 행 건너뜀 (R1b 반영기) |
+| duplicate_conflict | 같은 event_id·다른 내용 | 전체 입력 보류, 원본 유지 (R1b 반영기) |
+| corrupt_hash_mismatch | manifest의 사진 해시가 실제 파일과 다름 | 해시 검사에서 거절 (J5-008 검사 도구) |
+| corrupt_path_traversal | manifest에 `../escape.png` | manifest 스키마에서 거절 |
+| missing_attachment | 이벤트가 참조한 사진이 패키지에 없음 | 첨부 존재 검사에서 거절 (J5-008) |
+| unsupported_heic | `image/heic` 첨부 | 이벤트 스키마에서 거절, 변환 안내 후 중단 |
+| unknown_asset | 시드에 없는 asset_id | 스키마 통과, 시드 연결 검사에서 거절 |
+| invalid_change_without_evidence | 변화 확인인데 사진·설명 없음 | 이벤트 스키마에서 거절 |

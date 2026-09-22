@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://j5.local/schemas/observation_event.schema.json",
+  "title": "R1 관측 이벤트 (observations.jsonl 한 행)",
+  "description": "데이터 사전 §3.1·§6. 신규 관측과 그 정정만 허용한다. 행의 UTF-8 바이트를 고정하고 이벤트 해시는 그 바이트의 sha256이다. 필드 추가는 데이터 사전 개정 후에만 한다.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_id", "record_type", "asset_id", "observed_at", "observed_at_precision",
+    "device_created_at", "route_version_id", "frame_version_id", "corrects_event_id",
+    "payload", "attachment_refs"
+  ],
+  "properties": {
+    "event_id": { "$ref": "#/$defs/uuid" },
+    "record_type": { "type": "string", "enum": ["field_observation"] },
+    "asset_id": { "$ref": "#/$defs/uuid" },
+    "observed_at": {
+      "description": "관측 시각. precision=datetime이면 시간대 있는 ISO 8601, date면 YYYY-MM-DD. 시각을 만들어내지 않는다.",
+      "type": "string"
+    },
+    "observed_at_precision": { "type": "string", "enum": ["datetime", "date"] },
+    "device_created_at": { "type": "string", "format": "date-time", "pattern": "(Z|[+-][0-9]{2}:[0-9]{2})$" },
+    "route_version_id": { "oneOf": [ { "$ref": "#/$defs/uuid" }, { "type": "null" } ] },
+    "frame_version_id": { "oneOf": [ { "$ref": "#/$defs/uuid" }, { "type": "null" } ] },
+    "corrects_event_id": {
+      "description": "정정 관측이면 원 이벤트 ID. 원 이벤트를 덮어쓰지 않는다.",
+      "oneOf": [ { "$ref": "#/$defs/uuid" }, { "type": "null" } ]
+    },
+    "payload": { "$ref": "#/$defs/field_observation_payload" },
+    "attachment_refs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/attachment_ref" },
+      "uniqueItems": true
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "observed_at_precision": { "const": "datetime" } } },
+      "then": { "properties": { "observed_at": { "format": "date-time", "pattern": "(Z|[+-][0-9]{2}:[0-9]{2})$" } } },
+      "else": { "properties": { "observed_at": { "format": "date", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" } } }
+    },
+    {
+      "description": "변화 확인 시 사진 또는 설명 하나를 요구한다.",
+      "if": { "properties": { "payload": { "properties": { "change_status": { "const": "change_observed" } } } } },
+      "then": {
+        "anyOf": [
+          { "properties": { "attachment_refs": { "minItems": 1 } } },
+          { "properties": { "payload": { "properties": { "note": { "type": "string", "minLength": 1 } }, "required": ["note"] } } }
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "field_observation_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["change_status", "note"],
+      "properties": {
+        "change_status": {
+          "description": "변화 확인 / 변화 없음 / 확인 어려움",
+          "type": "string",
+          "enum": ["change_observed", "no_change", "hard_to_confirm"]
+        },
+        "note": { "type": ["string", "null"], "maxLength": 2000 }
+      }
+    },
+    "attachment_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256", "path", "mime", "bytes", "tags"],
+      "properties": {
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "path": { "type": "string", "pattern": "^photos/[0-9a-f]{64}\\.(jpg|png|webp)$" },
+        "mime": { "type": "string", "enum": ["image/jpeg", "image/png", "image/webp"] },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 20000000 },
+        "taken_at": { "type": "string", "format": "date-time", "pattern": "(Z|[+-][0-9]{2}:[0-9]{2})$" },
+        "tags": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": ["front", "ground_floor", "lease_ad", "construction", "road", "parking", "adjacency"]
+          }
+        },
+        "viewpoint_id": { "type": "string", "minLength": 1 },
+        "heading_deg": { "type": "number", "minimum": 0, "exclusiveMaximum": 360 },
+        "previous_photo_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}

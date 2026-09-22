@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://j5.local/schemas/assets_seed.schema.json",
+  "title": "assets.seed.json (R1a 임시 정본)",
+  "description": "데이터 사전 §2. 물건 객체의 JSON 배열. R1b 정본 반영 시 asset_id를 그대로 승계한다.",
+  "type": "array",
+  "items": { "$ref": "#/$defs/asset" },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["asset_id", "label", "data_mode", "created_at", "notes"],
+      "properties": {
+        "asset_id": { "$ref": "#/$defs/uuid" },
+        "label": { "type": "string", "minLength": 1 },
+        "location_point": {
+          "description": "WGS84 [경도, 위도]",
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "prefixItems": [
+            { "type": "number", "minimum": -180, "maximum": 180 },
+            { "type": "number", "minimum": -90, "maximum": 90 }
+          ]
+        },
+        "address": { "type": "string", "minLength": 1 },
+        "data_mode": { "type": "string", "enum": ["synthetic", "private_real"] },
+        "created_at": { "type": "string", "format": "date" },
+        "notes": { "type": ["string", "null"] }
+      },
+      "anyOf": [
+        { "required": ["location_point"] },
+        { "required": ["address"] }
+      ]
+    }
+  }
+}
