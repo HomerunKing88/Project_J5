@@ -95,6 +95,61 @@ export class Store {
     return req(this.db.transaction("photos").objectStore("photos").get(sha256));
   }
 
+  /** 같은 study_id·data_mode 의 기록을 saved_at 오름차순으로. */
+  async listEventsFor(studyId, dataMode) {
+    const all = await req(this.db.transaction("events").objectStore("events").index("by_saved").getAll());
+    return all.filter((r) => r.study_id === studyId && r.data_mode === dataMode);
+  }
+
+  async getPhotos(shas) {
+    const st = this.db.transaction("photos").objectStore("photos");
+    const out = new Map();
+    for (const sha of shas) {
+      const p = await req(st.get(sha));
+      if (p) out.set(sha, p);
+    }
+    return out;
+  }
+
+  /** 사진 메타(크기·확장자)만. 내보내기 계획에 쓴다. */
+  async photoMeta() {
+    const all = await req(this.db.transaction("photos").objectStore("photos").getAll());
+    return new Map(all.map((p) => [p.sha256, { bytes: p.bytes, ext: p.ext }]));
+  }
+
+  async listExports() {
+    return (await this.getMeta("exports")) ?? [];
+  }
+
+  /** 내보내기 시도를 기록한다 (파일 저장 버튼을 누른 시점). 확인 전이므로 confirmed_at 은 null. */
+  async appendExport(entry) {
+    const tx = this.db.transaction("meta", "readwrite");
+    const st = tx.objectStore("meta");
+    const list = (await req(st.get("exports"))) ?? [];
+    list.push({ ...entry, confirmed_at: null });
+    st.put(list, "exports");
+    await done(tx);
+  }
+
+  /** 사용자가 파일 저장을 확인한 뒤: 기록 상태 exported, exported_in 에 package_id, 시도에 confirmed_at. 한 트랜잭션. */
+  async markExported(eventIds, packageId, at) {
+    const tx = this.db.transaction(["events", "meta"], "readwrite");
+    const ev = tx.objectStore("events");
+    for (const id of eventIds) {
+      const r = await req(ev.get(id));
+      if (!r) continue;
+      r.status = "exported";
+      r.exported_in = Array.from(new Set([...(r.exported_in ?? []), packageId]));
+      r.exported_at = r.exported_at ?? at;
+      ev.put(r);
+    }
+    const meta = tx.objectStore("meta");
+    const list = (await req(meta.get("exports"))) ?? [];
+    for (const e of list) if (e.package_id === packageId && !e.confirmed_at) e.confirmed_at = at;
+    meta.put(list, "exports");
+    await done(tx);
+  }
+
   async counts() {
     const tx = this.db.transaction(["events", "photos", "assets"]);
     const [events, photos, assets] = await Promise.all([
