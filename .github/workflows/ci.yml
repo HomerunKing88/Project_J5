@@ -1,0 +1,18 @@
+name: ci
+
+# 가상자료만 사용한다. 실제 정본·사진·API 키를 runner에 올리지 않는다 (릴리스 계획 §11).
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest

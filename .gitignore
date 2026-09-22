@@ -1,0 +1,59 @@
+# ---- 실데이터·개인정보·비밀키 (AGENTS.md 보안 절) ----
+# 실데이터 폴더는 레포 밖(J5_DATA_HOME)에 둔다. 아래는 실수 커밋 방지용 이중 방어다.
+/data/
+/J5_DATA_HOME/
+/db/
+/raw/
+/photos/
+/inbox/
+/quarantine/
+/exports/
+/backups/
+/logs/
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.j5field.zip
+*.zip
+*.heic
+*.HEIC
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.gif
+*.env
+.env.*
+!config/example.env
+*.pem
+*.key
+*.p12
+secrets*
+**/api_key*
+**/apikey*
+
+# 가상 fixture 예외: tests/fixtures 아래의 작은 시험용 이미지·ZIP만 허용한다
+!tests/fixtures/**/*.jpg
+!tests/fixtures/**/*.png
+!tests/fixtures/**/*.webp
+!tests/fixtures/**/*.zip
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# ---- 편집기·OS ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp

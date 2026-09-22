@@ -1,0 +1,10 @@
+[project]
+name = "j5"
+version = "0.0.0"
+description = "종로5가 투자지도: PC용 수집·반영·검증·백업 도구"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
