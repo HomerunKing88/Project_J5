@@ -58,6 +58,7 @@ class Db:
         self.conn = conn
         self.path = path
         self._depth = 0
+        self._snapshot = False
         # 정본 시각(recorded_at)의 시계. 입력이 정본 시각을 정하지 못하게 저장소가 항상 부여한다. 테스트는 이 속성으로 고정한다.
         self.now = now_utc
 
@@ -133,6 +134,8 @@ class Db:
     def transaction(self):
         """바깥은 BEGIN IMMEDIATE, 중첩은 SAVEPOINT. 예외면 그 단위의 쓰기를 되돌린다.
         중첩 단위의 실패를 바깥에서 잡더라도 실패한 단위의 쓰기는 이미 되돌려져 있어 부분 반영이 커밋되지 않는다."""
+        if self._snapshot:
+            raise DbError("snapshot_read_only", "읽기 스냅샷 안에서는 쓰지 않는다")
         depth = self._depth
         if depth == 0:
             self.conn.execute("BEGIN IMMEDIATE")
@@ -163,6 +166,28 @@ class Db:
                     raise
             else:
                 self.conn.execute(f"RELEASE sp{depth}")
+
+    @contextmanager
+    def snapshot(self):
+        """읽기 트랜잭션(BEGIN 지연). 안에서 읽는 값과 `conn.backup()` 이 같은 스냅샷을 본다. 그동안 다른 연결의 쓰기는 대기한다.
+        쓰기 트랜잭션 안에서는 열지 않는다(같은 연결의 쓰기 잠금 안에서 백업 API 가 진행되지 않는다). 안에서 transaction() 은 거절된다."""
+        if self._depth > 0 or self._snapshot:
+            raise DbError("in_transaction", "쓰기 트랜잭션 안에서는 스냅샷을 열지 않는다. 배치가 끝난 뒤 백업한다")
+        self.conn.execute("BEGIN")
+        self._snapshot = True
+        try:
+            # 지연 트랜잭션은 첫 읽기에서 공유 잠금을 잡는다. 여기서 먼저 읽어 두어 이후의 읽기·백업이 한 스냅샷을 보고 다른 쓰기가 대기하게 한다.
+            self.conn.execute("SELECT COUNT(*) FROM meta").fetchone()
+            yield
+        finally:
+            self._snapshot = False
+            try:
+                self.conn.execute("COMMIT")
+            except sqlite3.Error:
+                try:
+                    self.conn.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
 
     def _require_tx(self) -> None:
         if self._depth == 0:
@@ -209,8 +234,9 @@ class Db:
         if self._has_table("projection_runs"):
             from j5.db.projection import projection_status  # 순환 import 방지
             projection = projection_status(self, data_home)
+        from j5.db.backup import backup_status  # 순환 import 방지
         return {
-            "projection": projection,
+            "projection": projection, "backup": backup_status(self, data_home),
             "path": str(self.path), "sqlite_version": sqlite3.sqlite_version,
             "db_schema_version": self.schema_version(), "tool_schema_version": S.DB_SCHEMA_VERSION,
             "study_id": self.meta("study_id"), "data_mode": self.data_mode, "dataset_version": int(self.meta("dataset_version") or 0),
