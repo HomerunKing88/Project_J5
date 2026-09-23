@@ -1,5 +1,5 @@
 """j5 명령줄. inspect(패키지 검사), copy(독립 사본), db(정본 SQLite: init/status/load-seed/import/project/backup/restore/check-photos/survey-*),
-parcels(연속지적도 SHP → 필지 번들: inspect/convert).
+parcels(연속지적도 SHP → 필지 번들: inspect/convert), collect(공식 API 수집: rt-sample/rt-report).
 
 종료 코드: 0 ok·반영·중복 / 1 reject·실패 / 2 hold·보류 / 3 사용 오류.
 """
@@ -23,6 +23,8 @@ from j5.db.survey import apply_input, compare, compare_text, load_input, overvie
 from j5.db.validate import ValidationError
 from j5.package.preserve import PreserveError, copy_package
 from j5.package.validate import inspect_package
+from j5.collect.config import ConfigError, config_permission_warning, load_config, redact, service_key
+from j5.collect.rt import DEFAULT_ENDPOINT, DEFAULT_MAX_PAGES, DEFAULT_NUM_ROWS, CollectError, check_lawd, collect_months, parse_months, report_from_raw, report_text, run_text
 from j5.parcels.convert import Clip, ConvertError, ConvertOptions, convert, convert_text, inspect_source, inspect_text, write_bundle
 from j5.schemas_loader import schema_errors
 
@@ -130,6 +132,24 @@ def _build_parser() -> argparse.ArgumentParser:
     pc.add_argument("--max-features", type=int, default=8000, help="범위 안 필지 상한 (기본이자 최대 8000, 번들 계약과 같다)")
     pc.add_argument("--synthetic", action="store_true", help="가상자료 표시 (data_mode synthetic)")
     pc.add_argument("--json", action="store_true")
+
+    co = sub.add_parser("collect", help="공식 API 수집 (J5-014). 인증키는 J5_DATA_HOME/config.env 의 DATA_GO_KR_SERVICE_KEY 에서만 읽는다")
+    csub = co.add_subparsers(dest="collect_command", required=True)
+    cs = csub.add_parser("rt-sample", help="상업·업무용 실거래 API 를 시군구·계약월 단위로 호출해 원본 응답과 요약을 남긴다 (R0 표본 월 실측). 정본에 쓰지 않는다")
+    cs.add_argument("--lawd-cd", required=True, help="시군구 코드 5자리 (예: 종로구 11110)")
+    cs.add_argument("--months", required=True, help="계약월 목록 YYYY-MM,YYYY-MM,… (예: 2026-08,2021-09,2006-03)")
+    cs.add_argument("--data-home", type=Path, help="원본·기록·요약을 둘 실데이터 홈. 생략 시 J5_DATA_HOME")
+    cs.add_argument("--config", type=Path, help="인증키가 있는 env 파일. 생략 시 J5_DATA_HOME/config.env")
+    cs.add_argument("--endpoint", default=DEFAULT_ENDPOINT, help="API 주소. 공공데이터포털 API 상세 페이지의 값과 대조한다")
+    cs.add_argument("--num-rows", type=int, default=DEFAULT_NUM_ROWS, help="페이지당 행 수 (1~1000)")
+    cs.add_argument("--max-pages", type=int, default=DEFAULT_MAX_PAGES, help="월당 최대 페이지 (1~500)")
+    cs.add_argument("--json", action="store_true")
+    cr = csub.add_parser("rt-report", help="저장된 원본 응답만으로 요약을 다시 만든다 (네트워크 없음)")
+    cr.add_argument("--lawd-cd", required=True)
+    cr.add_argument("--months", required=True)
+    cr.add_argument("--data-home", type=Path)
+    cr.add_argument("--run-id", help="특정 실행의 파일만")
+    cr.add_argument("--json", action="store_true")
     return p
 
 
@@ -375,6 +395,37 @@ def _parcels_main(args) -> int:
     return USAGE_ERROR
 
 
+def _collect_main(args) -> int:
+    home = _data_home(args)
+    if home is None:
+        return USAGE_ERROR
+    try:
+        lawd = check_lawd(args.lawd_cd)
+        months = parse_months(args.months)
+        if args.collect_command == "rt-report":
+            rep = report_from_raw(home, lawd, months, args.run_id)
+            sys.stdout.write(json.dumps(rep, ensure_ascii=False, indent=2) + "\n" if args.json else report_text(rep))
+            return 0
+        if args.collect_command == "rt-sample":
+            key, source = service_key(home, config_path=args.config)
+            _, cfg_path = load_config(home, path=args.config)
+            warn = config_permission_warning(cfg_path)
+            if warn:
+                print(f"주의: {warn}", file=sys.stderr)
+            print(f"수집 시작: 시군구 {lawd}, 계약월 {', '.join(months)}, 인증키 출처 {source}. 이 호출은 공공데이터포털 일일 트래픽을 쓴다.", file=sys.stderr)
+            run = collect_months(home, key=key, key_source=source, lawd_cd=lawd, months=months, endpoint=args.endpoint, num_rows=args.num_rows, max_pages=args.max_pages)
+            text_ = json.dumps(run.to_dict(), ensure_ascii=False, indent=2) + "\n" if args.json else run_text(run)
+            sys.stdout.write(redact(text_, key))  # 화면 출력도 한 번 더 가린다
+            return 0 if run.ok else 1
+    except ConfigError as e:
+        print(f"설정 오류 [{e.code}]: {e.message}", file=sys.stderr)
+        return USAGE_ERROR
+    except CollectError as e:
+        print(f"수집 실패 [{e.code}]: {e.message}", file=sys.stderr)
+        return 1
+    return USAGE_ERROR
+
+
 def _load_seed(path: Path) -> list[dict] | None:
     if not path.is_file():
         print(f"시드 파일이 없음: {path}", file=sys.stderr)
@@ -434,4 +485,6 @@ def main(argv: list[str] | None = None) -> int:
         return _db_main(args)
     if args.command == "parcels":
         return _parcels_main(args)
+    if args.command == "collect":
+        return _collect_main(args)
     return USAGE_ERROR

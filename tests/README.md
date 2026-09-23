@@ -5,6 +5,7 @@
 - `test_repo_allowlist.py`: 저장소에 실데이터·비밀키 형식 파일이 들어오지 않았는지 검사한다(J5-002).
 - `test_j5_003_schemas.py`: 스키마 3종과 fixture 검증, 관측↔시드 asset_id 연결 확인.
 - `test_j5_008_inspect.py` / `test_j5_008_copy.py`: PC 검사 도구. fixture 9종(폴더·ZIP)과 적대적 ZIP, CLI 종료 코드, 독립 사본.
+- `test_j5_014_collect.py`: 실거래 API 표본 월 수집(R0 실측 도구). config.env 파서·키 출처·권한 경고·가림, URL 작성, 응답 해석(신형·구형 코드·오류 헤더·DOCTYPE·크기), 로컬 HTTP 서버로 페이지네이션·정상 0건·API 오류·HTTP 오류·응답 이상·페이지 누락 구분, 네트워크 재시도, 원본·기록·로그에 키 없음, 요약, 재요약, CLI. 실제 포털은 호출하지 않는다.
 - `test_j5_013b2_parcels_db.py`: 정본 필지·물건 구성(db_schema 5). 번들 반영(신규·변화 없음·새 기준일 갱신·같은 기준일 충돌·오래된 기준일·data_mode·출처 문서), 위치점 포함 연결 제안(정본에 쓰지 않음)·검토 후 반영·멱등·갱신·오류, 구멍·다중 조각 포함 판정, 파생본 `parcels.geojson`·검증기·출처 혼합, 백업·복구, CLI.
 - `test_j5_013b_parcels.py`: 필지 경계·지번 번들 변환. 한국 TM 좌표계 역변환·데이텀 변환의 pyproj 기준값 대조(상수), 왕복·원점, .prj 판독·`--crs`, SHP/DBF·ZIP(안전하지 않은 경로 거절)·다중 레이어·인코딩, PNU·지번 정규화, 링 방향·구멍·다중 조각·같은 PNU 합침·상한, 범위 자르기, 스키마·덮어쓰기 금지, 가상 fixture 재현과 web/data 동일성, inspect, CLI. fixture 는 `fixtures/parcels/`.
 - `test_j5_013_survey.py`: 조사 경로·점포·표본틀·세션. 수동 파일 4종 반영(멱등·불변·버전 연결·참조 검사), N/K/V 집계(미확인·미조사·표본틀 밖), 같은 점포 두 번 세기 거절, 표본 변경·통합 후 공통 표본 비교(단절), 경로 참조 소급 채움, 백업·파생본 공존, CLI. 예제 파일은 `fixtures/survey/`.

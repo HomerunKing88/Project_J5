@@ -1,6 +1,6 @@
 # j5/
 
-PC용 Python CLI. 수집·정본 반영·검증·조회 패키지 생성·백업·필지 번들 변환을 담당한다. 지원 중인 Python(3.11+)과 표준 라이브러리를 우선하며, JSON Schema 검증에 jsonschema 고정 버전을 쓴다.
+PC용 Python CLI. 공식 API 수집·정본 반영·검증·조회 패키지 생성·백업·필지 번들 변환을 담당한다. 지원 중인 Python(3.11+)과 표준 라이브러리를 우선하며, JSON Schema 검증에 jsonschema 고정 버전을 쓴다.
 
 실데이터 경로는 환경변수 `J5_DATA_HOME`으로 받고 코드에 넣지 않는다. 이 도구는 입력 파일을 수정·삭제하지 않는다.
 
@@ -111,3 +111,15 @@ python -m j5 db [--db 경로] parcels-link <제안.json> [--json]
 ```
 
   `parcels-load` 는 PNU 기준으로 정본 `parcels`(db_schema 5) 에 넣는다(같은 내용 변화 없음, 더 새로운 도형 기준일이면 갱신, 같은 기준일·다른 내용이나 더 오래된 기준일은 거절). 번들 data_mode 는 정본과 맞아야 하고(synthetic ↔ synthetic, real ↔ private_real), 반영한 번들은 `source_documents` 에 남는다. `parcels-suggest` 는 물건 위치점을 품는 필지를 찾아 연결 제안 파일(`schemas/asset_components_input.schema.json`)을 만들 뿐 정본에 쓰지 않는다. 검토·수정한 파일을 `parcels-link` 로 반영하면 `asset_components` 에 적용 기간·근거와 함께 저장되고 dataset_version 이 오른다. 이후 `project` 의 파생본에 `parcels.geojson`(필지 + 연결 물건 `asset_ids`)이 들어가며 폰의 "필지 파일 불러오기" 로 그대로 넣는다.
+
+## 실거래 API 표본 수집 (R0 실측, J5-014A)
+
+```text
+python -m j5 collect rt-sample --lawd-cd 11110 --months 2026-08,2021-09,2006-03 [--endpoint URL] [--num-rows 1000] [--max-pages 50] [--data-home] [--config] [--json]
+python -m j5 collect rt-report --lawd-cd 11110 --months 2026-08,2021-09,2006-03 [--run-id] [--json]
+```
+
+- 인증키는 `J5_DATA_HOME/config.env` 의 `DATA_GO_KR_SERVICE_KEY=…`(권한 600) 또는 같은 이름의 환경변수에서만 읽는다. 로그·기록·요약·출력에 남기지 않는다. 저장소의 `.env`·예시 파일에는 값을 넣지 않는다.
+- `rt-sample` 은 상업·업무용 부동산 매매 실거래 API 를 시군구(5자리)·계약월(YYYYMM)·페이지 단위로 호출해 원본 응답을 `raw/rt_nrg/<시군구>/<YYYYMM>/` 에 그대로 두고, 요청 기록(`run-*.json`, 키 가림)과 요약(`report-*.json`: 필드 채움 비율·`*` 마스킹·값 분포)을 만든다. 월 결과는 `complete / empty(정상 0건) / partial(페이지 누락) / failed` 로 구분한다. 정본에는 쓰지 않는다(정규화·연결은 R3).
+- 기본 엔드포인트는 코드에 적힌 알려진 주소이며 공공데이터포털 API 상세 페이지의 주소와 대조한다. 호출은 포털 일일 트래픽을 쓴다.
+- 나에게 보낼 것은 `rt-report` 의 요약(또는 `report-*.json`)이다. 원본 행·인증키는 보내지 않는다.
