@@ -32,6 +32,19 @@
   <ul id="asset-list" class="plain"></ul>
 </section>
 
+<section id="sec-map">
+  <h2>지도 (위치점만, 배경 없음)</h2>
+  <p class="muted">외부 타일·통신 없음. 북쪽이 위. 점을 누르면 관측 기록으로 간다. 지도가 안 보여도 위 목록에서 선택할 수 있다.</p>
+  <svg id="map-svg" role="img" aria-label="물건 위치점 지도"></svg>
+  <div class="map-controls">
+    <button id="map-zoom-in" aria-label="확대">+</button>
+    <button id="map-zoom-out" aria-label="축소">−</button>
+    <button id="map-fit">전체 보기</button>
+    <span id="map-legend" class="muted"><span class="lg lg-syn"></span> 가상자료(synthetic) <span class="lg lg-real"></span> 실제·비공개(private_real)</span>
+  </div>
+  <p id="map-note" class="muted"></p>
+</section>
+
 <section id="sec-observe" hidden>
   <h2>관측 기록: <span id="target-label"></span></h2>
   <label>관측 상태

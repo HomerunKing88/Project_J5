@@ -7,10 +7,11 @@ import { isoWithOffset, fromDatetimeLocal, toDatetimeLocal, localDate } from "./
 import { buildEvent, validateEvent, lineBytes, PHOTO_TAGS, PHOTO_TAG_LABEL, CHANGE_STATUS_LABEL, PHOTO_LIMIT } from "./event.js";
 import { validateSeed } from "./seed.js";
 import { selectRecords, planBatches, buildPackage, hasRemainingBatches, studyIdError } from "./export.js";
+// 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
 export const APP_VERSION = "0.1.0";
 const $ = (id) => document.getElementById(id);
-const state = { store: null, assets: [], target: null, photos: [], saving: false, export: null };
+const state = { store: null, assets: [], target: null, photos: [], saving: false, export: null, map: null };
 
 function text(el, value, cls) {
   el.textContent = value;
@@ -94,13 +95,50 @@ async function renderAssets() {
     el("button", { text: "관측 기록", onclick: () => startObservation(a) }),
   )));
   if (!state.assets.length) list.append(el("li", { class: "muted", text: "물건이 없다. 시드를 불러온다." }));
+  // 목록을 먼저 채운 뒤 지도를 갱신한다. 지도 실패는 목록에 영향을 주지 않는다.
+  mapCall((m) => mapNote(m.setAssets(state.assets)));
   await refreshStatus();
+}
+
+// ---- 지도 (J5-005) ----
+// 지도는 보조 화면이다. 모듈을 못 읽거나 만들거나 갱신하다 실패하면 안내만 남기고 목록·기록·내보내기는 그대로 동작한다.
+async function initMap() {
+  try {
+    const { createMap } = await import("./map.js");
+    state.map = createMap($("map-svg"), { onSelect: startObservation });
+    $("map-zoom-in").addEventListener("click", () => mapCall((m) => m.zoomBy(2)));
+    $("map-zoom-out").addEventListener("click", () => mapCall((m) => m.zoomBy(0.5)));
+    $("map-fit").addEventListener("click", () => mapCall((m) => m.fit()));
+  } catch (e) {
+    mapFailed(e);
+  }
+}
+
+function mapFailed(e) {
+  try { state.map?.destroy(); } catch {}
+  state.map = null;
+  text($("map-note"), `지도 표시 불가: ${e?.message || e}. 목록에서 선택한다`, "warn");
+}
+
+function mapCall(fn) {
+  if (!state.map) return undefined;
+  try { return fn(state.map); } catch (e) { mapFailed(e); return undefined; }
+}
+
+function mapNote(c) {
+  if (!c) return;
+  if (c.total === 0) return text($("map-note"), "", "muted");
+  if (c.located === 0) return text($("map-note"), "위치점 있는 물건이 없다. 목록에서 선택한다", "muted");
+  let msg = `위치점 ${c.located}개 표시 (가상 ${c.synthetic} · 실제 ${c.privateReal})`;
+  if (c.unlocated > 0) msg += ` · 위치점 없는 물건 ${c.unlocated}개 (목록에서 선택)`;
+  text($("map-note"), msg, "muted");
 }
 
 // ---- 관측 ----
 function startObservation(asset) {
   state.target = asset;
   state.photos = [];
+  mapCall((m) => m.select(asset.asset_id));
   $("target-label").textContent = asset.label;
   $("change-status").value = "";
   $("observed-at").value = toDatetimeLocal(new Date());
@@ -213,6 +251,7 @@ async function doSaveObservation() {
   text($("observe-note"), "저장됨 (이 기기). PC 반영 여부 미확인", "ok");
   $("sec-observe").hidden = true;
   state.target = null;
+  mapCall((m) => m.select(null));
   await renderRecords();
 }
 
@@ -361,6 +400,7 @@ async function main() {
     return;
   }
   await loadSettings();
+  await initMap();
   await renderAssets();
   await renderRecords();
   await renderExportHistory();
@@ -369,7 +409,7 @@ async function main() {
   $("seed-file").addEventListener("change", (e) => loadSeedFile(e.target));
   $("photos").addEventListener("change", (e) => addPhotos(e.target));
   $("save-observation").addEventListener("click", saveObservation);
-  $("cancel-observation").addEventListener("click", () => { $("sec-observe").hidden = true; state.target = null; });
+  $("cancel-observation").addEventListener("click", () => { $("sec-observe").hidden = true; state.target = null; mapCall((m) => m.select(null)); });
   $("export-prepare").addEventListener("click", () => { state.export = null; exportPrepare(); });
   $("export-save").addEventListener("click", exportSave);
   $("export-confirm").addEventListener("click", exportConfirm);

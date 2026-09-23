@@ -10,7 +10,7 @@
 
 ## 구성
 
-정적 HTML·CSS·JavaScript ES Modules, 고정 버전 MapLibre, 스마트폰 IndexedDB, 개인 PC의 SQLite 정본, Python CLI를 사용한다. 앱 실행에 Node.js·번들러를 요구하지 않는다. 지도 실패 시 목록·기록·내보내기를 제공한다. 지도 자료 이용조건은 렌더러와 별도로 확인한다.
+정적 HTML·CSS·JavaScript ES Modules, 지도 렌더러는 ADR-12(자체 SVG 점 지도, MapLibre는 타일 이용조건 확인 후 재검토), 스마트폰 IndexedDB, 개인 PC의 SQLite 정본, Python CLI를 사용한다. 앱 실행에 Node.js·번들러를 요구하지 않는다. 지도 실패 시 목록·기록·내보내기를 제공한다. 지도 자료 이용조건은 렌더러와 별도로 확인한다.
 
 ## 첫 구현 범위
 
