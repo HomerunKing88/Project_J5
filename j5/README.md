@@ -29,6 +29,17 @@ python -m j5 db [--db 경로] load-seed assets.seed.json
 - `status`: 스키마 버전(정본·도구), study_id, data_mode, dataset_version, 행 수, `integrity_check`, `foreign_key_check`. 위반이 있으면 종료 코드 1.
 - Python API(`j5.db.store.Db`): `create/open`, `transaction()`, `load_seed`, `add_source_document`, `insert_record(rec, evidence=, attachments=)`, `get_record/list_records/list_assets`. 공통 검증(`j5.db.validate`): UUID, 시간대 있는 ISO 8601, 날짜 정밀도, 정본 시각 UTC, record_type↔대상 타입, payload 스키마.
 
+## 단방향 반영 (R1b, J5-010)
+
+```text
+python -m j5 db [--db 경로] import <package.j5field.zip 또는 폴더> [--data-home 경로] [--json]
+```
+
+- 검사(`inspect` 와 같은 규칙, 정본의 물건 목록·study_id·data_mode 대조) → 같은 파일 재입력·이벤트 대장 대조 → 새 이벤트가 참조한 사진을 `J5_DATA_HOME/photos/<sha 앞 2자>/<sha>.<ext>` 에 보관 → 기록·근거·첨부·수입 기록·`dataset_version` 을 한 트랜잭션으로 반영(db_schema 2: `import_runs`, `import_events`).
+- 판정과 종료 코드: `applied`(0), `duplicate`(0, 새 이벤트 없음·버전 유지), `held`(2, 같은 ID·다른 내용 또는 정정 대상 없음: 전체 보류), `rejected`(1), `failed`(1, 파일·DB 실패: DB 롤백). 어느 경우에도 입력 파일은 바꾸지 않는다.
+- DB 실패로 되돌린 뒤 이미 보관한 사진은 정리대기로 결과·`import_runs`·`logs/import.log` 에 남기고 자동 삭제하지 않는다. 재시도하면 같은 사진을 재사용한다.
+- 반영은 백업·파생본 생성 완료가 아니다(J5-011·012).
+
 PC에서 실행하려면 저장소 루트에서 `pip install -r requirements-dev.txt` 후 `python -m j5 ...`. `pip install -e .`를 하면 `j5` 명령으로도 쓸 수 있다. SQLite 3.38 이상이 필요하다(STRICT 테이블·내장 JSON 함수).
 
-이후: 단방향 반영기(J5-010), 조회 파생본(J5-011), 백업·복구(J5-012).
+이후: 조회 파생본(J5-011), 백업·복구(J5-012).

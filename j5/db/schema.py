@@ -139,9 +139,55 @@ CREATE TABLE attachments (
 CREATE INDEX attachments_by_sha ON attachments (sha256);
 """
 
+IMPORT_OUTCOMES = ("applied", "duplicate", "held", "rejected", "failed")
+IMPORT_EVENT_OUTCOMES = ("inserted", "skipped_duplicate")
+
+# J5-010 단방향 반영: 패키지·이벤트 수입 기록 (데이터 사전 §2 import_runs / import_events).
+# import_events 의 inserted 행이 이벤트 대장이다: event_id 마다 한 번만 반영되고 고정 행 바이트·해시를 보관한다.
+MIGRATION_0002 = f"""
+CREATE TABLE import_runs (
+  run_id                 TEXT NOT NULL PRIMARY KEY CHECK (run_id GLOB '{UUID_GLOB}'),
+  package_name           TEXT NOT NULL CHECK (length(package_name) > 0),
+  package_sha256         TEXT NOT NULL CHECK (package_sha256 GLOB '{SHA256_GLOB}'),
+  package_id             TEXT CHECK (package_id IS NULL OR package_id GLOB '{UUID_GLOB}'),
+  study_id               TEXT,
+  data_mode              TEXT,
+  package_schema_version TEXT,
+  source_document_id     TEXT REFERENCES source_documents (document_id),
+  outcome                TEXT NOT NULL CHECK (outcome {_in(IMPORT_OUTCOMES)}),
+  events_total           INTEGER NOT NULL DEFAULT 0 CHECK (events_total >= 0),
+  events_new             INTEGER NOT NULL DEFAULT 0 CHECK (events_new >= 0),
+  events_skipped         INTEGER NOT NULL DEFAULT 0 CHECK (events_skipped >= 0),
+  photos_stored          INTEGER NOT NULL DEFAULT 0 CHECK (photos_stored >= 0),
+  photos_reused          INTEGER NOT NULL DEFAULT 0 CHECK (photos_reused >= 0),
+  dataset_version_before INTEGER NOT NULL CHECK (dataset_version_before >= 0),
+  dataset_version_after  INTEGER NOT NULL CHECK (dataset_version_after >= dataset_version_before),
+  started_at             TEXT NOT NULL CHECK (started_at GLOB '{UTC_GLOB}'),
+  finished_at            TEXT NOT NULL CHECK (finished_at GLOB '{UTC_GLOB}'),
+  report_json            TEXT NOT NULL CHECK (json_valid(report_json) AND json_type(report_json) = 'object'),
+  message                TEXT,
+  CHECK ((outcome = 'applied') = (dataset_version_after > dataset_version_before)),
+  CHECK (outcome <> 'applied' OR source_document_id IS NOT NULL)
+) STRICT;
+CREATE INDEX import_runs_by_package ON import_runs (package_sha256, outcome);
+
+CREATE TABLE import_events (
+  run_id     TEXT NOT NULL REFERENCES import_runs (run_id) DEFERRABLE INITIALLY DEFERRED,  -- 수입 기록 행은 배치 끝에 넣는다
+  event_id   TEXT NOT NULL CHECK (event_id GLOB '{UUID_GLOB}'),
+  event_hash TEXT NOT NULL CHECK (event_hash GLOB '{SHA256_GLOB}'),
+  line       BLOB NOT NULL CHECK (length(line) > 0),
+  outcome    TEXT NOT NULL CHECK (outcome {_in(IMPORT_EVENT_OUTCOMES)}),
+  record_id  TEXT REFERENCES records (record_id),
+  PRIMARY KEY (run_id, event_id),
+  CHECK ((outcome = 'inserted') = (record_id IS NOT NULL))
+) STRICT;
+CREATE UNIQUE INDEX import_events_ledger ON import_events (event_id) WHERE outcome = 'inserted';
+"""
+
 # (버전, 이름, SQL). 새 릴리스의 테이블은 새 항목으로 추가하고 기존 항목은 고치지 않는다.
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "r1b_minimum", MIGRATION_0001),
+    (2, "r1b_import", MIGRATION_0002),
 )
 DB_SCHEMA_VERSION = MIGRATIONS[-1][0]
 MIN_SQLITE_VERSION = (3, 38, 0)  # STRICT 테이블(3.37)과 내장 json_valid/json_type(3.38)

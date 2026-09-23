@@ -1,6 +1,6 @@
-"""j5 명령줄. inspect(패키지 검사), copy(독립 사본), db(정본 SQLite: init/status/load-seed).
+"""j5 명령줄. inspect(패키지 검사), copy(독립 사본), db(정본 SQLite: init/status/load-seed/import).
 
-종료 코드: 0 ok / 1 reject·실패 / 2 hold / 3 사용 오류.
+종료 코드: 0 ok·반영·중복 / 1 reject·실패 / 2 hold·보류 / 3 사용 오류.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 from j5 import APP_VERSION
+from j5.db.importer import EXIT_BY_OUTCOME, import_package
 from j5.db.store import Db, DbError, default_db_path
 from j5.db.validate import ValidationError
 from j5.package.preserve import PreserveError, copy_package
@@ -47,6 +48,10 @@ def _build_parser() -> argparse.ArgumentParser:
     ds.add_argument("--json", action="store_true")
     dl = dsub.add_parser("load-seed", help="assets.seed.json 의 물건을 asset_id 그대로 승계해 반영한다")
     dl.add_argument("seed", type=Path)
+    dm = dsub.add_parser("import", help="관측 패키지(.j5field.zip 또는 폴더)를 정본에 반영한다. 사진은 J5_DATA_HOME/photos 에 보관")
+    dm.add_argument("package", type=Path)
+    dm.add_argument("--data-home", type=Path, help="사진·로그를 둘 실데이터 홈. 생략 시 J5_DATA_HOME")
+    dm.add_argument("--json", action="store_true")
     return p
 
 
@@ -95,6 +100,17 @@ def _db_main(args) -> int:
                 changed = "정본이 바뀌어 올렸다" if (r.inserted or r.updated) else "변화 없음이라 유지"
                 print(f"시드 반영: 신규 {r.inserted}, 갱신 {r.updated}, 변화 없음 {r.unchanged} (data_mode {db.data_mode}). dataset_version {r.dataset_version} ({changed})")
                 return 0
+            if args.db_command == "import":
+                home = args.data_home or (Path(os.environ["J5_DATA_HOME"]) if os.environ.get("J5_DATA_HOME") else None)
+                if home is None:
+                    print("실데이터 홈을 모른다: --data-home 을 주거나 J5_DATA_HOME 을 설정한다", file=sys.stderr)
+                    return USAGE_ERROR
+                if not args.package.exists():
+                    print(f"입력이 없음: {args.package}", file=sys.stderr)
+                    return USAGE_ERROR
+                r = import_package(db, args.package, home)
+                sys.stdout.write(r.to_json() if args.json else r.to_text())
+                return EXIT_BY_OUTCOME[r.outcome]
     except DbError as e:
         print(f"정본 오류 [{e.code}]: {e.message}", file=sys.stderr)
         return 1

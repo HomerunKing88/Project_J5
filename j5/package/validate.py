@@ -55,11 +55,17 @@ def inspect_package(path: Path, *, seed: list[dict] | None = None, study_id: str
         return report
     report.kind = src.kind
     with src:
-        try:
-            _inspect(src, report, seed, study_id, limits)
-        except ContainerError as e:
-            report.add("reject", e.code, e.path, e.message)
+        inspect_source(src, report, seed=seed, study_id=study_id, limits=limits)
     return report
+
+
+def inspect_source(src, report: Report, *, seed: list[dict] | None = None, study_id: str | None = None,
+                   limits: Limits = DEFAULT_LIMITS) -> None:
+    """이미 연 패키지(open_package 결과)를 검사한다. 반영기가 같은 핸들로 검사와 읽기를 이어서 한다."""
+    try:
+        _inspect(src, report, seed, study_id, limits)
+    except ContainerError as e:
+        report.add("reject", e.code, e.path, e.message)
 
 
 def _inspect(src, report: Report, seed, study_id, limits: Limits) -> None:
@@ -71,7 +77,8 @@ def _inspect(src, report: Report, seed, study_id, limits: Limits) -> None:
     if MANIFEST not in names:
         report.add("reject", "manifest_missing", MANIFEST, "manifest.json 없음")
     else:
-        raw, _ = src.read(MANIFEST, limits.manifest, code="manifest_too_large")
+        raw, mdigest = src.read(MANIFEST, limits.manifest, code="manifest_too_large")
+        report.file_digests[MANIFEST] = mdigest
         try:
             manifest = json.loads(raw.decode("utf-8"), object_pairs_hook=_no_dup_pairs)
         except (UnicodeDecodeError, ValueError) as e:
@@ -113,6 +120,7 @@ def _inspect(src, report: Report, seed, study_id, limits: Limits) -> None:
     for name in photo_names:
         data, digest = src.read(name, limits.photo, code="photo_size_exceeded")
         actual[name] = (len(data), digest)
+        report.file_digests[name] = digest
         stem, ext = name[len("photos/"):].rsplit(".", 1)
         if stem != digest:
             report.add("reject", "photo_name_not_content_hash", name, "파일명이 내용 해시와 다름")
@@ -125,6 +133,7 @@ def _inspect(src, report: Report, seed, study_id, limits: Limits) -> None:
     if OBSERVATIONS in names:
         obs_raw, digest = src.read(OBSERVATIONS, limits.uncompressed)
         actual[OBSERVATIONS] = (len(obs_raw), digest)
+        report.file_digests[OBSERVATIONS] = digest
     else:
         report.add("reject", "file_missing_in_package", OBSERVATIONS, "observations.jsonl 없음")
 

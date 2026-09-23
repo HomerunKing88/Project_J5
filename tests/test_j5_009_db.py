@@ -78,7 +78,7 @@ def event_to_record(ev: dict) -> tuple[dict, list[dict]]:
 
 def test_create_open_status_and_foreign_keys(db):
     st = db.status()
-    assert st["ok"] and st["foreign_keys"] == 1 and st["db_schema_version"] == S.DB_SCHEMA_VERSION == 1
+    assert st["ok"] and st["foreign_keys"] == 1 and st["db_schema_version"] == S.DB_SCHEMA_VERSION == 2
     assert st["study_id"] == "j5-synthetic-study" and st["data_mode"] == "synthetic" and st["dataset_version"] == 0
     assert is_utc_iso(st["created_at"])
     assert db.conn.execute("PRAGMA user_version").fetchone()[0] == S.DB_SCHEMA_VERSION
@@ -86,7 +86,7 @@ def test_create_open_status_and_foreign_keys(db):
         assert "STRICT" in db.conn.execute("SELECT sql FROM sqlite_master WHERE name = ?", (t,)).fetchone()[0]
     db.close()
     with Db.open(db.path) as again:
-        assert again.status()["ok"] and again.schema_version() == 1
+        assert again.status()["ok"] and again.schema_version() == S.DB_SCHEMA_VERSION
         assert again.conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
 
 
