@@ -42,4 +42,16 @@ python -m j5 db [--db 경로] import <package.j5field.zip 또는 폴더> [--data
 
 PC에서 실행하려면 저장소 루트에서 `pip install -r requirements-dev.txt` 후 `python -m j5 ...`. `pip install -e .`를 하면 `j5` 명령으로도 쓸 수 있다. SQLite 3.38 이상이 필요하다(STRICT 테이블·내장 JSON 함수).
 
-이후: 조회 파생본(J5-011), 백업·복구(J5-012).
+## 조회 파생본 (R1b, J5-011)
+
+```text
+python -m j5 db [--db 경로] project [--data-home 경로] [--photos] [--json]
+python -m j5 db [--db 경로] project-copy <대상 폴더> [--data-home 경로] [--allow-stale]
+```
+
+- `project`: 고정 dataset_version 의 정본에서 `assets.seed.json`(시드 스키마 그대로)·`assets.geojson`·`records.jsonl`(·`photos/`)·`manifest.json` 을 전량 생성 → 다시 읽어 행수·참조·필수값·버전·해시 검증 → `.j5view.zip` 작성·항목 해시 대조 → `J5_DATA_HOME/exports/private/projections/ds<버전>-<run8>/` 게시 → `latest.json` 포인터 교체(db_schema 3: `projection_runs`). 실패하면 이전 파생본·포인터를 그대로 두고 부분 산출물은 `failed-<run8>/` 에 격리한다. 정본은 손대지 않는다.
+- `status [--data-home]` 가 `파생본: 최신 / 구본 (정본 vN, 파생본 vM) / 손상·없음 (재생성 필요)` 과 마지막 게시·실패 시각을 보여준다. 포인터와 ZIP 파일을 실제로 확인하며, 실데이터 홈을 모르면 `파일 미확인` 으로 표시하고 '최신' 이라 하지 않는다.
+- `project-copy`: 게시된 최신 ZIP 의 독립 사본(덮어쓰기 금지·재검증·sha256 사이드카). 파생본이 정본보다 오래되면 막고, `--allow-stale` 일 때만 구본임을 표시하며 내보낸다.
+- 폰 앱은 ZIP 을 풀어 `assets.seed.json` 을 "시드 파일 불러오기" 로 넣는다(앱의 ZIP 직접 읽기는 이후 작업).
+
+이후: 백업·복구(J5-012).

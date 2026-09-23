@@ -184,10 +184,35 @@ CREATE TABLE import_events (
 CREATE UNIQUE INDEX import_events_ledger ON import_events (event_id) WHERE outcome = 'inserted';
 """
 
+PROJECTION_STATUSES = ("published", "failed")
+
+# J5-011 조회 파생본: 생성 실행 기록 (데이터 사전 §2 projection_runs, §4). 정본 데이터가 아니라 생성 로그이므로 dataset_version 을 바꾸지 않는다.
+MIGRATION_0003 = f"""
+CREATE TABLE projection_runs (
+  run_id                    TEXT NOT NULL PRIMARY KEY CHECK (run_id GLOB '{UUID_GLOB}'),
+  source_dataset_version    INTEGER NOT NULL CHECK (source_dataset_version >= 0),
+  projection_schema_version TEXT NOT NULL CHECK (projection_schema_version GLOB '[0-9]*.[0-9]*.[0-9]*'),
+  data_mode                 TEXT NOT NULL CHECK (data_mode {_in(DATA_MODES)}),
+  status                    TEXT NOT NULL CHECK (status {_in(PROJECTION_STATUSES)}),
+  output_dir                TEXT CHECK (output_dir IS NULL OR (length(output_dir) > 0 AND output_dir NOT GLOB '/*' AND output_dir NOT GLOB '*..*')),
+  zip_name                  TEXT,
+  zip_sha256                TEXT CHECK (zip_sha256 IS NULL OR zip_sha256 GLOB '{SHA256_GLOB}'),
+  scope_count               INTEGER NOT NULL DEFAULT 0 CHECK (scope_count >= 0),
+  record_count              INTEGER NOT NULL DEFAULT 0 CHECK (record_count >= 0),
+  started_at                TEXT NOT NULL CHECK (started_at GLOB '{UTC_GLOB}'),
+  finished_at               TEXT NOT NULL CHECK (finished_at GLOB '{UTC_GLOB}'),
+  message                   TEXT,
+  report_json               TEXT NOT NULL CHECK (json_valid(report_json) AND json_type(report_json) = 'object'),
+  CHECK ((status = 'published') = (output_dir IS NOT NULL AND zip_name IS NOT NULL AND zip_sha256 IS NOT NULL))
+) STRICT;
+CREATE INDEX projection_runs_by_status ON projection_runs (status, finished_at);
+"""
+
 # (버전, 이름, SQL). 새 릴리스의 테이블은 새 항목으로 추가하고 기존 항목은 고치지 않는다.
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "r1b_minimum", MIGRATION_0001),
     (2, "r1b_import", MIGRATION_0002),
+    (3, "r1b_projection", MIGRATION_0003),
 )
 DB_SCHEMA_VERSION = MIGRATIONS[-1][0]
 MIN_SQLITE_VERSION = (3, 38, 0)  # STRICT 테이블(3.37)과 내장 json_valid/json_type(3.38)
