@@ -149,6 +149,7 @@ def _build_parser() -> argparse.ArgumentParser:
     cr.add_argument("--months", required=True)
     cr.add_argument("--data-home", type=Path)
     cr.add_argument("--run-id", help="특정 실행의 파일만")
+    cr.add_argument("--dist", action="append", default=[], metavar="FIELD", help="이 필드는 값 종류 수와 무관하게 전체 분포를 보인다 (예: --dist umdNm). 반복 가능")
     cr.add_argument("--json", action="store_true")
     return p
 
@@ -403,7 +404,7 @@ def _collect_main(args) -> int:
         lawd = check_lawd(args.lawd_cd)
         months = parse_months(args.months)
         if args.collect_command == "rt-report":
-            rep = report_from_raw(home, lawd, months, args.run_id)
+            rep = report_from_raw(home, lawd, months, args.run_id, dist_fields=tuple(args.dist))
             sys.stdout.write(json.dumps(rep, ensure_ascii=False, indent=2) + "\n" if args.json else report_text(rep))
             return 0
         if args.collect_command == "rt-sample":

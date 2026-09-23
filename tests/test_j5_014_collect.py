@@ -228,6 +228,18 @@ def test_collect_paginates_and_classifies_months(server, home):
     # 저장된 원본만으로 다시 요약 (네트워크 없음)
     rep2 = report_from_raw(home, "11110", ["202608", "209912"], run.run_id)
     assert rep2["months"][0]["items"] == 7 and rep2["months"][0]["outcome"] == "from_raw" and rep2["months"][1]["outcome"] == "no_raw"
+    # 재요약의 totalCount·수집 결과는 그 실행의 기록 파일에서 온다
+    assert rep2["months"][0]["total_count"] == 7 and rep2["months"][0]["collected_outcome"] == "complete"
+    assert rep2["months"][1]["total_count"] is None and rep2["months"][1]["collected_outcome"] is None
+    assert "(totalCount 7)" in rt.report_text(rep2) and "수집 결과 complete" in rt.report_text(rep2)
+    # --dist: 값 종류가 20개를 넘어도 지정 필드는 전체 분포를 보인다
+    rep_d = report_from_raw(home, "11110", ["202608"], run.run_id, dist_fields=("umdNm", "없는필드"))
+    assert rep_d["dist_fields"] == ["umdNm", "없는필드"] and sum(rep_d["months"][0]["fields"]["umdNm"]["distribution"].values()) == 7
+    assert rt.field_distribution([{"a": "x"}, {"a": "y"}, {"a": "x"}, {"b": "z"}], "a") == {"x": 2, "": 1, "y": 1}
+    # 기록 파일이 깨져도 재요약은 된다 (totalCount 만 None)
+    (home / run.run_path).write_text("{not json", encoding="utf-8")
+    assert report_from_raw(home, "11110", ["202608"], run.run_id)["months"][0]["total_count"] is None
+    (home / run.run_path).write_text(json.dumps(run_doc, ensure_ascii=False), encoding="utf-8")
     # 같은 달을 다시 받으면 새 실행 ID 의 파일이 옆에 쌓이고(덮어쓰기 없음), 재요약은 기본으로 가장 최근 실행 하나만 센다
     _Handler.scenarios = {"202608": {"kind": "pages", "items": [item(i) for i in range(5)]}}
     run2 = collect_months(home, key=KEY, key_source="test", lawd_cd="11110", months=["202608"], endpoint=server, num_rows=3, sleep=lambda s: None)
@@ -290,9 +302,10 @@ def test_cli_collect(server, home, capsys, monkeypatch):
     assert rc == 0, out.err
     assert "2026-08: complete · 4건 (2페이지)" in out.out and "2006-03: empty" in out.out and KEY not in out.out + out.err
     assert "config.env" in out.out and "키는 기록하지 않음" in out.out
-    rc = cli.main(["collect", "rt-report", "--lawd-cd", "11110", "--months", "2026-08", "--json"])
+    rc = cli.main(["collect", "rt-report", "--lawd-cd", "11110", "--months", "2026-08", "--json", "--dist", "umdNm"])
     rep = json.loads(capsys.readouterr().out)
     assert rep["months"][0]["items"] == 4 and rep["months"][0]["fields"]["umdNm"]["distribution"] == {"종로5가": 4}
+    assert rep["months"][0]["total_count"] == 4 and rep["months"][0]["collected_outcome"] == "complete" and rep["dist_fields"] == ["umdNm"]
     assert cli.main(["collect", "rt-report", "--lawd-cd", "11110", "--months", "2026-08"]) == 0
     assert "채움 100%" in capsys.readouterr().out
     # API 오류는 종료 코드 1, 잘못된 입력은 3, 키 없음은 3
