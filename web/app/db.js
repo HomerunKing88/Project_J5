@@ -72,10 +72,12 @@ export class Store {
     return req(this.db.transaction("assets").objectStore("assets").get(id));
   }
 
-  /** 필지 번들을 통째로 교체한다 (한 벌만 둔다). events·photos·assets 는 건드리지 않는다. */
+  /** 필지 번들을 통째로 교체한다 (한 벌만 둔다). events·photos·assets 는 건드리지 않는다.
+   *  그때의 시드 적재 시각(seed_loaded_at)을 함께 적어, 시드가 바뀌면 번들의 정본 연결(asset_ids)을 더 이상 믿지 않게 한다. */
   async replaceParcels(bundle, source) {
-    const tx = this.db.transaction("parcels", "readwrite");
-    tx.objectStore("parcels").put({ bundle, source, loaded_at: new Date().toISOString() }, PARCELS_KEY);
+    const tx = this.db.transaction(["parcels", "meta"], "readwrite");
+    const seedLoadedAt = (await req(tx.objectStore("meta").get("seed_loaded_at"))) ?? null;
+    tx.objectStore("parcels").put({ bundle, source, loaded_at: new Date().toISOString(), seed_loaded_at: seedLoadedAt }, PARCELS_KEY);
     await done(tx);
   }
 

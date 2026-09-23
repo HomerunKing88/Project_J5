@@ -328,12 +328,80 @@ INSERT INTO record_survey_refs (record_id, route_version_id, frame_version_id, r
     AND (json_extract(CAST(line AS TEXT), '$.route_version_id') IS NOT NULL OR json_extract(CAST(line AS TEXT), '$.frame_version_id') IS NOT NULL);
 """
 
+ADDRESS_STATUSES = ("unverified", "verified", "disputed")
+COMPONENT_TYPES = ("parcel", "building")
+COMPONENT_BASES = ("manual", "location_point")
+AREA_MISSING_REASONS = ("source_geographic_crs", "not_collected")
+
+# J5-013B-2 필지 정본·물건 구성 (데이터 사전 §2 parcels / asset_components, §6, ADR-13).
+# - parcels: PNU(외부 ID)와 parcel_id(내부 UUID)를 분리한다. subjects(parcel) 의 자식. 공부면적(registered_area_m2)과 도형면적(geom_area_m2),
+#   좌표계(geometry_crs·source_crs), 도형 버전(geometry_version), 주소 확인 상태(address_status)를 분리해 둔다. 결측은 NULL + 사유.
+# - asset_components: 매입 검토 단위(asset)의 구성 필지·건물과 적용 기간. 다대다. 연결 근거(basis)는 수동 확인 또는 위치점 포함 제안의 승인.
+MIGRATION_0005 = f"""
+CREATE TABLE parcels (
+  parcel_id                      TEXT NOT NULL PRIMARY KEY,
+  subject_type                   TEXT NOT NULL DEFAULT 'parcel' CHECK (subject_type = 'parcel'),
+  pnu                            TEXT NOT NULL UNIQUE CHECK (pnu GLOB '{"[0-9]" * 19}'),
+  label                          TEXT NOT NULL CHECK (length(label) > 0),
+  emd_code                       TEXT NOT NULL CHECK (emd_code GLOB '{"[0-9]" * 10}'),
+  emd_name                       TEXT,
+  mountain                       INTEGER NOT NULL CHECK (mountain IN (0, 1)),
+  bon                            INTEGER NOT NULL CHECK (bon >= 0),
+  bu                             INTEGER NOT NULL CHECK (bu >= 0),
+  jimok                          TEXT,
+  jibun_raw                      TEXT,
+  jibun_mismatch                 INTEGER NOT NULL DEFAULT 0 CHECK (jibun_mismatch IN (0, 1)),
+  registered_area_m2             REAL CHECK (registered_area_m2 IS NULL OR registered_area_m2 >= 0),
+  registered_area_missing_reason TEXT CHECK (registered_area_missing_reason IS NULL OR registered_area_missing_reason {_in(AREA_MISSING_REASONS)}),
+  geom_area_m2                   REAL CHECK (geom_area_m2 IS NULL OR geom_area_m2 >= 0),
+  geom_area_missing_reason       TEXT CHECK (geom_area_missing_reason IS NULL OR geom_area_missing_reason {_in(AREA_MISSING_REASONS)}),
+  geometry_json                  TEXT NOT NULL CHECK (json_valid(geometry_json) AND json_type(geometry_json) = 'object'),
+  geometry_crs                   TEXT NOT NULL DEFAULT 'EPSG:4326' CHECK (geometry_crs = 'EPSG:4326'),
+  geometry_version               TEXT NOT NULL CHECK (geometry_version GLOB '{DATE_GLOB}'),
+  bbox_json                      TEXT NOT NULL CHECK (json_valid(bbox_json) AND json_type(bbox_json) = 'array' AND json_array_length(bbox_json) = 4),
+  source_name                    TEXT NOT NULL CHECK (length(source_name) > 0),
+  source_crs                     TEXT,
+  source_ellipsoid               TEXT CHECK (source_ellipsoid IS NULL OR source_ellipsoid IN ('GRS80', 'WGS84', 'Bessel')),
+  source_datum_shift             TEXT CHECK (source_datum_shift IS NULL OR source_datum_shift = 'korean1985'),
+  source_shp_sha256              TEXT CHECK (source_shp_sha256 IS NULL OR source_shp_sha256 GLOB '{SHA256_GLOB}'),
+  source_license                 TEXT,
+  source_document_id             TEXT REFERENCES source_documents (document_id),
+  address_status                 TEXT NOT NULL DEFAULT 'unverified' CHECK (address_status {_in(ADDRESS_STATUSES)}),
+  data_mode                      TEXT NOT NULL CHECK (data_mode {_in(DATA_MODES)}),
+  content_hash                   TEXT NOT NULL CHECK (content_hash GLOB '{SHA256_GLOB}'),
+  recorded_at                    TEXT NOT NULL CHECK (recorded_at GLOB '{UTC_GLOB}'),
+  updated_at                     TEXT NOT NULL CHECK (updated_at GLOB '{UTC_GLOB}'),
+  CHECK ((registered_area_m2 IS NULL) = (registered_area_missing_reason IS NOT NULL)),
+  CHECK ((geom_area_m2 IS NULL) = (geom_area_missing_reason IS NOT NULL)),
+  FOREIGN KEY (parcel_id, subject_type) REFERENCES subjects (subject_id, subject_type)
+) STRICT;
+CREATE INDEX parcels_by_emd ON parcels (emd_code, bon, bu);
+
+CREATE TABLE asset_components (
+  component_id         TEXT NOT NULL PRIMARY KEY CHECK (component_id GLOB '{UUID_GLOB}'),
+  asset_id             TEXT NOT NULL REFERENCES assets (asset_id),
+  component_subject_id TEXT NOT NULL,
+  component_type       TEXT NOT NULL CHECK (component_type {_in(COMPONENT_TYPES)}),
+  effective_from       TEXT NOT NULL CHECK (effective_from GLOB '{DATE_GLOB}'),
+  effective_to         TEXT CHECK (effective_to IS NULL OR effective_to GLOB '{DATE_GLOB}'),
+  basis                TEXT NOT NULL CHECK (basis {_in(COMPONENT_BASES)}),
+  note                 TEXT,
+  recorded_at          TEXT NOT NULL CHECK (recorded_at GLOB '{UTC_GLOB}'),
+  updated_at           TEXT NOT NULL CHECK (updated_at GLOB '{UTC_GLOB}'),
+  UNIQUE (asset_id, component_subject_id, effective_from),
+  CHECK (effective_to IS NULL OR effective_to >= effective_from),
+  FOREIGN KEY (component_subject_id, component_type) REFERENCES subjects (subject_id, subject_type)
+) STRICT;
+CREATE INDEX asset_components_by_component ON asset_components (component_subject_id, effective_from);
+"""
+
 # (버전, 이름, SQL). 새 릴리스의 테이블은 새 항목으로 추가하고 기존 항목은 고치지 않는다.
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "r1b_minimum", MIGRATION_0001),
     (2, "r1b_import", MIGRATION_0002),
     (3, "r1b_projection", MIGRATION_0003),
     (4, "r2_survey", MIGRATION_0004),
+    (5, "r2_parcels", MIGRATION_0005),
 )
 DB_SCHEMA_VERSION = MIGRATIONS[-1][0]
 MIN_SQLITE_VERSION = (3, 38, 0)  # STRICT 테이블(3.37)과 내장 json_valid/json_type(3.38)

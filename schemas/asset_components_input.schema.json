@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://j5.local/schemas/asset_components_input.schema.json",
+  "title": "물건↔필지 구성 연결 입력 파일 (j5 db parcels-link, j5 db parcels-suggest 출력)",
+  "description": "데이터 사전 §2 asset_components. 매입 검토 단위(asset_id)와 필지(PNU)의 구성 관계와 적용 기간. `parcels-suggest` 가 위치점 포함으로 만든 제안(basis location_point)을 사용자가 검토해 `parcels-link` 로 반영한다. PNU 는 정본 parcels 에 먼저 있어야 한다.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "links"],
+  "properties": {
+    "kind": { "const": "asset_components" },
+    "generated_at": { "type": "string", "format": "date-time", "pattern": "(Z|[+-][0-9]{2}:[0-9]{2})$" },
+    "note": { "type": ["string", "null"], "maxLength": 2000 },
+    "links": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["asset_id", "pnu", "effective_from", "effective_to", "basis"],
+        "properties": {
+          "asset_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+          "pnu": { "type": "string", "pattern": "^[0-9]{19}$" },
+          "effective_from": { "type": "string", "format": "date", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+          "effective_to": { "oneOf": [{ "type": "string", "format": "date", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" }, { "type": "null" }] },
+          "basis": { "description": "manual: 사용자가 직접 확인. location_point: 위치점 포함 제안을 검토 후 승인", "type": "string", "enum": ["manual", "location_point"] },
+          "note": { "type": ["string", "null"], "maxLength": 2000 },
+          "asset_label": { "description": "제안 출력의 참고용. 반영 시 무시", "type": ["string", "null"] },
+          "parcel_label": { "description": "제안 출력의 참고용. 반영 시 무시", "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}

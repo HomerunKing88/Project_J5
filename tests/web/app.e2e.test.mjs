@@ -84,9 +84,23 @@ class Cdp {
   async waitFor(expression, ms = 8000) { const end = Date.now() + ms; while (Date.now() < end) { if (await this.eval(expression)) return true; await new Promise((r) => setTimeout(r, 100)); } throw new Error("timeout: " + expression); }
   async navigate(url) { await this.send("Page.navigate", { url }); await this.waitFor("document.readyState === 'complete'"); }
   async setFiles(selector, files) { const { root } = await this.send("DOM.getDocument"); const { nodeId } = await this.send("DOM.querySelector", { nodeId: root.nodeId, selector }); await this.send("DOM.setFileInputFiles", { nodeId, files }); }
+  /** 요소를 화면 가운데로 옮기고 위치가 두 번 연속 같을 때까지 기다린다. 앱의 smooth 스크롤(관측 화면 열기)이 진행 중이면 좌표가 움직여 클릭이 빗나간다. */
+  async stableRect(selector) {
+    const measure = () => this.eval(`(() => { const n = document.querySelector(${JSON.stringify(selector)}); if (!n) return null; const b = n.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; })()`);
+    await this.eval(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({ block: 'center', behavior: 'instant' }); 'ok'`);
+    let prev = await measure();
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 80));
+      const cur = await measure();
+      if (!cur) throw new Error(`요소 없음: ${selector}`);
+      if (prev && Math.abs(cur.x - prev.x) < 0.5 && Math.abs(cur.y - prev.y) < 0.5) return cur;
+      prev = cur;
+    }
+    throw new Error(`요소 위치가 안정되지 않음: ${selector}`);
+  }
   /** 실제 마우스 이벤트로 클릭한다 (다운로드에는 사용자 활성화가 필요하다). */
   async clickSelector(selector) {
-    await this.eval(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({ block: 'center' }); 'ok'`);
+    await this.stableRect(selector);
     const { root } = await this.send("DOM.getDocument");
     const { nodeId } = await this.send("DOM.querySelector", { nodeId: root.nodeId, selector });
     const { model } = await this.send("DOM.getBoxModel", { nodeId });
@@ -96,9 +110,9 @@ class Cdp {
     await this.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
     await this.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
   }
-  /** getBoundingClientRect 중심을 실제 마우스로 누른다 (SVG 자식은 DOM.getBoxModel 이 불확실하다). */
+  /** getBoundingClientRect 중심을 실제 마우스로 누른다 (SVG 자식은 DOM.getBoxModel 이 불확실하다). 위치가 안정된 뒤 누른다. */
   async clickRect(selector) {
-    const r = await this.eval(`(() => { const n = document.querySelector(${JSON.stringify(selector)}); n.scrollIntoView({ block: 'center' }); const b = n.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; })()`);
+    const r = await this.stableRect(selector);
     await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: r.x, y: r.y });
     await this.send("Input.dispatchMouseEvent", { type: "mousePressed", x: r.x, y: r.y, button: "left", clickCount: 1 });
     await this.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: r.x, y: r.y, button: "left", clickCount: 1 });
@@ -202,7 +216,7 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     // 물건 없는 필지 (구멍 있는 4-2): 안내만
     await cdp.clickRect('#map-svg path.parcel[data-pnu="9999900100100040002"]');
     await cdp.waitFor("document.getElementById('parcel-title').textContent === '가상동 4-2'");
-    assert.match(await cdp.eval("document.getElementById('parcel-assets').textContent"), /위치점 있는 물건이 없다/);
+    assert.match(await cdp.eval("document.getElementById('parcel-assets').textContent"), /연결되거나 위치점이 들어 있는 물건이 없다/);
     assert.ok((await cdp.eval(VISIBLE_LABELS)).includes("4-2"), "선택한 필지의 지번은 항상 보인다");
     await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
     await cdp.waitFor("document.getElementById('parcel-panel').hidden && document.querySelectorAll('#map-svg path.parcel.sel').length === 0");
@@ -225,11 +239,27 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.setFiles("#parcels-file", [parcelsBad]);
     await cdp.waitFor("document.getElementById('parcels-note').textContent.includes('필지 파일 오류')");
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel').length"), 6);
-    const parcelsFile = join(tmp, "jongno.j5parcels.json");
-    writeFileSync(parcelsFile, parcelsFixture);
+    // 파생본(parcels.geojson) 형식: 정본에서 연결한 물건(asset_ids)이 있으면 위치점 없는 물건도 필지 패널에 뜬다 (J5-013B-2)
+    const linked = JSON.parse(parcelsFixture);
+    const f42 = linked.features.find((f) => f.properties.label === "4-2");
+    f42.properties.asset_ids = ["7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a52"];
+    f42.properties.geometry_version = "2026-09-01";
+    linked.study_id = "other-study"; linked.source_dataset_version = 3;
+    const parcelsOther = join(tmp, "parcels-other.geojson");
+    writeFileSync(parcelsOther, JSON.stringify(linked));
+    await cdp.setFiles("#parcels-file", [parcelsOther]);
+    await cdp.waitFor("document.getElementById('parcels-note').textContent.includes('study_id(other-study)가 설정(e2e-study)과 다르다')");
+    linked.study_id = "e2e-study";
+    const parcelsFile = join(tmp, "parcels.geojson");
+    writeFileSync(parcelsFile, JSON.stringify(linked));
     await cdp.setFiles("#parcels-file", [parcelsFile]);
-    await cdp.waitFor("document.getElementById('parcels-note').textContent.includes('file:jongno.j5parcels.json')");
+    await cdp.waitFor("document.getElementById('parcels-note').textContent.includes('file:parcels.geojson')");
+    assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /정본 v3 · file:parcels\.geojson · 정본 연결 포함$/);
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel').length"), 6);
+    await cdp.clickRect('#map-svg path.parcel[data-pnu="9999900100100040002"]');
+    await cdp.waitFor("!document.getElementById('parcel-panel').hidden && document.getElementById('parcel-title').textContent === '가상동 4-2'");
+    assert.deepEqual(await cdp.eval("Array.from(document.querySelectorAll('#parcel-assets li')).map(li => [li.firstChild.textContent, li.querySelectorAll('.badge')[1].textContent])"), [["가상 물건 3", "정본 연결"]], "정본 연결(asset_ids)만으로도 위치점 없는 물건이 뜬다");
+    await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
     // 관측 (사진 1장, 태그 1개)
     const photo = join(tmp, "front.png");
     writeFileSync(photo, png1x1([0, 128, 255]));
@@ -262,6 +292,13 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.waitFor("document.querySelectorAll('#record-list li').length === 1");
     assert.ok((await cdp.eval("document.getElementById('record-list').textContent")).includes("현재 시드에 없는 물건"));
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.pt').length"), 2, "시드 교체 후 지도도 2개");
+    // 시드가 바뀌면 번들의 정본 연결은 확인되지 않은 것으로 본다: 필지 4-2 의 "가상 물건 3" 연결을 보여 주지 않는다 (J5-013B-2 리뷰 반영)
+    assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /시드가 바뀐 뒤라 표시하지 않음/);
+    await cdp.clickRect('#map-svg path.parcel[data-pnu="9999900100100040002"]');
+    await cdp.waitFor("!document.getElementById('parcel-panel').hidden && document.getElementById('parcel-title').textContent === '가상동 4-2'");
+    assert.equal(await cdp.eval("document.querySelectorAll('#parcel-assets li button').length"), 0, "오래된 정본 연결로 관측을 시작하지 못한다");
+    assert.match(await cdp.eval("document.getElementById('parcel-assets').textContent"), /정본 연결 1건은 시드가 바뀐 뒤 확인되지 않아/);
+    await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
     // 주소만 있는 시드: 지도에는 점이 없고 목록으로 선택한다
     const seedAddr = join(tmp, "seed-addr.json");
     writeFileSync(seedAddr, JSON.stringify([seedAll[2]]));

@@ -6,13 +6,13 @@ import { uuid4, isUuid } from "./uuid.js";
 import { isoWithOffset, fromDatetimeLocal, toDatetimeLocal, localDate } from "./time.js";
 import { buildEvent, validateEvent, lineBytes, PHOTO_TAGS, PHOTO_TAG_LABEL, CHANGE_STATUS_LABEL, PHOTO_LIMIT } from "./event.js";
 import { validateSeed } from "./seed.js";
-import { validateParcels, assetsInParcel, parcelTitle, fmtArea } from "./parcels.js";
+import { validateParcels, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea } from "./parcels.js";
 import { selectRecords, planBatches, buildPackage, hasRemainingBatches, studyIdError } from "./export.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
 export const APP_VERSION = "0.1.0";
 const $ = (id) => document.getElementById(id);
-const state = { store: null, assets: [], target: null, photos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0 };
+const state = { store: null, assets: [], target: null, photos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, seedLoadedAt: null };
 
 function text(el, value, cls) {
   el.textContent = value;
@@ -88,6 +88,8 @@ async function loadSeedFile(input) {
 
 async function renderAssets() {
   state.assets = await state.store.listAssets();
+  state.seedLoadedAt = (await state.store.getMeta("seed_loaded_at")) ?? null;
+  if (state.parcelsRec) parcelsNote(state.parcelsRec);
   const list = $("asset-list");
   list.replaceChildren(...state.assets.map((a) => el("li", {},
     el("span", { text: a.label }),
@@ -106,11 +108,23 @@ async function renderAssets() {
 async function loadParcelsObject(doc, source) {
   const errs = validateParcels(doc);
   if (errs.length) return text($("parcels-note"), "필지 파일 오류: " + errs.slice(0, 5).join("; ") + (errs.length > 5 ? ` 외 ${errs.length - 5}건` : ""), "bad");
+  // 파생본의 필지 파일은 정본의 study_id 를 담는다. 설정과 다르면 다른 정본의 연결이므로 넣지 않는다.
+  const studyId = await state.store.getMeta("study_id");
+  if (doc.study_id && studyId && doc.study_id !== studyId) {
+    return text($("parcels-note"), `필지 파일의 study_id(${doc.study_id})가 설정(${studyId})과 다르다. 같은 정본의 파생본을 넣는다`, "bad");
+  }
   await state.store.replaceParcels(doc, source);
-  applyParcels({ bundle: doc, source });
+  applyParcels(await state.store.getParcels());
+}
+
+/** 번들을 넣은 뒤 시드가 바뀌었으면 번들의 정본 연결(asset_ids)은 확인되지 않은 것으로 본다. */
+function parcelLinksValid() {
+  const rec = state.parcelsRec;
+  return !!rec && (rec.seed_loaded_at ?? null) === (state.seedLoadedAt ?? null);
 }
 
 function applyParcels(rec) {
+  state.parcelsRec = rec ?? null;
   state.parcels = rec?.bundle ?? null;
   state.parcelsCount = state.parcels?.features.length ?? 0;
   closeParcelPanel();
@@ -123,8 +137,11 @@ function parcelsNote(rec) {
   if (!rec) return text($("parcels-note"), "필지 없음. 지도에는 위치점만 보인다.", "muted");
   const b = rec.bundle, s = b.source;
   const crs = s.crs?.epsg ? `EPSG:${s.crs.epsg}` : (s.crs?.name ?? "?");
-  text($("parcels-note"), `필지 ${b.features.length}개 (${b.data_mode}) · ${s.name} · 도형 기준일 ${s.geometry_version} · ${crs} · 이용허락 ${s.license ?? "미확인"} · ${rec.source}` +
-    (b.warnings?.length ? ` · 경고 ${b.warnings.length}건 (변환 로그 참조)` : ""), b.data_mode === "synthetic" ? "muted" : "ok");
+  const hasLinks = b.features.some((f) => (f.properties.asset_ids ?? []).length);
+  const linkNote = hasLinks ? (parcelLinksValid() ? " · 정본 연결 포함" : " · 정본 연결 포함 (시드가 바뀐 뒤라 표시하지 않음: 같은 파생본의 시드와 함께 다시 불러온다)") : "";
+  text($("parcels-note"), `필지 ${b.features.length}개 (${b.data_mode}) · ${s.name} · 도형 기준일 ${s.geometry_version} · ${crs} · 이용허락 ${s.license ?? "미확인"}` +
+    (b.source_dataset_version != null ? ` · 정본 v${b.source_dataset_version}` : "") + ` · ${rec.source}` +
+    (b.warnings?.length ? ` · 경고 ${b.warnings.length}건 (변환 로그 참조)` : "") + linkNote, b.data_mode === "synthetic" ? "muted" : "ok");
 }
 
 async function loadSyntheticParcels() {
@@ -162,12 +179,14 @@ function showParcel(feature) {
   const src = state.parcels?.source;
   $("parcel-meta").textContent = `도형면적 ${fmtArea(p.area_m2_geom, p.area_missing_reason)} (공부면적 아님)` + (p.jimok ? ` · 지목 ${p.jimok}` : "") + (p.jibun_mismatch ? " · 원본 지번과 PNU 불일치" : "") +
     (src ? ` · ${src.name} ${src.geometry_version}` : "");
-  const inside = assetsInParcel(feature, state.assets);
-  $("parcel-assets").replaceChildren(...inside.map((a) => el("li", {},
-    el("span", { text: a.label }), el("span", { class: "badge", text: a.data_mode }),
+  const linksValid = parcelLinksValid();
+  const inside = parcelAssets(feature, state.assets, { linksValid });
+  $("parcel-assets").replaceChildren(...inside.map(({ asset: a, basis }) => el("li", {},
+    el("span", { text: a.label }), el("span", { class: "badge", text: a.data_mode }), el("span", { class: "badge", text: BASIS_LABEL[basis] }),
     el("button", { text: "관측 기록", onclick: () => startObservation(a) }),
   )));
-  if (!inside.length) $("parcel-assets").append(el("li", { class: "muted", text: "이 필지 안에 위치점 있는 물건이 없다. PC 에서 시드에 추가한 뒤 다시 불러온다." }));
+  if (!linksValid && (p.asset_ids ?? []).length) $("parcel-assets").append(el("li", { class: "warn", text: `정본 연결 ${p.asset_ids.length}건은 시드가 바뀐 뒤 확인되지 않아 표시하지 않는다. 같은 파생본의 시드와 필지 파일을 함께 다시 불러온다.` }));
+  if (!inside.length) $("parcel-assets").append(el("li", { class: "muted", text: "이 필지에 연결되거나 위치점이 들어 있는 물건이 없다. PC 에서 시드·연결을 넣은 뒤 다시 불러온다." }));
   $("parcel-panel").hidden = false;
 }
 
@@ -480,7 +499,8 @@ async function main() {
   await initMap();
   try {
     const rec = await state.store.getParcels();
-    if (rec) { state.parcels = rec.bundle; state.parcelsCount = rec.bundle.features.length; mapCall((m) => m.setParcels(rec.bundle)); }
+    state.seedLoadedAt = (await state.store.getMeta("seed_loaded_at")) ?? null;
+    if (rec) { state.parcelsRec = rec; state.parcels = rec.bundle; state.parcelsCount = rec.bundle.features.length; mapCall((m) => m.setParcels(rec.bundle)); }
     parcelsNote(rec ?? null);
   } catch (e) {
     text($("parcels-note"), "저장된 필지를 읽지 못함: " + (e?.message || e), "bad");

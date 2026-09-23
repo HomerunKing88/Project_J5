@@ -52,6 +52,8 @@
     "count": { "type": "integer", "minimum": 0 },
     "bbox": { "oneOf": [{ "$ref": "#/$defs/bbox" }, { "type": "null" }] },
     "warnings": { "type": "array", "items": { "type": "string" } },
+    "study_id": { "description": "파생본(정본 parcels)에서만: 정본의 study_id. 폰은 설정의 study_id 와 대조한다", "type": "string", "minLength": 1, "maxLength": 100 },
+    "source_dataset_version": { "description": "파생본에서만: 생성 시점의 정본 dataset_version", "type": "integer", "minimum": 0 },
     "features": {
       "type": "array",
       "maxItems": 8000,
@@ -96,7 +98,9 @@
             "jibun_mismatch": { "description": "원본 JIBUN 의 번호가 PNU 와 다르면 true (PNU 를 우선)", "type": "boolean" },
             "area_m2_geom": { "description": "원본 평면좌표에서 계산한 도형면적(㎡). 공부면적이 아니다. 계산할 수 없으면 null 과 사유", "type": ["number", "null"], "minimum": 0 },
             "area_missing_reason": { "type": ["string", "null"], "enum": ["source_geographic_crs", null] },
-            "bbox": { "$ref": "#/$defs/bbox" }
+            "bbox": { "$ref": "#/$defs/bbox" },
+            "geometry_version": { "description": "파생본(정본 parcels)에서만: 이 필지 도형의 기준일", "type": "string", "format": "date", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+            "asset_ids": { "description": "파생본에서만: 정본 asset_components 로 연결된 물건 (생성일 기준 유효한 연결)", "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" } }
           }
         }
       }

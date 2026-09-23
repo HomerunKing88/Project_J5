@@ -34,9 +34,9 @@
 
 <section id="sec-parcels">
   <h2>필지 (연속지적도 경계·지번)</h2>
-  <p class="muted">PC 에서 <code>j5 parcels convert</code> 로 만든 <code>.j5parcels.json</code> 을 넣는다. 기기에서만 읽고 어디에도 보내지 않는다. PNU 는 필지 ID 이고 물건(asset) ID 가 아니다.</p>
+  <p class="muted">PC 에서 <code>j5 parcels convert</code> 로 만든 <code>.j5parcels.json</code> 또는 파생본(<code>j5 db project</code>)의 <code>parcels.geojson</code> 을 넣는다. 파생본에는 정본에서 연결한 물건이 들어 있다. 기기에서만 읽고 어디에도 보내지 않는다. PNU 는 필지 ID 이고 물건(asset) ID 가 아니다.</p>
   <button id="load-synthetic-parcels">가상 필지 불러오기 (6개)</button>
-  <label>필지 파일 불러오기 <input id="parcels-file" type="file" accept="application/json,.json"></label>
+  <label>필지 파일 불러오기 (.j5parcels.json 또는 파생본의 parcels.geojson) <input id="parcels-file" type="file" accept="application/json,application/geo+json,.json,.geojson"></label>
   <button id="clear-parcels">필지 제거</button>
   <p id="parcels-note" class="muted"></p>
 </section>

@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from j5.db.parcels import parcels_bundle_from_db
 from j5.db.store import Db
 from j5.package.preserve import PreserveError, copy_package
 from j5.schemas_loader import schema_errors
@@ -29,6 +30,7 @@ MANIFEST = "manifest.json"
 SEED_FILE = "assets.seed.json"
 GEOJSON_FILE = "assets.geojson"
 RECORDS_FILE = "records.jsonl"
+PARCELS_FILE = "parcels.geojson"  # J5-013B-2: 정본 parcels 가 있을 때만. 형식은 폰이 읽는 번들(parcels_bundle.schema.json)과 같다
 EXIT_BY_OUTCOME = {"published": 0, "failed": 1}
 
 
@@ -97,8 +99,8 @@ def _asset_to_seed(a: dict) -> dict:
     return d
 
 
-def _read_snapshot(db: Db) -> dict:
-    """고정 버전의 일관된 읽기. 단일 작성자 잠금(BEGIN IMMEDIATE) 안에서 전부 읽는다."""
+def _read_snapshot(db: Db, *, generated_at: str) -> dict:
+    """고정 버전의 일관된 읽기. 단일 작성자 잠금(BEGIN IMMEDIATE) 안에서 전부 읽는다. generated_at 은 파생본 생성 시각(연결 유효일 판정에도 쓴다)."""
     with db.transaction():
         version = int(db.meta("dataset_version") or 0)
         assets = db.list_assets()
@@ -106,7 +108,8 @@ def _read_snapshot(db: Db) -> dict:
         atts: dict[str, list[dict]] = {}
         for r in db.conn.execute("SELECT record_id, sha256, mime, bytes, tags_json, taken_at, rel_path FROM attachments ORDER BY record_id, sha256"):
             atts.setdefault(r["record_id"], []).append(dict(r))
-        return {"version": version, "study_id": db.meta("study_id"), "data_mode": db.data_mode, "assets": assets, "records": records, "attachments": atts}
+        parcels = parcels_bundle_from_db(db, generated_at=generated_at, source_dataset_version=version) if db._has_table("parcels") else None
+        return {"version": version, "study_id": db.meta("study_id"), "data_mode": db.data_mode, "assets": assets, "records": records, "attachments": atts, "parcels": parcels}
 
 
 def _summaries(records: list[dict]) -> dict[str, dict]:
@@ -179,6 +182,20 @@ def _generate(snapshot: dict, out: Path, *, photos: bool, data_home: Path, run_i
         lines.append((_canon(line) + "\n").encode("utf-8"))
     files[RECORDS_FILE] = b"".join(lines)
 
+    parcels = snapshot.get("parcels")
+    n_parcels = 0
+    if parcels is not None:
+        parcels = {**parcels, "generated_at": generated_at}
+        ids_set = {a["asset_id"] for a in assets}
+        for f in parcels["features"]:
+            if not set(f["properties"].get("asset_ids", [])) <= ids_set:
+                raise ProjectionError("parcel_link_ref", f"필지 {f['id']} 의 연결 물건이 물건 목록에 없다")
+        errs = schema_errors("parcels_bundle.schema.json", parcels)
+        if errs:
+            raise ProjectionError("parcels_schema", "필지 파생본이 번들 스키마에 맞지 않는다: " + "; ".join(errs[:3]))
+        files[PARCELS_FILE] = (json.dumps(parcels, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+        n_parcels = parcels["count"]
+
     out.mkdir(parents=True, exist_ok=False)
     for name, data in files.items():
         p = out / name
@@ -191,7 +208,7 @@ def _generate(snapshot: dict, out: Path, *, photos: bool, data_home: Path, run_i
         "format": "j5view", "projection_schema_version": PROJECTION_SCHEMA_VERSION, "study_id": snapshot["study_id"], "data_mode": snapshot["data_mode"],
         "source_dataset_version": snapshot["version"], "generated_at": generated_at, "run_id": run_id,
         "scope_ids": sorted(a["asset_id"] for a in assets),
-        "counts": {"assets": len(assets), "located": len(features), "records": len(records), "attachments": n_atts, "photos": len(photo_files)},
+        "counts": {"assets": len(assets), "located": len(features), "records": len(records), "attachments": n_atts, "photos": len(photo_files), "parcels": n_parcels},
         "files": [{"path": name, "bytes": len(data), "sha256": _sha256(data)} for name, data in sorted(files.items())],
     }
     errs = schema_errors("view_manifest.schema.json", manifest)
@@ -250,9 +267,21 @@ def verify_projection_dir(out: Path, *, expected_version: int | None = None, exp
                 raise ProjectionError("verify_attachment_ref", f"{at['path']} 가 패키지에 없다")
     if n_atts != manifest["counts"]["attachments"]:
         raise ProjectionError("verify_attachments_count", "첨부 수가 manifest 와 다르다")
+    n_parcels = manifest["counts"].get("parcels", 0)
+    if (PARCELS_FILE in listed) != (n_parcels > 0):
+        raise ProjectionError("verify_parcels_file", "parcels.geojson 의 유무가 counts.parcels 와 맞지 않는다")
+    if PARCELS_FILE in listed:
+        pb = json.loads((out / PARCELS_FILE).read_text(encoding="utf-8"))
+        if schema_errors("parcels_bundle.schema.json", pb) or pb["count"] != n_parcels or len(pb["features"]) != n_parcels:
+            raise ProjectionError("verify_parcels", "parcels.geojson 이 번들 스키마·필지 수와 맞지 않는다")
+        if pb.get("generated_at") != manifest["generated_at"] or pb.get("source_dataset_version") != manifest["source_dataset_version"] or pb.get("study_id") != manifest["study_id"]:
+            raise ProjectionError("verify_parcels_version", "parcels.geojson 의 생성 시각·정본 버전·study_id 가 manifest 와 다르다")
+        for f in pb["features"]:
+            if not set(f["properties"].get("asset_ids", [])) <= set(ids):
+                raise ProjectionError("verify_parcel_link", f"필지 {f['id']} 의 연결 물건이 물건 목록에 없다")
     if expected_counts is not None:
-        for k in ("assets", "records", "attachments"):
-            if manifest["counts"][k] != expected_counts[k]:
+        for k in ("assets", "records", "attachments", "parcels"):
+            if manifest["counts"].get(k, 0) != expected_counts.get(k, 0):
                 raise ProjectionError("verify_counts", f"{k}: 파생본 {manifest['counts'][k]}, 정본 {expected_counts[k]}")
     return manifest
 
@@ -352,10 +381,11 @@ def build_projection(db: Db, data_home: Path, *, photos: bool = False) -> Projec
     tmp = base / f".tmp-{run_id[:8]}"
     snapshot: dict | None = None
     try:
-        snapshot = _read_snapshot(db)
+        snapshot = _read_snapshot(db, generated_at=started)
         result.source_dataset_version = snapshot["version"]
         manifest = _generate(snapshot, tmp, photos=photos, data_home=data_home, run_id=run_id, generated_at=started)
-        expected = {"assets": len(snapshot["assets"]), "records": len(snapshot["records"]), "attachments": sum(len(v) for v in snapshot["attachments"].values())}
+        expected = {"assets": len(snapshot["assets"]), "records": len(snapshot["records"]), "attachments": sum(len(v) for v in snapshot["attachments"].values()),
+                    "parcels": snapshot["parcels"]["count"] if snapshot.get("parcels") else 0}
         verify_projection_dir(tmp, expected_version=snapshot["version"], expected_counts=expected)
         stamp = started.replace("-", "").replace(":", "").replace("T", "-").rstrip("Z")
         zip_name = f"{_safe(snapshot['study_id'])}-ds{snapshot['version']}-{stamp}.j5view.zip"
