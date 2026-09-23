@@ -1,0 +1,71 @@
+{
+  "kind": "session",
+  "session_id": "4a5b6c7d-0004-4000-8000-000000000001",
+  "route_version_id": "9d2e6b1c-5f4a-4c3b-9e8d-7a6b5c4d3e2f",
+  "frame_version_id": "3f4a5b6c-0003-4000-8000-000000000001",
+  "started_at": "2026-09-22T10:00:00+09:00",
+  "ended_at": "2026-09-22T11:00:00+09:00",
+  "visited_segments": [
+    "S1",
+    "S2",
+    "S3"
+  ],
+  "skipped_segments": [],
+  "note": null,
+  "observations": [
+    {
+      "unit_id": "2e3f4a5b-0002-4000-8000-000000000001",
+      "observed_at": "2026-09-22T10:05:00+09:00",
+      "status": "occupied",
+      "business_name": "가상 상점 1",
+      "business_type": "음식",
+      "note": null,
+      "record_id": null
+    },
+    {
+      "unit_id": "2e3f4a5b-0002-4000-8000-000000000002",
+      "observed_at": "2026-09-22T10:06:00+09:00",
+      "status": "vacant",
+      "business_name": null,
+      "business_type": null,
+      "note": "임대 문의 안내",
+      "record_id": null
+    },
+    {
+      "unit_id": "2e3f4a5b-0002-4000-8000-000000000003",
+      "observed_at": "2026-09-22T10:10:00+09:00",
+      "status": "occupied",
+      "business_name": "가상 상점 2",
+      "business_type": "소매",
+      "note": null,
+      "record_id": null
+    },
+    {
+      "unit_id": "2e3f4a5b-0002-4000-8000-000000000004",
+      "observed_at": "2026-09-22T10:20:00+09:00",
+      "status": "closed_today",
+      "business_name": null,
+      "business_type": null,
+      "note": "셔터 내림",
+      "record_id": null
+    },
+    {
+      "unit_id": "2e3f4a5b-0002-4000-8000-000000000005",
+      "observed_at": "2026-09-22T10:25:00+09:00",
+      "status": "lease_ad_only",
+      "business_name": null,
+      "business_type": null,
+      "note": null,
+      "record_id": null
+    },
+    {
+      "unit_id": "2e3f4a5b-0002-4000-8000-000000000006",
+      "observed_at": "2026-09-22T10:40:00+09:00",
+      "status": "vacant",
+      "business_name": null,
+      "business_type": null,
+      "note": null,
+      "record_id": null
+    }
+  ]
+}

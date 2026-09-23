@@ -208,11 +208,132 @@ CREATE TABLE projection_runs (
 CREATE INDEX projection_runs_by_status ON projection_runs (status, finished_at);
 """
 
+UNIT_STATUSES = ("occupied", "vacant", "closed_today", "lease_ad_only", "not_visited", "unclear")  # 확인(K)은 occupied·vacant 뿐
+UNIT_LINK_RELATIONS = ("split", "merge")
+
+# J5-013A 조사 경로·점포·표본틀·세션·점포 관측 (데이터 사전 §5, ADR-04).
+# - 경로 버전·표본틀 버전은 불변이다. 수정은 previous_version_id 로 연결한 새 버전이다.
+# - 점포(survey_units)는 물리적 조사 단위이며 subjects(survey_unit) 의 자식이다. 업체명·업종은 관측값(unit_observations)이다.
+# - unit_observations 는 (session_id, unit_id) 당 한 행이다: 한 점포가 여러 구간에 걸려도 같은 세션에서 두 번 세지 않는다.
+# - record_survey_refs: 관측 이벤트가 적은 route_version_id·frame_version_id 를 records 를 바꾸지 않고 따로 둔다(records 는 불변).
+#   기존 대장(import_events)의 고정 행 바이트에서 소급해 채운다. 외래키를 두지 않는다(폰이 먼저 적은 ID 가 정본에 아직 없을 수 있다).
+MIGRATION_0004 = f"""
+CREATE TABLE survey_routes (
+  route_id    TEXT NOT NULL PRIMARY KEY CHECK (route_id GLOB '{UUID_GLOB}'),
+  name        TEXT NOT NULL CHECK (length(name) > 0),
+  purpose     TEXT,
+  recorded_at TEXT NOT NULL CHECK (recorded_at GLOB '{UTC_GLOB}')
+) STRICT;
+
+CREATE TABLE survey_route_versions (
+  route_version_id    TEXT NOT NULL PRIMARY KEY CHECK (route_version_id GLOB '{UUID_GLOB}'),
+  route_id            TEXT NOT NULL REFERENCES survey_routes (route_id),
+  version_no          INTEGER NOT NULL CHECK (version_no >= 1),
+  segments_json       TEXT NOT NULL CHECK (json_valid(segments_json) AND json_type(segments_json) = 'array' AND json_array_length(segments_json) >= 1),
+  effective_from      TEXT NOT NULL CHECK (effective_from GLOB '{DATE_GLOB}'),
+  previous_version_id TEXT REFERENCES survey_route_versions (route_version_id),
+  change_reason       TEXT,
+  content_hash        TEXT NOT NULL CHECK (content_hash GLOB '{SHA256_GLOB}'),
+  recorded_at         TEXT NOT NULL CHECK (recorded_at GLOB '{UTC_GLOB}'),
+  UNIQUE (route_id, version_no),
+  CHECK ((version_no = 1) = (previous_version_id IS NULL)),
+  CHECK (previous_version_id IS NULL OR previous_version_id <> route_version_id)
+) STRICT;
+
+CREATE TABLE survey_units (
+  unit_id       TEXT NOT NULL PRIMARY KEY,
+  subject_type  TEXT NOT NULL DEFAULT 'survey_unit' CHECK (subject_type = 'survey_unit'),
+  label         TEXT NOT NULL CHECK (length(label) > 0),
+  floor         TEXT,
+  lon           REAL CHECK (lon IS NULL OR (lon >= -180.0 AND lon <= 180.0)),
+  lat           REAL CHECK (lat IS NULL OR (lat >= -90.0 AND lat <= 90.0)),
+  asset_id      TEXT REFERENCES assets (asset_id),
+  opened_on     TEXT CHECK (opened_on IS NULL OR opened_on GLOB '{DATE_GLOB}'),
+  closed_on     TEXT CHECK (closed_on IS NULL OR closed_on GLOB '{DATE_GLOB}'),
+  note          TEXT,
+  recorded_at   TEXT NOT NULL CHECK (recorded_at GLOB '{UTC_GLOB}'),
+  updated_at    TEXT NOT NULL CHECK (updated_at GLOB '{UTC_GLOB}'),
+  CHECK ((lon IS NULL) = (lat IS NULL)),
+  CHECK (opened_on IS NULL OR closed_on IS NULL OR closed_on >= opened_on),
+  FOREIGN KEY (unit_id, subject_type) REFERENCES subjects (subject_id, subject_type)
+) STRICT;
+
+CREATE TABLE survey_unit_links (
+  from_unit_id   TEXT NOT NULL REFERENCES survey_units (unit_id),
+  to_unit_id     TEXT NOT NULL REFERENCES survey_units (unit_id),
+  relation       TEXT NOT NULL CHECK (relation {_in(UNIT_LINK_RELATIONS)}),
+  effective_from TEXT NOT NULL CHECK (effective_from GLOB '{DATE_GLOB}'),
+  note           TEXT,
+  recorded_at    TEXT NOT NULL CHECK (recorded_at GLOB '{UTC_GLOB}'),
+  PRIMARY KEY (from_unit_id, to_unit_id, relation),
+  CHECK (from_unit_id <> to_unit_id)
+) STRICT;
+
+CREATE TABLE survey_frame_versions (
+  frame_version_id    TEXT NOT NULL PRIMARY KEY CHECK (frame_version_id GLOB '{UUID_GLOB}'),
+  name                TEXT NOT NULL CHECK (length(name) > 0),
+  selection_rule      TEXT NOT NULL CHECK (length(selection_rule) > 0),
+  confirmed_on        TEXT NOT NULL CHECK (confirmed_on GLOB '{DATE_GLOB}'),
+  previous_version_id TEXT REFERENCES survey_frame_versions (frame_version_id),
+  change_reason       TEXT,
+  content_hash        TEXT NOT NULL CHECK (content_hash GLOB '{SHA256_GLOB}'),
+  recorded_at         TEXT NOT NULL CHECK (recorded_at GLOB '{UTC_GLOB}'),
+  CHECK (previous_version_id IS NULL OR previous_version_id <> frame_version_id)
+) STRICT;
+
+CREATE TABLE survey_frame_members (
+  frame_version_id TEXT NOT NULL REFERENCES survey_frame_versions (frame_version_id),
+  unit_id          TEXT NOT NULL REFERENCES survey_units (unit_id),
+  PRIMARY KEY (frame_version_id, unit_id)
+) STRICT;
+
+CREATE TABLE survey_sessions (
+  session_id            TEXT NOT NULL PRIMARY KEY CHECK (session_id GLOB '{UUID_GLOB}'),
+  route_version_id      TEXT NOT NULL REFERENCES survey_route_versions (route_version_id),
+  frame_version_id      TEXT NOT NULL REFERENCES survey_frame_versions (frame_version_id),
+  started_at            TEXT NOT NULL,
+  ended_at              TEXT,
+  visited_segments_json TEXT NOT NULL CHECK (json_valid(visited_segments_json) AND json_type(visited_segments_json) = 'array'),
+  skipped_segments_json TEXT NOT NULL CHECK (json_valid(skipped_segments_json) AND json_type(skipped_segments_json) = 'array'),
+  note                  TEXT,
+  content_hash          TEXT NOT NULL CHECK (content_hash GLOB '{SHA256_GLOB}'),
+  recorded_at           TEXT NOT NULL CHECK (recorded_at GLOB '{UTC_GLOB}')
+) STRICT;
+
+CREATE TABLE unit_observations (
+  session_id    TEXT NOT NULL REFERENCES survey_sessions (session_id),
+  unit_id       TEXT NOT NULL REFERENCES survey_units (unit_id),
+  observed_at   TEXT NOT NULL,
+  status        TEXT NOT NULL CHECK (status {_in(UNIT_STATUSES)}),
+  business_name TEXT,
+  business_type TEXT,
+  note          TEXT,
+  record_id     TEXT REFERENCES records (record_id),
+  recorded_at   TEXT NOT NULL CHECK (recorded_at GLOB '{UTC_GLOB}'),
+  PRIMARY KEY (session_id, unit_id)
+) STRICT;
+
+CREATE TABLE record_survey_refs (
+  record_id        TEXT NOT NULL PRIMARY KEY REFERENCES records (record_id),
+  route_version_id TEXT CHECK (route_version_id IS NULL OR route_version_id GLOB '{UUID_GLOB}'),
+  frame_version_id TEXT CHECK (frame_version_id IS NULL OR frame_version_id GLOB '{UUID_GLOB}'),
+  recorded_at      TEXT NOT NULL CHECK (recorded_at GLOB '{UTC_GLOB}'),
+  CHECK (route_version_id IS NOT NULL OR frame_version_id IS NOT NULL)
+) STRICT;
+INSERT INTO record_survey_refs (record_id, route_version_id, frame_version_id, recorded_at)
+  SELECT record_id, json_extract(CAST(line AS TEXT), '$.route_version_id'), json_extract(CAST(line AS TEXT), '$.frame_version_id'),
+         strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+  FROM import_events
+  WHERE outcome = 'inserted' AND record_id IS NOT NULL
+    AND (json_extract(CAST(line AS TEXT), '$.route_version_id') IS NOT NULL OR json_extract(CAST(line AS TEXT), '$.frame_version_id') IS NOT NULL);
+"""
+
 # (버전, 이름, SQL). 새 릴리스의 테이블은 새 항목으로 추가하고 기존 항목은 고치지 않는다.
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "r1b_minimum", MIGRATION_0001),
     (2, "r1b_import", MIGRATION_0002),
     (3, "r1b_projection", MIGRATION_0003),
+    (4, "r2_survey", MIGRATION_0004),
 )
 DB_SCHEMA_VERSION = MIGRATIONS[-1][0]
 MIN_SQLITE_VERSION = (3, 38, 0)  # STRICT 테이블(3.37)과 내장 json_valid/json_type(3.38)

@@ -3,6 +3,7 @@
 모두 가상자료다. `python tests/fixtures/make_packages.py`로 결정적으로 다시 만든다. 사진은 1x1 PNG다.
 
 - `assets.seed.synthetic.json`: 가상 물건 5개. 좌표·주소는 가상값이다.
+- `survey/`: 조사 경로·점포·표본틀·세션 수동 입력 예제 8종 (J5-013A). 목록과 기대 집계는 `survey/README.md`.
 - `packages/<case>/`: ZIP을 풀어 놓은 형태의 패키지. `python -m j5 inspect <폴더>`로 검사할 수 있고, 테스트는 같은 폴더를 ZIP으로 묶어서도 검사한다.
 
 | case | 내용 | 기대 결과 (걸러내는 단계) |

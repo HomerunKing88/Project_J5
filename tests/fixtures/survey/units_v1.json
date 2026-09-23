@@ -1,0 +1,71 @@
+{
+  "kind": "units",
+  "units": [
+    {
+      "unit_id": "2e3f4a5b-0002-4000-8000-000000000001",
+      "label": "가상로 1 건물 1층 좌측",
+      "floor": "1",
+      "location_point": [
+        126.9986,
+        37.5702
+      ],
+      "asset_id": "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a50",
+      "opened_on": null,
+      "closed_on": null,
+      "note": null
+    },
+    {
+      "unit_id": "2e3f4a5b-0002-4000-8000-000000000002",
+      "label": "가상로 1 건물 1층 우측",
+      "floor": "1",
+      "location_point": [
+        126.9987,
+        37.5702
+      ],
+      "asset_id": "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a50",
+      "opened_on": null,
+      "closed_on": null,
+      "note": null
+    },
+    {
+      "unit_id": "2e3f4a5b-0002-4000-8000-000000000003",
+      "label": "가상로 2 건물 1층",
+      "floor": "1",
+      "location_point": null,
+      "asset_id": null,
+      "opened_on": null,
+      "closed_on": null,
+      "note": "S1·S2 모퉁이 (두 구간에 걸침)"
+    },
+    {
+      "unit_id": "2e3f4a5b-0002-4000-8000-000000000004",
+      "label": "가상로 3 건물 1층",
+      "floor": "1",
+      "location_point": null,
+      "asset_id": null,
+      "opened_on": null,
+      "closed_on": null,
+      "note": null
+    },
+    {
+      "unit_id": "2e3f4a5b-0002-4000-8000-000000000005",
+      "label": "가상로 4 건물 1층",
+      "floor": "1",
+      "location_point": null,
+      "asset_id": null,
+      "opened_on": null,
+      "closed_on": null,
+      "note": null
+    },
+    {
+      "unit_id": "2e3f4a5b-0002-4000-8000-000000000006",
+      "label": "가상로 5 건물 1층",
+      "floor": "1",
+      "location_point": null,
+      "asset_id": null,
+      "opened_on": null,
+      "closed_on": null,
+      "note": null
+    }
+  ]
+}

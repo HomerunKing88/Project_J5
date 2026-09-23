@@ -1,0 +1,57 @@
+{
+  "kind": "session",
+  "session_id": "4a5b6c7d-0004-4000-8000-000000000002",
+  "route_version_id": "9d2e6b1c-5f4a-4c3b-9e8d-7a6b5c4d3e30",
+  "frame_version_id": "3f4a5b6c-0003-4000-8000-000000000002",
+  "started_at": "2026-10-20T10:00:00+09:00",
+  "ended_at": null,
+  "visited_segments": [
+    "S1",
+    "S2"
+  ],
+  "skipped_segments": [
+    {
+      "segment_id": "S3b",
+      "reason": "우천으로 중단"
+    }
+  ],
+  "note": null,
+  "observations": [
+    {
+      "unit_id": "2e3f4a5b-0002-4000-8000-000000000001",
+      "observed_at": "2026-10-20T10:05:00+09:00",
+      "status": "occupied",
+      "business_name": "가상 상점 1",
+      "business_type": "음식",
+      "note": null,
+      "record_id": null
+    },
+    {
+      "unit_id": "2e3f4a5b-0002-4000-8000-000000000002",
+      "observed_at": "2026-10-20T10:06:00+09:00",
+      "status": "occupied",
+      "business_name": "가상 상점 3",
+      "business_type": "서비스",
+      "note": "새 입점",
+      "record_id": null
+    },
+    {
+      "unit_id": "2e3f4a5b-0002-4000-8000-000000000003",
+      "observed_at": "2026-10-20T10:10:00+09:00",
+      "status": "vacant",
+      "business_name": null,
+      "business_type": null,
+      "note": null,
+      "record_id": null
+    },
+    {
+      "unit_id": "2e3f4a5b-0002-4000-8000-000000000007",
+      "observed_at": "2026-10-20T10:20:00+09:00",
+      "status": "occupied",
+      "business_name": "가상 상점 4",
+      "business_type": "소매",
+      "note": null,
+      "record_id": null
+    }
+  ]
+}

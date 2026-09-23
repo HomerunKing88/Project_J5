@@ -1,4 +1,4 @@
-"""j5 명령줄. inspect(패키지 검사), copy(독립 사본), db(정본 SQLite: init/status/load-seed/import/project/backup/restore/check-photos).
+"""j5 명령줄. inspect(패키지 검사), copy(독립 사본), db(정본 SQLite: init/status/load-seed/import/project/backup/restore/check-photos/survey-*).
 
 종료 코드: 0 ok·반영·중복 / 1 reject·실패 / 2 hold·보류 / 3 사용 오류.
 """
@@ -17,6 +17,7 @@ from j5.db.backup import EXIT_BY_OUTCOME as BACKUP_EXIT, BackupError, check_phot
 from j5.db.importer import EXIT_BY_OUTCOME, import_package
 from j5.db.projection import EXIT_BY_OUTCOME as PROJECT_EXIT, ProjectionError, build_projection, copy_latest
 from j5.db.store import Db, DbError, default_db_path
+from j5.db.survey import apply_input, compare, compare_text, load_input, overview, overview_text, vacancy, vacancy_text
 from j5.db.validate import ValidationError
 from j5.package.preserve import PreserveError, copy_package
 from j5.package.validate import inspect_package
@@ -78,6 +79,18 @@ def _build_parser() -> argparse.ArgumentParser:
     dk = dsub.add_parser("check-photos", help="사진 대사: 정본이 참조한 사진의 존재·해시와 미참조 파일을 보고한다 (삭제 없음)")
     dk.add_argument("--data-home", type=Path)
     dk.add_argument("--json", action="store_true")
+    sa = dsub.add_parser("survey-apply", help="조사 입력 파일(route_version / units / frame_version / session, schemas/survey_input.schema.json)을 정본에 반영한다")
+    sa.add_argument("file", type=Path)
+    sa.add_argument("--json", action="store_true")
+    sv = dsub.add_parser("survey-vacancy", help="세션의 공실 집계 (N·K·V, 미확인·미조사 수, 관측표본 공실비율)")
+    sv.add_argument("session_id")
+    sv.add_argument("--json", action="store_true")
+    sc = dsub.add_parser("survey-compare", help="두 세션의 공통 표본 시점 비교 (분할·통합은 비교 단절)")
+    sc.add_argument("session_a")
+    sc.add_argument("session_b")
+    sc.add_argument("--json", action="store_true")
+    so = dsub.add_parser("survey-overview", help="경로·표본틀·세션·점포 현황")
+    so.add_argument("--json", action="store_true")
     return p
 
 
@@ -197,6 +210,25 @@ def _db_main(args) -> int:
                 c = check_photos(db, home)
                 sys.stdout.write(json.dumps(c, ensure_ascii=True, sort_keys=True, indent=2) + "\n" if args.json else check_photos_text(c))
                 return 0 if c["ok_all"] else 1
+            if args.db_command == "survey-apply":
+                if not args.file.is_file():
+                    print(f"입력 파일이 없음: {args.file}", file=sys.stderr)
+                    return USAGE_ERROR
+                r = apply_input(db, load_input(args.file))
+                sys.stdout.write(json.dumps(r.to_dict(), ensure_ascii=True, sort_keys=True, indent=2) + "\n" if args.json else r.to_text())
+                return 0
+            if args.db_command == "survey-vacancy":
+                v = vacancy(db, args.session_id)
+                sys.stdout.write(json.dumps(v, ensure_ascii=True, sort_keys=True, indent=2) + "\n" if args.json else vacancy_text(v))
+                return 0
+            if args.db_command == "survey-compare":
+                c = compare(db, args.session_a, args.session_b)
+                sys.stdout.write(json.dumps(c, ensure_ascii=True, sort_keys=True, indent=2) + "\n" if args.json else compare_text(c))
+                return 0
+            if args.db_command == "survey-overview":
+                o = overview(db)
+                sys.stdout.write(json.dumps(o, ensure_ascii=True, sort_keys=True, indent=2) + "\n" if args.json else overview_text(o))
+                return 0
     except DbError as e:
         print(f"정본 오류 [{e.code}]: {e.message}", file=sys.stderr)
         return 1

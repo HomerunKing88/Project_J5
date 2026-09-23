@@ -340,6 +340,10 @@ def _import_open(db: Db, src, path: Path, data_home: Path, limits: Limits, resul
                         "bytes": ref["bytes"], "tags": list(ref["tags"]), "taken_at": ref.get("taken_at"),  # 촬영 시각은 폰이 기록한 값을 그대로 보존
                     } for ref in ev["attachment_refs"]]
                     db.insert_record(rec, evidence=[{"document_id": doc_id, "locator": f"{OBSERVATIONS}#event_id={ev['event_id']}"}], attachments=atts)
+                    if ev.get("route_version_id") or ev.get("frame_version_id"):
+                        # 경로·표본틀 참조는 records 밖(record_survey_refs)에 둔다. 외래키 없음: 폰이 먼저 적은 ID 가 정본에 아직 없을 수 있다 (J5-013A)
+                        db.conn.execute("INSERT INTO record_survey_refs (record_id, route_version_id, frame_version_id, recorded_at) VALUES (?, ?, ?, ?)",
+                                        (ev["event_id"], ev.get("route_version_id"), ev.get("frame_version_id"), db.now()))
                     db.conn.execute("INSERT INTO import_events (run_id, event_id, event_hash, line, outcome, record_id) VALUES (?, ?, ?, ?, 'inserted', ?)",
                                     (run_id, ev["event_id"], e["hash"], e["line"], ev["event_id"]))
                 for e in events:
