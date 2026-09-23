@@ -196,7 +196,12 @@ class Db:
                   for t in ("subjects", "assets", "source_documents", "records", "record_evidence", "attachments")}
         integrity = [r[0] for r in self.conn.execute("PRAGMA integrity_check")]
         fk = [dict(zip(("table", "rowid", "parent", "fkid"), r)) for r in self.conn.execute("PRAGMA foreign_key_check")]
+        projection = None
+        if self._has_table("projection_runs"):
+            from j5.db.projection import projection_status  # 순환 import 방지
+            projection = projection_status(self, None)
         return {
+            "projection": projection,
             "path": str(self.path), "sqlite_version": sqlite3.sqlite_version,
             "db_schema_version": self.schema_version(), "tool_schema_version": S.DB_SCHEMA_VERSION,
             "study_id": self.meta("study_id"), "data_mode": self.data_mode, "dataset_version": int(self.meta("dataset_version") or 0),

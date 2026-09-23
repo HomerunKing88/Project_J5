@@ -13,6 +13,7 @@ from pathlib import Path
 
 from j5 import APP_VERSION
 from j5.db.importer import EXIT_BY_OUTCOME, import_package
+from j5.db.projection import EXIT_BY_OUTCOME as PROJECT_EXIT, ProjectionError, build_projection, copy_latest
 from j5.db.store import Db, DbError, default_db_path
 from j5.db.validate import ValidationError
 from j5.package.preserve import PreserveError, copy_package
@@ -52,7 +53,22 @@ def _build_parser() -> argparse.ArgumentParser:
     dm.add_argument("package", type=Path)
     dm.add_argument("--data-home", type=Path, help="사진·로그를 둘 실데이터 홈. 생략 시 J5_DATA_HOME")
     dm.add_argument("--json", action="store_true")
+    dp = dsub.add_parser("project", help="조회 파생본(.j5view.zip)을 정본에서 전량 생성·검증·게시한다. 실패 시 이전 파생본 유지")
+    dp.add_argument("--data-home", type=Path, help="파생본을 둘 실데이터 홈(exports/private/projections). 생략 시 J5_DATA_HOME")
+    dp.add_argument("--photos", action="store_true", help="기록이 참조한 사진을 파생본에 포함한다 (기본은 제외)")
+    dp.add_argument("--json", action="store_true")
+    dc = dsub.add_parser("project-copy", help="게시된 최신 파생본 ZIP 의 독립 사본. 정본보다 오래된 구본은 --allow-stale 없이는 막는다")
+    dc.add_argument("dest_dir", type=Path)
+    dc.add_argument("--data-home", type=Path)
+    dc.add_argument("--allow-stale", action="store_true", help="구본 보존용 내보내기. 결과에 구버전임을 표시한다")
     return p
+
+
+def _data_home(args) -> Path | None:
+    home = getattr(args, "data_home", None) or (Path(os.environ["J5_DATA_HOME"]) if os.environ.get("J5_DATA_HOME") else None)
+    if home is None:
+        print("실데이터 홈을 모른다: --data-home 을 주거나 J5_DATA_HOME 을 설정한다", file=sys.stderr)
+    return home
 
 
 def _db_path(args) -> Path | None:
@@ -91,6 +107,14 @@ def _db_main(args) -> int:
                     print(f"study_id {st['study_id']} · data_mode {st['data_mode']} · dataset_version {st['dataset_version']} · 생성 {st['created_at']}")
                     print("행 수: " + ", ".join(f"{k} {v}" for k, v in st["counts"].items()))
                     print(f"integrity_check: {', '.join(st['integrity_check'])} · foreign_key_check: {len(st['foreign_key_check'])}건 위반")
+                    ps = st.get("projection") or {}
+                    if ps:
+                        line = f"파생본: {ps['state']}"
+                        if ps.get("published_at"):
+                            line += f" · 마지막 게시 {ps['published_at']}"
+                        if ps.get("last_failed_at"):
+                            line += f" · 마지막 실패 {ps['last_failed_at']}"
+                        print(line)
                 return 0 if st["ok"] else 1
             if args.db_command == "load-seed":
                 seed = _load_seed(args.seed)
@@ -101,9 +125,8 @@ def _db_main(args) -> int:
                 print(f"시드 반영: 신규 {r.inserted}, 갱신 {r.updated}, 변화 없음 {r.unchanged} (data_mode {db.data_mode}). dataset_version {r.dataset_version} ({changed})")
                 return 0
             if args.db_command == "import":
-                home = args.data_home or (Path(os.environ["J5_DATA_HOME"]) if os.environ.get("J5_DATA_HOME") else None)
+                home = _data_home(args)
                 if home is None:
-                    print("실데이터 홈을 모른다: --data-home 을 주거나 J5_DATA_HOME 을 설정한다", file=sys.stderr)
                     return USAGE_ERROR
                 if not args.package.exists():
                     print(f"입력이 없음: {args.package}", file=sys.stderr)
@@ -111,6 +134,29 @@ def _db_main(args) -> int:
                 r = import_package(db, args.package, home)
                 sys.stdout.write(r.to_json() if args.json else r.to_text())
                 return EXIT_BY_OUTCOME[r.outcome]
+            if args.db_command == "project":
+                home = _data_home(args)
+                if home is None:
+                    return USAGE_ERROR
+                r = build_projection(db, home, photos=args.photos)
+                sys.stdout.write(r.to_json() if args.json else r.to_text())
+                return PROJECT_EXIT[r.outcome]
+            if args.db_command == "project-copy":
+                home = _data_home(args)
+                if home is None:
+                    return USAGE_ERROR
+                if not args.dest_dir.is_dir():
+                    print(f"대상 폴더가 없음: {args.dest_dir}", file=sys.stderr)
+                    return USAGE_ERROR
+                try:
+                    r = copy_latest(db, home, args.dest_dir, allow_stale=args.allow_stale)
+                except ProjectionError as e:
+                    print(f"내보내기 거절 [{e.code}]: {e.message}", file=sys.stderr)
+                    return 1
+                label = f"구본 {r['state']}" if r["stale"] else "최신"
+                print(f"사본 작성됨: {r['dest']} ({r['bytes']} 바이트, sha256 {r['sha256']}) · 파생본 v{r['source_dataset_version']} {r['generated_at']} · {label}")
+                print("이 사본은 백업 완료를 뜻하지 않는다.")
+                return 0
     except DbError as e:
         print(f"정본 오류 [{e.code}]: {e.message}", file=sys.stderr)
         return 1
