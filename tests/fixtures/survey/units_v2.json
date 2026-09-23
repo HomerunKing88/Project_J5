@@ -1,0 +1,51 @@
+{
+  "kind": "units",
+  "units": [
+    {
+      "unit_id": "2e3f4a5b-0002-4000-8000-000000000004",
+      "label": "가상로 3 건물 1층",
+      "floor": "1",
+      "location_point": null,
+      "asset_id": null,
+      "opened_on": null,
+      "closed_on": "2026-10-10",
+      "note": "가상로 4 와 통합"
+    },
+    {
+      "unit_id": "2e3f4a5b-0002-4000-8000-000000000005",
+      "label": "가상로 4 건물 1층",
+      "floor": "1",
+      "location_point": null,
+      "asset_id": null,
+      "opened_on": null,
+      "closed_on": "2026-10-10",
+      "note": "가상로 3 과 통합"
+    },
+    {
+      "unit_id": "2e3f4a5b-0002-4000-8000-000000000007",
+      "label": "가상로 3·4 통합 점포 1층",
+      "floor": "1",
+      "location_point": null,
+      "asset_id": null,
+      "opened_on": "2026-10-11",
+      "closed_on": null,
+      "note": null
+    }
+  ],
+  "links": [
+    {
+      "from_unit_id": "2e3f4a5b-0002-4000-8000-000000000004",
+      "to_unit_id": "2e3f4a5b-0002-4000-8000-000000000007",
+      "relation": "merge",
+      "effective_from": "2026-10-11",
+      "note": null
+    },
+    {
+      "from_unit_id": "2e3f4a5b-0002-4000-8000-000000000005",
+      "to_unit_id": "2e3f4a5b-0002-4000-8000-000000000007",
+      "relation": "merge",
+      "effective_from": "2026-10-11",
+      "note": null
+    }
+  ]
+}

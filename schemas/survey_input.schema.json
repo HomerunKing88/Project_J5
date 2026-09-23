@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://j5.local/schemas/survey_input.schema.json",
+  "title": "조사 경로·점포·표본틀·세션 수동 입력 파일 (j5 db survey-apply)",
+  "description": "데이터 사전 §5·ADR-04. kind 로 구분한 네 종류의 JSON 파일. 경로 버전·표본틀 버전·세션은 불변이며 수정은 새 버전(previous_version_id)·새 세션이다. 업체명·업종은 관측값이고 점포 ID 를 대신하지 않는다.",
+  "type": "object",
+  "required": ["kind"],
+  "oneOf": [
+    { "$ref": "#/$defs/route_version" },
+    { "$ref": "#/$defs/units" },
+    { "$ref": "#/$defs/frame_version" },
+    { "$ref": "#/$defs/session" }
+  ],
+  "$defs": {
+    "uuid": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "date": { "type": "string", "format": "date", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+    "datetime": { "type": "string", "format": "date-time", "pattern": "(Z|[+-][0-9]{2}:[0-9]{2})$" },
+    "text": { "type": ["string", "null"], "maxLength": 2000 },
+    "segment_id": { "type": "string", "minLength": 1, "maxLength": 40, "pattern": "^[A-Za-z0-9_-]+$" },
+    "route_version": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "route", "route_version_id", "effective_from", "previous_version_id", "change_reason", "segments"],
+      "properties": {
+        "kind": { "const": "route_version" },
+        "route": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["route_id", "name", "purpose"],
+          "properties": {
+            "route_id": { "$ref": "#/$defs/uuid" },
+            "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "purpose": { "$ref": "#/$defs/text" }
+          }
+        },
+        "route_version_id": { "$ref": "#/$defs/uuid" },
+        "effective_from": { "$ref": "#/$defs/date" },
+        "previous_version_id": { "oneOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }] },
+        "change_reason": { "$ref": "#/$defs/text" },
+        "segments": {
+          "description": "순서 있는 구간 목록. 순서가 곧 조사 순서다",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["segment_id", "name"],
+            "properties": {
+              "segment_id": { "$ref": "#/$defs/segment_id" },
+              "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+              "from": { "$ref": "#/$defs/text" },
+              "to": { "$ref": "#/$defs/text" }
+            }
+          }
+        }
+      }
+    },
+    "units": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "units"],
+      "properties": {
+        "kind": { "const": "units" },
+        "units": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["unit_id", "label"],
+            "properties": {
+              "unit_id": { "$ref": "#/$defs/uuid" },
+              "label": { "description": "물리적 점포 위치 설명 (건물·층·구획). 업체명이 아니다", "type": "string", "minLength": 1, "maxLength": 200 },
+              "floor": { "type": ["string", "null"], "maxLength": 20 },
+              "location_point": { "oneOf": [{ "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "number" } }, { "type": "null" }] },
+              "asset_id": { "oneOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }] },
+              "opened_on": { "oneOf": [{ "$ref": "#/$defs/date" }, { "type": "null" }] },
+              "closed_on": { "oneOf": [{ "$ref": "#/$defs/date" }, { "type": "null" }] },
+              "note": { "$ref": "#/$defs/text" }
+            }
+          }
+        },
+        "links": {
+          "description": "점포 물리적 분할·통합 연결 (이전 단위 → 새 단위)",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["from_unit_id", "to_unit_id", "relation", "effective_from"],
+            "properties": {
+              "from_unit_id": { "$ref": "#/$defs/uuid" },
+              "to_unit_id": { "$ref": "#/$defs/uuid" },
+              "relation": { "type": "string", "enum": ["split", "merge"] },
+              "effective_from": { "$ref": "#/$defs/date" },
+              "note": { "$ref": "#/$defs/text" }
+            }
+          }
+        }
+      }
+    },
+    "frame_version": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "frame_version_id", "name", "selection_rule", "unit_ids", "confirmed_on", "previous_version_id", "change_reason"],
+      "properties": {
+        "kind": { "const": "frame_version" },
+        "frame_version_id": { "$ref": "#/$defs/uuid" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "selection_rule": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "unit_ids": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/uuid" } },
+        "confirmed_on": { "$ref": "#/$defs/date" },
+        "previous_version_id": { "oneOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }] },
+        "change_reason": { "$ref": "#/$defs/text" }
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "session_id", "route_version_id", "frame_version_id", "started_at", "ended_at", "visited_segments", "skipped_segments", "observations"],
+      "properties": {
+        "kind": { "const": "session" },
+        "session_id": { "$ref": "#/$defs/uuid" },
+        "route_version_id": { "$ref": "#/$defs/uuid" },
+        "frame_version_id": { "$ref": "#/$defs/uuid" },
+        "started_at": { "$ref": "#/$defs/datetime" },
+        "ended_at": { "oneOf": [{ "$ref": "#/$defs/datetime" }, { "type": "null" }] },
+        "visited_segments": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/segment_id" } },
+        "skipped_segments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["segment_id", "reason"],
+            "properties": { "segment_id": { "$ref": "#/$defs/segment_id" }, "reason": { "type": "string", "minLength": 1, "maxLength": 500 } }
+          }
+        },
+        "note": { "$ref": "#/$defs/text" },
+        "observations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["unit_id", "observed_at", "status"],
+            "properties": {
+              "unit_id": { "$ref": "#/$defs/uuid" },
+              "observed_at": { "$ref": "#/$defs/datetime" },
+              "status": {
+                "description": "occupied·vacant 만 확인(K)이다. closed_today·lease_ad_only·not_visited·unclear 는 공실 확정이 아니다",
+                "type": "string",
+                "enum": ["occupied", "vacant", "closed_today", "lease_ad_only", "not_visited", "unclear"]
+              },
+              "business_name": { "type": ["string", "null"], "maxLength": 200 },
+              "business_type": { "type": ["string", "null"], "maxLength": 100 },
+              "note": { "$ref": "#/$defs/text" },
+              "record_id": { "oneOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }] }
+            }
+          }
+        }
+      }
+    }
+  }
+}

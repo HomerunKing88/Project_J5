@@ -71,4 +71,21 @@ python -m j5 db [--db 경로] check-photos [--data-home 경로] [--json]
 - `check-photos`(사진 대사): 정본이 참조한 사진의 존재·크기·해시와 `photos/` 의 미참조 파일을 보고한다. 아무것도 지우지 않는다(미참조 파일은 정리대기 후보로 표시만). 문제가 있으면 종료 코드 1.
 - 운영 순서(데이터 사전 §12 "반영 배치마다 백업"): `import` → `backup` → `project`. 각 결과는 따로 표시되며 서로를 뜻하지 않는다.
 
-이후: R1b 실기기 시험·두 차례 실사용 후 일반 운영 전환. R2(J5-013)부터 기초자료·조사 표본.
+## 조사 경로·점포·표본틀·세션 (R2, J5-013A)
+
+```text
+python -m j5 db [--db 경로] survey-apply <입력.json> [--json]
+python -m j5 db [--db 경로] survey-vacancy <session_id> [--json]
+python -m j5 db [--db 경로] survey-compare <session_a> <session_b> [--json]
+python -m j5 db [--db 경로] survey-overview [--json]
+```
+
+- 입력은 `schemas/survey_input.schema.json` 의 JSON 파일 네 종류(`kind`: `route_version` 경로 버전·구간 목록 / `units` 점포와 분할·통합 링크 / `frame_version` 표본틀 버전·포함 점포 / `session` 조사 세션·방문·건너뜀 구간·점포 관측). 예제는 `tests/fixtures/survey/`. 편집기·길찾기는 없다(데이터 사전 §5, ADR-04).
+- 경로 버전·표본틀 버전·세션은 불변이다. 같은 ID·같은 내용은 변화 없음, 같은 ID·다른 내용은 거절이며 수정은 `previous_version_id` 로 이은 새 버전(`change_reason` 필수)·새 세션이다. 점포의 서술 필드(위치·층·연결 물건·종료일)는 갱신할 수 있고 업체명·업종은 세션 관측값이다. 정본이 바뀐 배치마다 `dataset_version` 이 오른다.
+- 세션 안 점포 관측은 점포당 한 행이다. 한 점포가 여러 구간에 걸쳐도 두 번 세지 않는다(같은 unit_id 두 번이면 거절).
+- `survey-vacancy`: N(표본틀 점포 수)·K(occupied·vacant 로 확인한 수)·V(vacant)·관측표본 공실비율(V/K)·상태 확인률(K/N) 과 미확인(당일 휴무·임대 광고만·미방문·확인 불가)·기록 없음(미조사)·표본틀 밖 관측 수. K 또는 N 이 0 이면 비율은 null. 지역 전체 공실률이라고 부르지 않는다.
+- `survey-compare`: 두 세션의 시점 비교. 양쪽 표본틀에 있고 두 세션 모두 확인된 공통 점포로 따로 계산하며, 두 시점 사이의 분할·통합 링크가 걸린 점포는 비교 단절로 표시하고 공통 표본에서 뺀다. 각 세션의 전체 값은 섞지 않고 함께 표시한다.
+- 관측 이벤트가 적은 `route_version_id`·`frame_version_id` 는 `record_survey_refs` 에 남긴다(records 는 불변, 외래키 없음). 정본에 없는 경로 버전을 참조한 기록 수를 `survey-overview` 가 표시하며, 경로 버전 파일을 반영하면 연결된다.
+- 필지·건축물 정규화와 외부 자료 수집(J5-013B)은 별도 작업이다. 조사 자료는 백업에 포함되고, 파생본(`project`)에는 아직 들어가지 않는다.
+
+이후: J5-013B(필지·건축물), R1b 실기기 시험·두 차례 실사용.

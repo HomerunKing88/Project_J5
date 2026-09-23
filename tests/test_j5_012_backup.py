@@ -53,7 +53,7 @@ def test_backup_makes_consistent_copy_manifest_pointer_and_log(db, home):
     before = tree(home / "db") | tree(home / "photos")
     r = create_backup(db, home)
     assert r.outcome == "completed", r.to_text()
-    assert r.dataset_version == 2 and r.db_schema_version == 3 and r.photos == 2 and r.files == 3
+    assert r.dataset_version == 2 and r.db_schema_version == 4 and r.photos == 2 and r.files == 3
     bdir = home / r.backup_dir
     assert bdir.parent == home / "backups" and bdir.name.endswith(f"-ds2-{r.run_id[:8]}")
     manifest = json.loads((bdir / "backup_manifest.json").read_text(encoding="utf-8"))
@@ -332,17 +332,17 @@ def test_restore_of_older_backup_survives_newer_tool_migrations(db, home, tmp_pa
     from j5.db import schema as S
     r = create_backup(db, home)
     bdir = home / r.backup_dir
-    monkeypatch.setattr(S, "MIGRATIONS", S.MIGRATIONS + ((4, "test_future", "CREATE TABLE t_future (x INTEGER) STRICT;"),))
-    monkeypatch.setattr(S, "DB_SCHEMA_VERSION", 4)
-    assert verify_backup_dir(bdir)["manifest"]["db_schema_version"] == 3, "백업 파일 자체는 그대로 검증된다"
+    monkeypatch.setattr(S, "MIGRATIONS", S.MIGRATIONS + ((5, "test_future", "CREATE TABLE t_future (x INTEGER) STRICT;"),))
+    monkeypatch.setattr(S, "DB_SCHEMA_VERSION", 5)
+    assert verify_backup_dir(bdir)["manifest"]["db_schema_version"] == 4, "백업 파일 자체는 그대로 검증된다"
     dest = tmp_path / "newer-tool"
     rr = restore_backup(bdir, dest)
     assert rr.outcome == "completed", rr.to_text()
-    assert rr.db_schema_version == 4 and rr.dataset_version == 2 and rr.counts["records"] == 3 and rr.counts["schema_migrations"] == 4 and rr.photos == 2
+    assert rr.db_schema_version == 5 and rr.dataset_version == 2 and rr.counts["records"] == 3 and rr.counts["schema_migrations"] == 5 and rr.photos == 2
     with Db.open(dest / "db" / "j5.sqlite3") as rdb:
-        assert rdb.schema_version() == 4 and rdb.status()["counts"]["records"] == 3 and check_photos(rdb, dest)["ok_all"]
+        assert rdb.schema_version() == 5 and rdb.status()["counts"]["records"] == 3 and check_photos(rdb, dest)["ok_all"]
     # 백업 원본은 손대지 않았고(마이그레이션은 복구본에만), 도구가 백업보다 오래되면 복구를 거절한다
-    assert verify_backup_dir(bdir)["manifest"]["db_schema_version"] == 3
+    assert verify_backup_dir(bdir)["manifest"]["db_schema_version"] == 4
     monkeypatch.setattr(S, "MIGRATIONS", S.MIGRATIONS[:2])
     monkeypatch.setattr(S, "DB_SCHEMA_VERSION", 2)
     rr = restore_backup(bdir, tmp_path / "older-tool")

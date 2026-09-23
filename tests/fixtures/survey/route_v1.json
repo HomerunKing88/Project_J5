@@ -1,0 +1,32 @@
+{
+  "kind": "route_version",
+  "route": {
+    "route_id": "5b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d",
+    "name": "가상 경로 A",
+    "purpose": "가상 상권 점포 관찰 (시험용)"
+  },
+  "route_version_id": "9d2e6b1c-5f4a-4c3b-9e8d-7a6b5c4d3e2f",
+  "effective_from": "2026-09-20",
+  "previous_version_id": null,
+  "change_reason": null,
+  "segments": [
+    {
+      "segment_id": "S1",
+      "name": "가상역 출구 → 가상로 1",
+      "from": "가상역 4번 출구",
+      "to": "가상로 1"
+    },
+    {
+      "segment_id": "S2",
+      "name": "가상로 1 → 가상로 5",
+      "from": "가상로 1",
+      "to": "가상로 5"
+    },
+    {
+      "segment_id": "S3",
+      "name": "가상로 5 → 가상역",
+      "from": "가상로 5",
+      "to": "가상역"
+    }
+  ]
+}

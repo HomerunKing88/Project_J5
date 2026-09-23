@@ -18,4 +18,8 @@
 
 - `backup_manifest.schema.json`: 정본 백업 폴더의 `backup_manifest.json`. `dataset_version`·`db_schema_version`·`created_at`·테이블별 행 수와 파일 목록(`db/j5.sqlite3`·`photos/<sha 앞 2자>/<sha>.<ext>`)의 바이트·해시(데이터 사전 §12). 복구 후 이 값과 대조한다.
 
+## 파일 (survey_input 1.0, R2 J5-013A)
+
+- `survey_input.schema.json`: 조사 경로·점포·표본틀·세션 수동 입력 파일(`j5 db survey-apply`). `kind` 로 구분한 네 종류(route_version / units / frame_version / session). 점포 관측 상태는 `occupied / vacant / closed_today / lease_ad_only / not_visited / unclear` 이며 앞의 둘만 확인(K)이다(데이터 사전 §5).
+
 이벤트 해시는 파일에 있는 행의 UTF-8 바이트를 그대로 sha256 한 값이다. 재직렬화하지 않는다. 검증은 jsonschema(고정 버전, `requirements-dev.txt`) Draft 2020-12로 한다. 스키마와 데이터 사전이 충돌하면 PR을 완료하지 않는다.
