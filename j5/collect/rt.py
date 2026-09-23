@@ -52,6 +52,8 @@ class PageResult:
     fetched_at: str
     elapsed_ms: int = 0
     http_status: int | None = None
+    error_body_path: str | None = None  # HTTP 오류 응답 본문을 저장한 파일 (J5_DATA_HOME 기준). 포털의 거절 사유가 여기 있다
+    error_body: bytes | None = None
     bytes: int = 0
     sha256: str | None = None
     path: str | None = None            # J5_DATA_HOME 기준 상대경로
@@ -93,7 +95,7 @@ class RunResult:
         return {"run_id": self.run_id, "provider": self.provider, "endpoint": self.endpoint, "started_at": self.started_at, "finished_at": self.finished_at,
                 "lawd_cd": self.lawd_cd, "key_source": self.key_source, "run_path": self.run_path, "report_path": self.report_path,
                 "months": [{"lawd_cd": m.lawd_cd, "deal_ymd": m.deal_ymd, "outcome": m.outcome, "total_count": m.total_count, "items": m.items, "message": m.message,
-                            "pages": [p.__dict__ for p in m.pages]} for m in self.months]}
+                            "pages": [{k: v for k, v in p.__dict__.items() if k != "error_body"} for p in m.pages]} for m in self.months]}
 
     @property
     def ok(self) -> bool:
@@ -194,7 +196,13 @@ def fetch_page(url: str, key: str, *, opener=None, sleep=time.sleep) -> tuple[Pa
             break
         except HTTPError as e:
             pr.http_status = e.code
-            pr.outcome, pr.error = "http_error", redact(f"HTTP {e.code} {e.reason}", key)
+            # 게이트웨이(apis.data.go.kr)는 거절 사유를 4xx 본문에 담는다. 본문을 읽어 보관하고 사유를 뽑는다.
+            try:
+                body = e.read(MAX_RESPONSE_BYTES + 1) or b""
+            except Exception:  # noqa: BLE001 - 본문 없는 오류 응답
+                body = b""
+            pr.error_body = body[:MAX_RESPONSE_BYTES]
+            pr.outcome, pr.error = "http_error", redact(f"HTTP {e.code} {e.reason}" + (f" · 응답 사유: {_error_reason(body)}" if body else " · 응답 본문 없음"), key)
             data = None
             break
         except (URLError, TimeoutError, OSError) as e:
@@ -208,6 +216,34 @@ def fetch_page(url: str, key: str, *, opener=None, sleep=time.sleep) -> tuple[Pa
     pr.bytes = len(data)
     pr.sha256 = hashlib.sha256(data).hexdigest()
     return pr, data
+
+
+def _error_reason(body: bytes) -> str:
+    """오류 응답 본문에서 사람이 읽을 사유를 뽑는다. XML 이면 resultMsg/returnAuthMsg/errMsg, 아니면 태그를 뺀 앞부분 300자."""
+    text = body[:20000].decode("utf-8", errors="replace")
+    try:
+        parsed = parse_response(body)
+        if parsed["result_msg"] or parsed["result_code"]:
+            return f"{parsed['result_code'] or '?'} {parsed['result_msg'] or ''}".strip()
+    except CollectError:
+        pass
+    # XML 이 깨진 본문(예: 되비친 URL 의 & )도 태그 우선순위대로 사유를 찾는다
+    found = []
+    for tag in ("returnReasonCode", "resultCode"):
+        m = re.search(rf"<{tag}>([^<]{{1,40}})<", text)
+        if m:
+            found.append(m.group(1).strip())
+            break
+    for tag in ("returnAuthMsg", "resultMsg", "errMsg", "message", "msg"):
+        m = re.search(rf"<{tag}>([^<]{{1,300}})<", text)
+        if m:
+            found.append(m.group(1).strip())
+            break
+    if found:
+        return " ".join(found)
+    plain = re.sub(r"<[^>]+>", " ", text)
+    plain = re.sub(r"\s+", " ", plain).strip()
+    return plain[:300] or "(본문을 읽을 수 없음)"
 
 
 def _now() -> str:
@@ -238,6 +274,11 @@ def collect_months(data_home: Path, *, key: str, key_source: str, lawd_cd: str, 
             pr.page_no = page
             mr.pages.append(pr)
             if data is None:
+                if pr.error_body:
+                    epath = out_dir / f"p{page:03d}-{run.run_id}-http{pr.http_status}.txt"
+                    _write_new(epath, redact(pr.error_body.decode("utf-8", errors="replace"), key).encode("utf-8"))
+                    pr.error_body_path = epath.relative_to(data_home).as_posix()
+                pr.error_body = None
                 _log(log, f"{run.run_id} {lawd_cd} {deal_ymd} p{page} {pr.outcome} {pr.error}", key)
                 break
             path = out_dir / f"p{page:03d}-{run.run_id}.xml"
@@ -412,7 +453,7 @@ def run_text(run: RunResult) -> str:
         lines.append(f"  {m.deal_ymd[:4]}-{m.deal_ymd[4:]}: {m.outcome} · {m.message}")
         for p in m.pages:
             if p.outcome not in ("ok", "empty"):
-                lines.append(f"    p{p.page_no}: {p.outcome} {p.error or ''} (HTTP {p.http_status})")
+                lines.append(f"    p{p.page_no}: {p.outcome} {p.error or ''} (HTTP {p.http_status})" + (f" · 본문 {p.error_body_path}" if p.error_body_path else ""))
     lines.append(f"원본·기록: {run.run_path} · 요약: {run.report_path}")
     lines.append("이 수집은 정본 반영이 아니다. 요약(report)만 공유하고 원본 행·인증키는 보내지 않는다.")
     return "\n".join(lines) + "\n"

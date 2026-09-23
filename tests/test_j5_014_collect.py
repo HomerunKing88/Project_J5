@@ -51,6 +51,11 @@ class _Handler(BaseHTTPRequestHandler):
         page, rows = int(q.get("pageNo", 1)), int(q.get("numOfRows", 10))
         if sc["kind"] == "http_error":
             self.send_response(500); self.end_headers(); self.wfile.write(b"boom"); return
+        if sc["kind"] == "forbidden":
+            echoed = self.path.replace("%2B", "%2b").replace("%2F", "%2f").replace("%3D", "%3d")  # 게이트웨이가 부호화를 바꿔 되비치는 상황
+            body = (f"<OpenAPI_ServiceResponse><cmmMsgHeader><errMsg>SERVICE ERROR</errMsg><returnAuthMsg>SERVICE_KEY_IS_NOT_REGISTERED_ERROR for {echoed}</returnAuthMsg>"
+                    "<returnReasonCode>30</returnReasonCode></cmmMsgHeader></OpenAPI_ServiceResponse>").encode("utf-8")
+            self.send_response(403); self.send_header("Content-Type", "application/xml"); self.end_headers(); self.wfile.write(body); return
         if sc["kind"] == "api_error":
             data = xml_page([], 0, page, rows, code=sc.get("code", "30"), msg=sc.get("msg", "SERVICE_KEY_IS_NOT_REGISTERED_ERROR"))
         elif sc["kind"] == "garbage":
@@ -114,6 +119,12 @@ def test_config_parse_key_sources_permission_and_redaction(home, tmp_path, monke
     from urllib.parse import quote
     assert redact(f"k={quote(KEY, safe='')}", KEY) == "k=<redacted>", "부호화된 형태도 가린다"
     assert redact("nothing", None) == "nothing"
+    # 리뷰 반영(PR #44): 되비친 URL 이 부호화를 바꿔도(소문자 16진수, 다른 파라미터 이름 대소문자) 가려진다. 구조적 가림은 키를 몰라도 동작한다
+    enc_lower = quote(KEY, safe="").replace("%2B", "%2b").replace("%2F", "%2f").replace("%3D", "%3d")
+    assert enc_lower != quote(KEY, safe="")
+    assert redact(f"<msg>bad url /api?servicekey={enc_lower}&x=1</msg>", KEY) == "<msg>bad url /api?servicekey=<redacted>&x=1</msg>"
+    assert redact(f"key seen: {enc_lower} end", KEY) == "key seen: <redacted> end", "파라미터 밖에 있어도 소문자 16진수 형태를 가린다"
+    assert redact(f"a?serviceKey={KEY}&b", None) == "a?serviceKey=<redacted>&b", "키를 모를 때도 파라미터 값은 가린다"
 
 
 def test_url_building_and_input_validation():
@@ -170,8 +181,9 @@ def test_collect_paginates_and_classifies_months(server, home):
         "201504": {"kind": "doctype"},
         "201505": {"kind": "short_pages", "items": [item(0)], "claimed_total": 9},
         "201506": {"kind": "no_total", "items": [item(0), item(1)]},
+        "201507": {"kind": "forbidden"},
     }
-    months = ["202608", "202109", "200603", "201501", "201502", "201503", "201504", "201505", "201506"]
+    months = ["202608", "202109", "200603", "201501", "201502", "201503", "201504", "201505", "201506", "201507"]
     run = collect_months(home, key=KEY, key_source="test", lawd_cd="11110", months=months, endpoint=server, num_rows=3, max_pages=10, sleep=lambda s: None)
     by = {m.deal_ymd: m for m in run.months}
     assert (by["202608"].outcome, by["202608"].items, by["202608"].total_count, len(by["202608"].pages)) == ("complete", 7, 7, 3)
@@ -183,6 +195,15 @@ def test_collect_paginates_and_classifies_months(server, home):
     assert by["201504"].outcome == "failed" and "DOCTYPE" in by["201504"].pages[0].error
     assert by["201505"].outcome == "partial" and "페이지 누락" in by["201505"].message and by["201505"].items == 1
     assert by["201506"].outcome == "partial" and "totalCount" in by["201506"].message and by["201506"].items == 2, "totalCount 없으면 complete 로 인증하지 않는다"
+    # 403 같은 HTTP 오류는 본문의 사유를 결과에 보이고 본문을 파일로 남긴다 (키는 가림)
+    f = by["201507"].pages[0]
+    assert f.outcome == "http_error" and f.http_status == 403 and "SERVICE_KEY_IS_NOT_REGISTERED_ERROR" in f.error and "30" in f.error and KEY not in f.error
+    assert f.error_body_path and f.error_body_path.endswith("-http403.txt") and f.error_body is None
+    saved = (home / f.error_body_path).read_text(encoding="utf-8")
+    assert "SERVICE_KEY_IS_NOT_REGISTERED_ERROR" in saved and KEY not in saved and "<redacted>" in saved
+    from urllib.parse import quote as _q
+    assert _q(KEY, safe="").lower() not in saved.lower() and "serviceKey=<redacted>" in saved, "부호화가 바뀐 되비침도 가려진다"
+    assert by["201502"].pages[0].error.endswith("응답 사유: boom") and by["201502"].pages[0].error_body_path
     assert not run.ok
     # 되비친 URL 이 든 오류 문구에도 키가 없다 (결과 객체·화면 출력·JSON)
     assert KEY not in (by["201503"].pages[0].error or "") and "<redacted>" in by["201503"].pages[0].error
@@ -191,6 +212,7 @@ def test_collect_paginates_and_classifies_months(server, home):
     # 원본 파일·기록·요약·로그가 있고 어디에도 키가 없다
     raw = home / "raw" / "rt_nrg" / "11110"
     assert len(list((raw / "202608").glob("p*.xml"))) == 3 and (raw / "201502").is_dir() and not list((raw / "201502").glob("p*.xml"))
+    assert rt.list_runs(home, "11110", "201507") == [], "오류 본문 파일은 원본 실행 목록에 들어가지 않는다"
     run_doc = json.loads((home / run.run_path).read_text(encoding="utf-8"))
     assert run_doc["provider"] == rt.PROVIDER and run_doc["endpoint"] == server and run_doc["months"][0]["pages"][0]["url_redacted"].count("<redacted>") == 1
     for p in [home / run.run_path, home / run.report_path, home / "logs" / "collect.log"]:

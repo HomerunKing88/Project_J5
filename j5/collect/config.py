@@ -77,13 +77,33 @@ def service_key(data_home: Path | None, *, config_path: Path | None = None) -> t
     return key, str(p)
 
 
+def _percent_insensitive_pattern(encoded: str) -> str:
+    """퍼센트 부호화 문자열을 16진수 대소문자 구분 없이 맞추는 정규식 (게이트웨이가 %2B 를 %2b 로 되비치는 경우)."""
+    import re
+    out = []
+    i = 0
+    while i < len(encoded):
+        if encoded[i] == "%" and i + 2 < len(encoded) and all(c in "0123456789abcdefABCDEF" for c in encoded[i + 1:i + 3]):
+            h1, h2 = encoded[i + 1], encoded[i + 2]
+            out.append(f"%[{h1.lower()}{h1.upper()}][{h2.lower()}{h2.upper()}]")
+            i += 3
+        else:
+            out.append(re.escape(encoded[i]))
+            i += 1
+    return "".join(out)
+
+
 def redact(text: str, key: str | None) -> str:
-    """로그·결과에 키가 섞이지 않게 한다. 원문 키와 퍼센트 부호화 형태 모두 가린다."""
-    if not key:
-        return text
+    """로그·결과에 키가 섞이지 않게 한다.
+    1) 구조적으로: `serviceKey=` 파라미터 값은 무엇이든 가린다 (되비친 URL 이 부호화를 바꿔도 잡힌다).
+    2) 값으로: 원문 키, 퍼센트 부호화 형태(16진수 대소문자 무관), 복호화 형태를 모두 가린다."""
+    import re
     from urllib.parse import quote, unquote
-    out = text.replace(key, "<redacted>")
-    for variant in {quote(key, safe=""), unquote(key)}:
-        if variant and variant != key:
-            out = out.replace(variant, "<redacted>")
+    out = re.sub(r"(?i)(servicekey=)[^&\s\"'<>]+", r"\1<redacted>", text)
+    if not key:
+        return out
+    variants = {key, unquote(key), quote(key, safe=""), quote(unquote(key), safe="")}
+    for v in sorted((v for v in variants if v), key=len, reverse=True):
+        pat = _percent_insensitive_pattern(v) if "%" in v else re.escape(v)
+        out = re.sub(pat, "<redacted>", out)
     return out
