@@ -1,8 +1,9 @@
-// IndexedDB 저장소. 스토어: meta(설정), assets(시드 물건), events(관측: 객체 + 고정 바이트), photos(sha256 → Blob).
-// 저장 실패(용량 부족 등)는 예외로 올려 화면이 '저장됨'으로 오표시하지 않게 한다. 자동 삭제는 없다.
+// IndexedDB 저장소. 스토어: meta(설정), assets(시드 물건), events(관측: 객체 + 고정 바이트), photos(sha256 → Blob),
+// parcels(필지 번들 한 벌, v2·J5-013B-1). 저장 실패(용량 부족 등)는 예외로 올려 화면이 '저장됨'으로 오표시하지 않게 한다. 자동 삭제는 없다.
 
 export const DB_NAME = "j5";
-export const DB_VERSION = 1;
+export const DB_VERSION = 2;
+const PARCELS_KEY = "active";
 
 function req(r) {
   return new Promise((resolve, reject) => {
@@ -31,6 +32,7 @@ export async function openDb() {
       s.createIndex("by_saved", "saved_at");
     }
     if (!db.objectStoreNames.contains("photos")) db.createObjectStore("photos", { keyPath: "sha256" });
+    if (!db.objectStoreNames.contains("parcels")) db.createObjectStore("parcels");
   };
   return req(r);
 }
@@ -68,6 +70,23 @@ export class Store {
 
   async getAsset(id) {
     return req(this.db.transaction("assets").objectStore("assets").get(id));
+  }
+
+  /** 필지 번들을 통째로 교체한다 (한 벌만 둔다). events·photos·assets 는 건드리지 않는다. */
+  async replaceParcels(bundle, source) {
+    const tx = this.db.transaction("parcels", "readwrite");
+    tx.objectStore("parcels").put({ bundle, source, loaded_at: new Date().toISOString() }, PARCELS_KEY);
+    await done(tx);
+  }
+
+  async getParcels() {
+    return req(this.db.transaction("parcels").objectStore("parcels").get(PARCELS_KEY));
+  }
+
+  async clearParcels() {
+    const tx = this.db.transaction("parcels", "readwrite");
+    tx.objectStore("parcels").delete(PARCELS_KEY);
+    await done(tx);
   }
 
   /** 관측과 사진을 한 트랜잭션으로 저장. 실패하면 아무것도 남지 않는다. */

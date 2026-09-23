@@ -6,12 +6,13 @@ import { uuid4, isUuid } from "./uuid.js";
 import { isoWithOffset, fromDatetimeLocal, toDatetimeLocal, localDate } from "./time.js";
 import { buildEvent, validateEvent, lineBytes, PHOTO_TAGS, PHOTO_TAG_LABEL, CHANGE_STATUS_LABEL, PHOTO_LIMIT } from "./event.js";
 import { validateSeed } from "./seed.js";
+import { validateParcels, assetsInParcel, parcelTitle, fmtArea } from "./parcels.js";
 import { selectRecords, planBatches, buildPackage, hasRemainingBatches, studyIdError } from "./export.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
 export const APP_VERSION = "0.1.0";
 const $ = (id) => document.getElementById(id);
-const state = { store: null, assets: [], target: null, photos: [], saving: false, export: null, map: null };
+const state = { store: null, assets: [], target: null, photos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0 };
 
 function text(el, value, cls) {
   el.textContent = value;
@@ -100,12 +101,87 @@ async function renderAssets() {
   await refreshStatus();
 }
 
+// ---- 필지 (J5-013B-1, ADR-13) ----
+// 필지 번들은 지도의 보조 층이다. 없거나 실패해도 목록·기록·내보내기는 그대로 동작한다.
+async function loadParcelsObject(doc, source) {
+  const errs = validateParcels(doc);
+  if (errs.length) return text($("parcels-note"), "필지 파일 오류: " + errs.slice(0, 5).join("; ") + (errs.length > 5 ? ` 외 ${errs.length - 5}건` : ""), "bad");
+  await state.store.replaceParcels(doc, source);
+  applyParcels({ bundle: doc, source });
+}
+
+function applyParcels(rec) {
+  state.parcels = rec?.bundle ?? null;
+  state.parcelsCount = state.parcels?.features.length ?? 0;
+  closeParcelPanel();
+  mapCall((m) => m.setParcels(state.parcels));
+  parcelsNote(rec);
+  mapCall((m) => mapNote(m.setAssets(state.assets)));
+}
+
+function parcelsNote(rec) {
+  if (!rec) return text($("parcels-note"), "필지 없음. 지도에는 위치점만 보인다.", "muted");
+  const b = rec.bundle, s = b.source;
+  const crs = s.crs?.epsg ? `EPSG:${s.crs.epsg}` : (s.crs?.name ?? "?");
+  text($("parcels-note"), `필지 ${b.features.length}개 (${b.data_mode}) · ${s.name} · 도형 기준일 ${s.geometry_version} · ${crs} · 이용허락 ${s.license ?? "미확인"} · ${rec.source}` +
+    (b.warnings?.length ? ` · 경고 ${b.warnings.length}건 (변환 로그 참조)` : ""), b.data_mode === "synthetic" ? "muted" : "ok");
+}
+
+async function loadSyntheticParcels() {
+  try {
+    const res = await fetch("data/parcels.synthetic.j5parcels.json", { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await loadParcelsObject(await res.json(), "bundled_synthetic");
+  } catch (e) {
+    text($("parcels-note"), "가상 필지를 읽지 못함: " + e, "bad");
+  }
+}
+
+async function loadParcelsFile(input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  try {
+    await loadParcelsObject(JSON.parse(await file.text()), "file:" + file.name);
+  } catch (e) {
+    text($("parcels-note"), "필지 파일 해석 실패: " + e, "bad");
+  }
+  input.value = "";
+}
+
+async function clearParcels() {
+  await state.store.clearParcels();
+  applyParcels(null);
+}
+
+function showParcel(feature) {
+  const p = feature.properties;
+  mapCall((m) => m.selectParcel(feature.id));
+  $("parcel-title").textContent = parcelTitle(p);
+  $("parcel-mode").textContent = state.parcels?.data_mode === "synthetic" ? "가상 필지" : "연속지적도";
+  $("parcel-pnu").textContent = feature.id;
+  const src = state.parcels?.source;
+  $("parcel-meta").textContent = `도형면적 ${fmtArea(p.area_m2_geom, p.area_missing_reason)} (공부면적 아님)` + (p.jimok ? ` · 지목 ${p.jimok}` : "") + (p.jibun_mismatch ? " · 원본 지번과 PNU 불일치" : "") +
+    (src ? ` · ${src.name} ${src.geometry_version}` : "");
+  const inside = assetsInParcel(feature, state.assets);
+  $("parcel-assets").replaceChildren(...inside.map((a) => el("li", {},
+    el("span", { text: a.label }), el("span", { class: "badge", text: a.data_mode }),
+    el("button", { text: "관측 기록", onclick: () => startObservation(a) }),
+  )));
+  if (!inside.length) $("parcel-assets").append(el("li", { class: "muted", text: "이 필지 안에 위치점 있는 물건이 없다. PC 에서 시드에 추가한 뒤 다시 불러온다." }));
+  $("parcel-panel").hidden = false;
+}
+
+function closeParcelPanel() {
+  $("parcel-panel").hidden = true;
+  mapCall((m) => m.selectParcel(null));
+}
+
 // ---- 지도 (J5-005) ----
 // 지도는 보조 화면이다. 모듈을 못 읽거나 만들거나 갱신하다 실패하면 안내만 남기고 목록·기록·내보내기는 그대로 동작한다.
 async function initMap() {
   try {
     const { createMap } = await import("./map.js");
-    state.map = createMap($("map-svg"), { onSelect: startObservation });
+    state.map = createMap($("map-svg"), { onSelect: startObservation, onSelectParcel: showParcel });
     $("map-zoom-in").addEventListener("click", () => mapCall((m) => m.zoomBy(2)));
     $("map-zoom-out").addEventListener("click", () => mapCall((m) => m.zoomBy(0.5)));
     $("map-fit").addEventListener("click", () => mapCall((m) => m.fit()));
@@ -127,11 +203,12 @@ function mapCall(fn) {
 
 function mapNote(c) {
   if (!c) return;
-  if (c.total === 0) return text($("map-note"), "", "muted");
-  if (c.located === 0) return text($("map-note"), "위치점 있는 물건이 없다. 목록에서 선택한다", "muted");
+  const parcels = state.parcelsCount ? ` · 필지 ${state.parcelsCount}개` : "";
+  if (c.total === 0) return text($("map-note"), parcels ? `물건 없음${parcels}` : "", "muted");
+  if (c.located === 0) return text($("map-note"), `위치점 있는 물건이 없다. 목록에서 선택한다${parcels}`, "muted");
   let msg = `위치점 ${c.located}개 표시 (가상 ${c.synthetic} · 실제 ${c.privateReal})`;
   if (c.unlocated > 0) msg += ` · 위치점 없는 물건 ${c.unlocated}개 (목록에서 선택)`;
-  text($("map-note"), msg, "muted");
+  text($("map-note"), msg + parcels, "muted");
 }
 
 // ---- 관측 ----
@@ -401,12 +478,23 @@ async function main() {
   }
   await loadSettings();
   await initMap();
+  try {
+    const rec = await state.store.getParcels();
+    if (rec) { state.parcels = rec.bundle; state.parcelsCount = rec.bundle.features.length; mapCall((m) => m.setParcels(rec.bundle)); }
+    parcelsNote(rec ?? null);
+  } catch (e) {
+    text($("parcels-note"), "저장된 필지를 읽지 못함: " + (e?.message || e), "bad");
+  }
   await renderAssets();
   await renderRecords();
   await renderExportHistory();
   $("save-settings").addEventListener("click", saveSettings);
   $("load-synthetic").addEventListener("click", loadSyntheticSeed);
   $("seed-file").addEventListener("change", (e) => loadSeedFile(e.target));
+  $("load-synthetic-parcels").addEventListener("click", loadSyntheticParcels);
+  $("parcels-file").addEventListener("change", (e) => loadParcelsFile(e.target));
+  $("clear-parcels").addEventListener("click", clearParcels);
+  $("parcel-close").addEventListener("click", closeParcelPanel);
   $("photos").addEventListener("change", (e) => addPhotos(e.target));
   $("save-observation").addEventListener("click", saveObservation);
   $("cancel-observation").addEventListener("click", () => { $("sec-observe").hidden = true; state.target = null; mapCall((m) => m.select(null)); });

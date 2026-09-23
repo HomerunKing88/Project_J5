@@ -1,4 +1,5 @@
-"""j5 명령줄. inspect(패키지 검사), copy(독립 사본), db(정본 SQLite: init/status/load-seed/import/project/backup/restore/check-photos/survey-*).
+"""j5 명령줄. inspect(패키지 검사), copy(독립 사본), db(정본 SQLite: init/status/load-seed/import/project/backup/restore/check-photos/survey-*),
+parcels(연속지적도 SHP → 필지 번들: inspect/convert).
 
 종료 코드: 0 ok·반영·중복 / 1 reject·실패 / 2 hold·보류 / 3 사용 오류.
 """
@@ -21,6 +22,7 @@ from j5.db.survey import apply_input, compare, compare_text, load_input, overvie
 from j5.db.validate import ValidationError
 from j5.package.preserve import PreserveError, copy_package
 from j5.package.validate import inspect_package
+from j5.parcels.convert import Clip, ConvertError, ConvertOptions, convert, convert_text, inspect_source, inspect_text, write_bundle
 from j5.schemas_loader import schema_errors
 
 EXIT = {"ok": 0, "reject": 1, "hold": 2}
@@ -91,6 +93,33 @@ def _build_parser() -> argparse.ArgumentParser:
     sc.add_argument("--json", action="store_true")
     so = dsub.add_parser("survey-overview", help="경로·표본틀·세션·점포 현황")
     so.add_argument("--json", action="store_true")
+
+    pa = sub.add_parser("parcels", help="필지 경계·지번 (ADR-13): 연속지적도 SHP → 폰 지도용 번들(.j5parcels.json)")
+    psub = pa.add_subparsers(dest="parcels_command", required=True)
+    pi = psub.add_parser("inspect", help="SHP(.shp 또는 ZIP)의 필드·레코드 수·좌표계·WGS84 범위·표본 레코드를 보여준다 (변환 전 확인)")
+    pi.add_argument("source", type=Path)
+    pi.add_argument("--crs", help=".prj 가 없거나 못 읽을 때 EPSG:5186 형식으로 지정")
+    pi.add_argument("--encoding", help=".dbf 문자 인코딩 (기본 .cpg 또는 cp949)")
+    pi.add_argument("--layer", help="ZIP 안에 .shp 가 여럿일 때 기본 이름")
+    pi.add_argument("--json", action="store_true")
+    pc = psub.add_parser("convert", help="조사 범위의 필지만 WGS84 GeoJSON 번들로 만든다 (원본은 수정하지 않음, 출력은 덮어쓰지 않음)")
+    pc.add_argument("source", type=Path)
+    pc.add_argument("--out", type=Path, required=True, help="출력 파일 (<이름>.j5parcels.json). 실데이터 홈 안에 둔다")
+    pc.add_argument("--geometry-version", required=True, help="도형 기준일 YYYY-MM-DD (배포 자료의 기준 시점)")
+    pc.add_argument("--source-name", required=True, help="자료명 (예: '연속지적도 서울특별시 종로구')")
+    pc.add_argument("--bbox", help="WGS84 minlon,minlat,maxlon,maxlat")
+    pc.add_argument("--center", help="WGS84 lon,lat (--radius-m 과 함께)")
+    pc.add_argument("--radius-m", type=float, help="중심에서의 반경(m)")
+    pc.add_argument("--crs", help=".prj 가 없거나 못 읽을 때 EPSG:5186 형식으로 지정")
+    pc.add_argument("--encoding", help=".dbf 문자 인코딩 (기본 .cpg 또는 cp949)")
+    pc.add_argument("--layer", help="ZIP 안에 .shp 가 여럿일 때 기본 이름")
+    pc.add_argument("--license", help="이용허락 유형·출처 표시 문구 (확인한 값만)")
+    pc.add_argument("--emd-name", action="append", default=[], metavar="CODE=이름", help="법정동 코드(10자리)→이름. 반복 가능")
+    pc.add_argument("--pnu-field", help="PNU 필드 이름 (기본 PNU)")
+    pc.add_argument("--jibun-field", help="지번 필드 이름 (기본 JIBUN)")
+    pc.add_argument("--max-features", type=int, default=8000, help="범위 안 필지 상한 (기본이자 최대 8000, 번들 계약과 같다)")
+    pc.add_argument("--synthetic", action="store_true", help="가상자료 표시 (data_mode synthetic)")
+    pc.add_argument("--json", action="store_true")
     return p
 
 
@@ -267,6 +296,46 @@ def _db_offline(args) -> int:
     return BACKUP_EXIT[r.outcome]
 
 
+def _parcels_main(args) -> int:
+    try:
+        if args.parcels_command == "inspect":
+            r = inspect_source(args.source, crs_arg=args.crs, encoding=args.encoding, layer=args.layer)
+            sys.stdout.write(json.dumps(r, ensure_ascii=False, indent=2) + "\n" if args.json else inspect_text(r))
+            return 0 if r["crs"] else 1
+        if args.parcels_command == "convert":
+            if args.bbox and (args.center or args.radius_m is not None):
+                print("--bbox 와 --center/--radius-m 은 함께 쓰지 않는다", file=sys.stderr)
+                return USAGE_ERROR
+            if args.bbox:
+                clip = Clip.from_bbox(args.bbox)
+            elif args.center and args.radius_m is not None:
+                clip = Clip.from_center(args.center, args.radius_m)
+            else:
+                print("범위가 필요하다: --bbox 또는 --center 와 --radius-m", file=sys.stderr)
+                return USAGE_ERROR
+            emd = {}
+            for item in args.emd_name:
+                code, sep, name = item.partition("=")
+                if not sep or len(code) != 10 or not code.isdigit() or not name:
+                    print(f"--emd-name 은 10자리코드=이름 형식: {item!r}", file=sys.stderr)
+                    return USAGE_ERROR
+                emd[code] = name
+            opts = ConvertOptions(clip=clip, geometry_version=args.geometry_version, source_name=args.source_name, crs_arg=args.crs, encoding=args.encoding,
+                                  license=args.license, emd_names=emd, pnu_field=args.pnu_field, jibun_field=args.jibun_field, max_features=args.max_features,
+                                  data_mode="synthetic" if args.synthetic else "real", layer=args.layer)
+            bundle = convert(args.source, opts)
+            written = write_bundle(bundle, args.out)
+            if args.json:
+                print(json.dumps({"written": written, "count": bundle["count"], "stats": bundle["stats"], "warnings": bundle["warnings"], "source": bundle["source"], "clip": bundle["clip"]}, ensure_ascii=False, indent=2))
+            else:
+                sys.stdout.write(convert_text(bundle, written))
+            return 0
+    except ConvertError as e:
+        print(f"필지 변환 실패 [{e.code}]: {e.message}", file=sys.stderr)
+        return 1
+    return USAGE_ERROR
+
+
 def _load_seed(path: Path) -> list[dict] | None:
     if not path.is_file():
         print(f"시드 파일이 없음: {path}", file=sys.stderr)
@@ -324,4 +393,6 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "db":
         return _db_main(args)
+    if args.command == "parcels":
+        return _parcels_main(args)
     return USAGE_ERROR

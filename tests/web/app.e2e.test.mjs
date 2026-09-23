@@ -1,5 +1,5 @@
 // 브라우저 e2e (J5-006). 헤드리스 Chromium 을 CDP 로 구동한다. 브라우저가 없으면 건너뛴다.
-// 흐름: 설정 → 가상 시드 → 관측 저장(사진 포함) → 재접속 후 목록 유지 → 오프라인 재접속(서비스 워커) →
+// 흐름: 설정 → 가상 시드 → 지도(마커·필지 경계·지번) → 관측 저장(사진 포함) → 재접속 후 목록·필지 유지 → 오프라인 재접속(서비스 워커) →
 //       IndexedDB 내용을 패키지 폴더로 꺼내 `python -m j5 inspect` 가 ok 를 내는지 확인.
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -177,6 +177,59 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.clickRect("#map-fit");
     const pos2 = await cdp.eval(MARKER_POS);
     for (let i = 0; i < pos0.length; i++) { assert.ok(Math.abs(pos2[i][1] - pos0[i][1]) < 0.5 && Math.abs(pos2[i][2] - pos0[i][2]) < 0.5, "전체 보기로 복귀"); }
+    // 필지 (J5-013B-1, ADR-13): 가상 필지 6개 → 경계 6개·안내, 필지 탭 → 지번·PNU·도형면적·안의 물건 → 관측, 물건 없는 필지, 라벨은 확대 정도에 따라, 마커 탭은 그대로 물건
+    await cdp.eval("document.getElementById('load-synthetic-parcels').click(); 'ok'");
+    await cdp.waitFor("document.querySelectorAll('#map-svg path.parcel').length === 6");
+    assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /필지 6개 \(synthetic\) · 가상 연속지적도 \(synthetic\) · 도형 기준일 2026-09-01 · EPSG:5186/);
+    assert.match(await cdp.eval("document.getElementById('map-note').textContent"), /위치점 4개 표시 .* · 필지 6개$/);
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel.synthetic').length"), 6, "가상 필지는 점선");
+    const VISIBLE_LABELS = "Array.from(document.querySelectorAll('#map-svg text.parcel-label')).filter(t => t.getAttribute('visibility') === 'visible').map(t => t.textContent)";
+    const labels0 = await cdp.eval(VISIBLE_LABELS);
+    assert.ok(labels0.includes("1"), `전체 보기에서 넓은 필지의 지번은 보인다: ${labels0}`);
+    // 필지 1: 물건 1 이 서쪽 끝에 있어 필지 중심 탭은 마커(반지름 18px)가 아니라 필지에 닿는다
+    await cdp.clickRect('#map-svg path.parcel[data-pnu="9999900100100010000"]');
+    await cdp.waitFor("!document.getElementById('parcel-panel').hidden");
+    assert.equal(await cdp.eval("document.getElementById('parcel-title').textContent"), "가상동 1");
+    assert.equal(await cdp.eval("document.getElementById('parcel-pnu').textContent"), "9999900100100010000");
+    assert.match(await cdp.eval("document.getElementById('parcel-meta').textContent"), /^도형면적 1764\.9 ㎡ \(공부면적 아님\) · 지목 대 · 가상 연속지적도 \(synthetic\) 2026-09-01$/);
+    assert.deepEqual(await cdp.eval("Array.from(document.querySelectorAll('#parcel-assets li')).map(li => li.firstChild.textContent)"), ["가상 물건 1"], "필지 안의 물건");
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel.sel').length"), 1);
+    await cdp.eval("document.querySelector('#parcel-assets li button').click(); 'ok'");
+    await cdp.waitFor("!document.getElementById('sec-observe').hidden");
+    assert.equal(await cdp.eval("document.getElementById('target-label').textContent"), "가상 물건 1", "필지 패널에서 관측 시작");
+    await cdp.eval("document.getElementById('cancel-observation').click(); 'ok'");
+    await cdp.waitFor("document.getElementById('sec-observe').hidden");
+    // 물건 없는 필지 (구멍 있는 4-2): 안내만
+    await cdp.clickRect('#map-svg path.parcel[data-pnu="9999900100100040002"]');
+    await cdp.waitFor("document.getElementById('parcel-title').textContent === '가상동 4-2'");
+    assert.match(await cdp.eval("document.getElementById('parcel-assets').textContent"), /위치점 있는 물건이 없다/);
+    assert.ok((await cdp.eval(VISIBLE_LABELS)).includes("4-2"), "선택한 필지의 지번은 항상 보인다");
+    await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
+    await cdp.waitFor("document.getElementById('parcel-panel').hidden && document.querySelectorAll('#map-svg path.parcel.sel').length === 0");
+    // 라벨: 확대하면 늘거나 같고, 32배 축소하면 모두 숨는다. 경계 path 는 그대로 6개
+    await cdp.clickRect("#map-zoom-in"); await cdp.clickRect("#map-zoom-in");
+    const labels1 = await cdp.eval(VISIBLE_LABELS);
+    assert.ok(labels1.length >= labels0.length, `확대 후 라벨 ${labels1} ≥ ${labels0}`);
+    for (let i = 0; i < 7; i++) await cdp.clickRect("#map-zoom-out");
+    assert.deepEqual(await cdp.eval(VISIBLE_LABELS), [], "축소하면 지번 숨김");
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel').length"), 6);
+    await cdp.clickRect("#map-fit");
+    await cdp.clickRect('#map-svg g.pt[data-asset-id="7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a51"] .hit');
+    await cdp.waitFor("!document.getElementById('sec-observe').hidden");
+    assert.equal(await cdp.eval("document.getElementById('target-label').textContent"), "가상 물건 2", "필지 위의 마커 탭은 물건 선택");
+    await cdp.eval("document.getElementById('cancel-observation').click(); 'ok'");
+    // 잘못된 필지 파일은 거절되고 기존 필지가 남는다. 올바른 파일(기기 파일)은 출처 표시가 바뀐다
+    const parcelsFixture = readFileSync(join(ROOT, "tests/fixtures/parcels/synthetic.j5parcels.json"), "utf8");
+    const parcelsBad = join(tmp, "parcels-bad.json");
+    writeFileSync(parcelsBad, JSON.stringify({ ...JSON.parse(parcelsFixture), count: 1 }));
+    await cdp.setFiles("#parcels-file", [parcelsBad]);
+    await cdp.waitFor("document.getElementById('parcels-note').textContent.includes('필지 파일 오류')");
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel').length"), 6);
+    const parcelsFile = join(tmp, "jongno.j5parcels.json");
+    writeFileSync(parcelsFile, parcelsFixture);
+    await cdp.setFiles("#parcels-file", [parcelsFile]);
+    await cdp.waitFor("document.getElementById('parcels-note').textContent.includes('file:jongno.j5parcels.json')");
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel').length"), 6);
     // 관측 (사진 1장, 태그 1개)
     const photo = join(tmp, "front.png");
     writeFileSync(photo, png1x1([0, 128, 255]));
@@ -231,6 +284,8 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.waitFor("document.querySelectorAll('#record-list li').length === 1");
     assert.ok((await cdp.eval("document.getElementById('status-line').textContent")).includes("관측 1"));
     await cdp.waitFor("document.querySelectorAll('#map-svg g.pt').length === 4");
+    await cdp.waitFor("document.querySelectorAll('#map-svg path.parcel').length === 6");
+    assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /필지 6개/, "재접속 후 필지 유지 (IndexedDB)");
     // 지도 실패 시 목록: SVG 요소 생성만 막아(저장소에서 createElementNS 는 map.js 만 쓴다) 지도가 못 뜨는 상황을 만든다.
     // 앱은 안내만 남기고 목록·기록은 그대로여야 하며 콘솔 오류를 내지 않아야 한다.
     const { identifier: stub } = await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `
@@ -241,6 +296,8 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     assert.match(await cdp.eval("document.getElementById('map-note').textContent"), /지도 표시 불가: e2e: SVG 생성 불가\. 목록에서 선택한다/);
     await cdp.waitFor("document.querySelectorAll('#asset-list li button').length === 5");
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.pt').length"), 0);
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel').length"), 0);
+    assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /필지 6개/, "지도 실패해도 필지 안내는 남는다");
     assert.equal(await cdp.eval("document.querySelectorAll('#record-list li').length"), 1, "지도 실패해도 기록 목록 유지");
     await cdp.eval("document.querySelectorAll('#asset-list li button')[2].click(); 'ok'");
     await cdp.waitFor("!document.getElementById('sec-observe').hidden");
@@ -251,6 +308,14 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.navigate(`${base}/index.html`);
     await cdp.waitFor("document.querySelectorAll('#map-svg g.pt').length === 4");
     await cdp.waitFor("document.querySelectorAll('#record-list li').length === 1");
+    // 필지 제거 → 경계 0개·안내, 다시 가상 필지
+    await cdp.waitFor("document.querySelectorAll('#map-svg path.parcel').length === 6");
+    await cdp.eval("document.getElementById('clear-parcels').click(); 'ok'");
+    await cdp.waitFor("document.querySelectorAll('#map-svg path.parcel').length === 0");
+    assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /필지 없음/);
+    assert.doesNotMatch(await cdp.eval("document.getElementById('map-note').textContent"), /필지/);
+    await cdp.eval("document.getElementById('load-synthetic-parcels').click(); 'ok'");
+    await cdp.waitFor("document.querySelectorAll('#map-svg path.parcel').length === 6");
     // 내보내기: 묶음 준비 → 파일 저장(다운로드) → j5 inspect ok → 저장 확인 → 내보냄 표시
     const dl = join(tmp, "dl"); mkdirSync(dl);
     await cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: dl, eventsEnabled: true });
@@ -311,7 +376,7 @@ print(json.dumps({"same_obs": h(a) == h(b), "same_pkg": ma["package_id"] == mb["
     assert.ok((await cdp.eval("document.getElementById('status-line').textContent")).includes("관측 1"));
     // IndexedDB 내용을 패키지 폴더로 꺼내 PC 검사기로 확인
     const dump = await cdp.eval(`(async () => {
-      const db = await new Promise((res, rej) => { const r = indexedDB.open('j5', 1); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+      const db = await new Promise((res, rej) => { const r = indexedDB.open('j5'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
       const all = (s) => new Promise((res, rej) => { const r = db.transaction(s).objectStore(s).getAll(); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
       const events = await all('events'); const photos = await all('photos');
       const b64 = async (blob) => { const buf = new Uint8Array(await blob.arrayBuffer()); let s = ''; for (const x of buf) s += String.fromCharCode(x); return btoa(s); };

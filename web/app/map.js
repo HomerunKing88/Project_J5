@@ -1,6 +1,10 @@
-// 최소 지도 (J5-005, ADR-12): 자체 SVG 점 지도. Web Mercator 투영으로 위치점(location_point)만 그린다.
+// 최소 지도 (J5-005, ADR-12): 자체 SVG 점 지도. Web Mercator 투영으로 위치점(location_point)을 그린다.
+// J5-013B-1 (ADR-13): 필지 번들(.j5parcels.json)의 경계 폴리곤과 지번 라벨을 점 아래 층에 그린다.
 // 배경 타일·외부 통신 없음. 위 순수 함수는 DOM 없이 단위 테스트하고, createMap 만 SVG 를 만진다.
-// 화면 좌표 = 세계 좌표(0~1) × scale + (tx, ty). 마커는 픽셀 단위라 확대해도 크기가 변하지 않는다.
+// 화면 좌표 = 세계 좌표(0~1) × scale + (tx, ty). 마커·라벨은 픽셀 단위라 확대해도 크기가 변하지 않는다.
+// 필지 경로는 번들 중심 기준 로컬 단위(세계 좌표 × PARCEL_LOCAL_K)로 한 번만 만들고, 이동·확대는 그룹 transform 으로 처리한다.
+
+import { labelPoint as labelPointOf } from "./parcels.js";
 
 export const WORLD_METERS = 40075016.686; // WGS84 적도 둘레
 export const MIN_SCALE = 256; // z0: 세계 전체 = 256px
@@ -9,7 +13,9 @@ export const FIT_MAX_SCALE = 256 * 2 ** 17; // 점 하나·극소 범위일 때�
 export const FIT_PAD = 40; // 전체 보기 여백(px). 라벨이 오른쪽으로 뻗는다.
 export const MAX_LAT = 85.05112878;
 export const SCALE_STEPS = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000];
-const DOT_R = 7, DOT_R_SEL = 10, HIT_R = 18, TAP_PX = 6, LABEL_MAX = 12;
+export const PARCEL_LOCAL_K = 2 ** 28; // 로컬 단위: 세계 좌표 1 = 2^28 단위 (북위 37.6° 에서 약 0.12 m)
+export const PARCEL_LABEL_MIN_PX = 24; // 필지의 화면 폭이 이보다 작으면 지번 라벨을 숨긴다
+const DOT_R = 7, DOT_R_SEL = 10, HIT_R = 18, TAP_PX = 6, LABEL_MAX = 12, LABEL_CHAR_PX = 7, VIEW_MARGIN = 40;
 
 export function mercator([lon, lat]) {
   const la = (Math.max(-MAX_LAT, Math.min(MAX_LAT, lat)) * Math.PI) / 180;
@@ -78,11 +84,37 @@ export function shortLabel(label, max = LABEL_MAX) {
   return cps.length > max ? cps.slice(0, max).join("") + "…" : String(label);
 }
 
+/** 필지 bbox([minlon, minlat, maxlon, maxlat]) 의 세계 좌표 bbox {x0, y0, x1, y1} (y 는 북쪽이 작다). */
+export function worldBbox(bbox) {
+  const a = mercator([bbox[0], bbox[1]]), b = mercator([bbox[2], bbox[3]]);
+  return { x0: Math.min(a.x, b.x), y0: Math.min(a.y, b.y), x1: Math.max(a.x, b.x), y1: Math.max(a.y, b.y) };
+}
+
+/** GeoJSON 폴리곤 목록 → 로컬 단위 SVG path d. origin 은 세계 좌표. */
+export function parcelPathD(polygons, origin, k = PARCEL_LOCAL_K) {
+  const parts = [];
+  for (const poly of polygons) {
+    for (const ring of poly) {
+      const pts = ring.map((c) => { const w = mercator(c); return `${((w.x - origin.x) * k).toFixed(1)} ${((w.y - origin.y) * k).toFixed(1)}`; });
+      parts.push("M" + pts.join("L") + "Z");
+    }
+  }
+  return parts.join("");
+}
+
+/** 필지 라벨을 보일지: 화면 폭이 라벨 길이에 비해 충분하고 화면 안(여백 포함)일 때. */
+export function parcelLabelVisible(wb, label, view, w, h) {
+  const widthPx = (wb.x1 - wb.x0) * view.scale;
+  if (widthPx < Math.max(PARCEL_LABEL_MIN_PX, Array.from(label).length * LABEL_CHAR_PX)) return false;
+  const a = toScreen({ x: wb.x0, y: wb.y0 }, view), b = toScreen({ x: wb.x1, y: wb.y1 }, view);
+  return b.x >= -VIEW_MARGIN && a.x <= w + VIEW_MARGIN && b.y >= -VIEW_MARGIN && a.y <= h + VIEW_MARGIN;
+}
+
 /**
  * SVG 점 지도. svgEl 은 index.html 의 정적 <svg>. onSelect(asset) 는 점을 탭했을 때.
  * 실패(예외)는 호출자가 잡아 목록만으로 동작하게 한다.
  */
-export function createMap(svgEl, { onSelect } = {}) {
+export function createMap(svgEl, { onSelect, onSelectParcel } = {}) {
   if (!svgEl || svgEl.namespaceURI == null || svgEl.tagName?.toLowerCase() !== "svg") throw new Error("SVG 요소가 아님");
   const NS = svgEl.namespaceURI;
   const node = (tag, attrs = {}) => {
@@ -90,17 +122,22 @@ export function createMap(svgEl, { onSelect } = {}) {
     for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, String(v));
     return n;
   };
+  const layerShapes = node("g", { class: "layer-parcels" });
+  const layerLabels = node("g", { class: "layer-parcel-labels" });
   const layerPts = node("g", { class: "layer-pts" });
   const layerScale = node("g", { class: "layer-scale" });
   const scaleLine = node("line", { x1: 10, y1: 0, x2: 10, y2: 0 });
   const scaleText = node("text", { x: 10, y: 0 });
   layerScale.append(scaleLine, scaleText);
-  svgEl.replaceChildren(layerPts, layerScale);
+  svgEl.replaceChildren(layerShapes, layerLabels, layerPts, layerScale);
 
   let view = fitView([], 320, 280);
   let size = { w: 320, h: 280 };
   const markers = new Map(); // asset_id → { g, dot, world, asset }
-  let selectedId = null;
+  const parcels = new Map(); // pnu → { path, text, wb, lp, feature, visible }
+  let parcelOrigin = { x: 0, y: 0 };
+  let parcelMode = "";
+  let selectedId = null, selectedPnu = null;
   const pointers = new Map();
   let downTarget = null, moved = 0;
 
@@ -112,6 +149,18 @@ export function createMap(svgEl, { onSelect } = {}) {
   const local = (e) => { const r = svgEl.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
 
   const render = () => {
+    if (parcels.size) {
+      const o = toScreen(parcelOrigin, view);
+      layerShapes.setAttribute("transform", `translate(${o.x.toFixed(2)},${o.y.toFixed(2)}) scale(${(view.scale / PARCEL_LOCAL_K).toPrecision(8)})`);
+      for (const pc of parcels.values()) {
+        const vis = pc.feature.id === selectedPnu || parcelLabelVisible(pc.wb, pc.feature.properties.label, view, size.w, size.h);
+        if (vis) {
+          const p = toScreen(pc.lp, view);
+          pc.text.setAttribute("transform", `translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`);
+        }
+        if (vis !== pc.visible) { pc.visible = vis; pc.text.setAttribute("visibility", vis ? "visible" : "hidden"); }
+      }
+    }
     for (const m of markers.values()) {
       const p = toScreen(m.world, view);
       m.g.setAttribute("transform", `translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`);
@@ -125,6 +174,12 @@ export function createMap(svgEl, { onSelect } = {}) {
   };
 
   const setClass = (m) => m.g.setAttribute("class", `pt ${m.asset.data_mode}${m.asset.asset_id === selectedId ? " sel" : ""}`);
+  const setParcelClass = (pc) => pc.path.setAttribute("class", `parcel ${parcelMode}${pc.feature.id === selectedPnu ? " sel" : ""}`);
+  const fitPoints = () => {
+    const pts = [...markers.values()].map((m) => m.world);
+    for (const pc of parcels.values()) pts.push({ x: pc.wb.x0, y: pc.wb.y0 }, { x: pc.wb.x1, y: pc.wb.y1 });
+    return pts;
+  };
 
   const api = {
     /** 마커를 전부 다시 만들고 전체 보기. 위치점 없는 물건은 그리지 않는다. */
@@ -159,9 +214,45 @@ export function createMap(svgEl, { onSelect } = {}) {
         m.dot.setAttribute("r", m.asset.asset_id === selectedId ? DOT_R_SEL : DOT_R);
       }
     },
+    /** 필지 번들(.j5parcels.json, 검증된 것) 또는 null. 경계·라벨을 전부 다시 만들고 전체 보기. */
+    setParcels(bundle) {
+      parcels.clear();
+      layerShapes.replaceChildren();
+      layerLabels.replaceChildren();
+      selectedPnu = null;
+      parcelMode = bundle?.data_mode ?? "";
+      const feats = bundle?.features ?? [];
+      if (feats.length) {
+        const bb = bundle.bbox ?? feats[0].properties.bbox;
+        const wb = worldBbox(bb);
+        parcelOrigin = { x: (wb.x0 + wb.x1) / 2, y: (wb.y0 + wb.y1) / 2 };
+        for (const feature of feats) {
+          const polys = feature.geometry.type === "Polygon" ? [feature.geometry.coordinates] : feature.geometry.coordinates;
+          const path = node("path", { "data-pnu": feature.id, d: parcelPathD(polys, parcelOrigin), "vector-effect": "non-scaling-stroke" });
+          const title = node("title");
+          title.textContent = `${feature.properties.emd_name ?? feature.properties.emd_code} ${feature.properties.label} (PNU ${feature.id})`;
+          path.append(title);
+          const text = node("text", { class: "parcel-label", visibility: "hidden" });
+          text.textContent = feature.properties.label;
+          const lp = labelPointOf(feature);
+          layerShapes.append(path);
+          layerLabels.append(text);
+          const pc = { path, text, wb: worldBbox(feature.properties.bbox), lp: mercator(lp), feature, visible: false };
+          setParcelClass(pc);
+          parcels.set(feature.id, pc);
+        }
+      }
+      api.fit();
+      return { count: feats.length };
+    },
+    selectParcel(pnu) {
+      selectedPnu = pnu ?? null;
+      for (const pc of parcels.values()) setParcelClass(pc);
+      render();
+    },
     fit() {
       measure();
-      view = fitView([...markers.values()].map((m) => m.world), size.w, size.h);
+      view = fitView(fitPoints(), size.w, size.h);
       render();
     },
     zoomBy(factor) {
@@ -182,6 +273,7 @@ export function createMap(svgEl, { onSelect } = {}) {
       window.removeEventListener("resize", api.resize);
       svgEl.replaceChildren();
       markers.clear();
+      parcels.clear();
     },
   };
 
@@ -189,7 +281,7 @@ export function createMap(svgEl, { onSelect } = {}) {
   const onDown = (e) => {
     if (e.button != null && e.button !== 0 && e.pointerType === "mouse") return;
     const p = local(e);
-    if (pointers.size === 0) { downTarget = e.target.closest ? e.target.closest("g.pt") : null; moved = 0; }
+    if (pointers.size === 0) { downTarget = e.target.closest ? e.target.closest("g.pt, path.parcel") : null; moved = 0; }
     else downTarget = null;
     pointers.set(e.pointerId, p);
     try { svgEl.setPointerCapture(e.pointerId); } catch {}
@@ -221,8 +313,13 @@ export function createMap(svgEl, { onSelect } = {}) {
     pointers.delete(e.pointerId);
     try { svgEl.releasePointerCapture(e.pointerId); } catch {}
     if (wasSingle && e.type === "pointerup" && moved < TAP_PX && downTarget) {
-      const m = markers.get(downTarget.getAttribute("data-asset-id"));
-      if (m && onSelect) onSelect(m.asset);
+      if (downTarget.hasAttribute("data-asset-id")) {
+        const m = markers.get(downTarget.getAttribute("data-asset-id"));
+        if (m && onSelect) onSelect(m.asset);
+      } else {
+        const pc = parcels.get(downTarget.getAttribute("data-pnu"));
+        if (pc && onSelectParcel) onSelectParcel(pc.feature);
+      }
     }
     if (pointers.size === 0) downTarget = null;
   };
