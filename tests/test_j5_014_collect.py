@@ -51,6 +51,10 @@ class _Handler(BaseHTTPRequestHandler):
         page, rows = int(q.get("pageNo", 1)), int(q.get("numOfRows", 10))
         if sc["kind"] == "http_error":
             self.send_response(500); self.end_headers(); self.wfile.write(b"boom"); return
+        if sc["kind"] == "forbidden":
+            body = (f"<OpenAPI_ServiceResponse><cmmMsgHeader><errMsg>SERVICE ERROR</errMsg><returnAuthMsg>SERVICE_KEY_IS_NOT_REGISTERED_ERROR for {self.path}</returnAuthMsg>"
+                    "<returnReasonCode>30</returnReasonCode></cmmMsgHeader></OpenAPI_ServiceResponse>").encode("utf-8")
+            self.send_response(403); self.send_header("Content-Type", "application/xml"); self.end_headers(); self.wfile.write(body); return
         if sc["kind"] == "api_error":
             data = xml_page([], 0, page, rows, code=sc.get("code", "30"), msg=sc.get("msg", "SERVICE_KEY_IS_NOT_REGISTERED_ERROR"))
         elif sc["kind"] == "garbage":
@@ -170,8 +174,9 @@ def test_collect_paginates_and_classifies_months(server, home):
         "201504": {"kind": "doctype"},
         "201505": {"kind": "short_pages", "items": [item(0)], "claimed_total": 9},
         "201506": {"kind": "no_total", "items": [item(0), item(1)]},
+        "201507": {"kind": "forbidden"},
     }
-    months = ["202608", "202109", "200603", "201501", "201502", "201503", "201504", "201505", "201506"]
+    months = ["202608", "202109", "200603", "201501", "201502", "201503", "201504", "201505", "201506", "201507"]
     run = collect_months(home, key=KEY, key_source="test", lawd_cd="11110", months=months, endpoint=server, num_rows=3, max_pages=10, sleep=lambda s: None)
     by = {m.deal_ymd: m for m in run.months}
     assert (by["202608"].outcome, by["202608"].items, by["202608"].total_count, len(by["202608"].pages)) == ("complete", 7, 7, 3)
@@ -183,6 +188,13 @@ def test_collect_paginates_and_classifies_months(server, home):
     assert by["201504"].outcome == "failed" and "DOCTYPE" in by["201504"].pages[0].error
     assert by["201505"].outcome == "partial" and "페이지 누락" in by["201505"].message and by["201505"].items == 1
     assert by["201506"].outcome == "partial" and "totalCount" in by["201506"].message and by["201506"].items == 2, "totalCount 없으면 complete 로 인증하지 않는다"
+    # 403 같은 HTTP 오류는 본문의 사유를 결과에 보이고 본문을 파일로 남긴다 (키는 가림)
+    f = by["201507"].pages[0]
+    assert f.outcome == "http_error" and f.http_status == 403 and "SERVICE_KEY_IS_NOT_REGISTERED_ERROR" in f.error and "30" in f.error and KEY not in f.error
+    assert f.error_body_path and f.error_body_path.endswith("-http403.txt") and f.error_body is None
+    saved = (home / f.error_body_path).read_text(encoding="utf-8")
+    assert "SERVICE_KEY_IS_NOT_REGISTERED_ERROR" in saved and KEY not in saved and "<redacted>" in saved
+    assert by["201502"].pages[0].error.endswith("응답 사유: boom") and by["201502"].pages[0].error_body_path
     assert not run.ok
     # 되비친 URL 이 든 오류 문구에도 키가 없다 (결과 객체·화면 출력·JSON)
     assert KEY not in (by["201503"].pages[0].error or "") and "<redacted>" in by["201503"].pages[0].error
@@ -191,6 +203,7 @@ def test_collect_paginates_and_classifies_months(server, home):
     # 원본 파일·기록·요약·로그가 있고 어디에도 키가 없다
     raw = home / "raw" / "rt_nrg" / "11110"
     assert len(list((raw / "202608").glob("p*.xml"))) == 3 and (raw / "201502").is_dir() and not list((raw / "201502").glob("p*.xml"))
+    assert rt.list_runs(home, "11110", "201507") == [], "오류 본문 파일은 원본 실행 목록에 들어가지 않는다"
     run_doc = json.loads((home / run.run_path).read_text(encoding="utf-8"))
     assert run_doc["provider"] == rt.PROVIDER and run_doc["endpoint"] == server and run_doc["months"][0]["pages"][0]["url_redacted"].count("<redacted>") == 1
     for p in [home / run.run_path, home / run.report_path, home / "logs" / "collect.log"]:
