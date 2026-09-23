@@ -33,9 +33,13 @@ def events() -> list[dict]:
     return [json.loads(l) for l in EVENTS_PATH.read_text(encoding="utf-8").splitlines() if l]
 
 
+FIXED_NOW = "2026-09-22T01:20:00Z"
+
+
 @pytest.fixture
 def db(tmp_path):
     d = Db.create(tmp_path / "data" / "db" / "j5.sqlite3", study_id="j5-synthetic-study", data_mode="synthetic")
+    d.now = lambda: FIXED_NOW  # 정본 시각은 저장소의 시계가 부여한다. 테스트는 고정한다
     yield d
     d.close()
 
@@ -52,8 +56,7 @@ def seeded(db):
 def field_record(**over) -> dict:
     base = {"record_id": U(1), "subject_id": A1, "subject_type": "asset", "record_type": "field_observation", "source_kind": "field_observation",
             "schema_version": "1.0.0", "payload": {"change_status": "no_change", "note": None},
-            "observed_at": "2026-09-22T10:15:00+09:00", "observed_at_precision": "datetime", "device_created_at": "2026-09-22T10:16:30+09:00",
-            "recorded_at": "2026-09-22T01:20:00Z"}
+            "observed_at": "2026-09-22T10:15:00+09:00", "observed_at_precision": "datetime", "device_created_at": "2026-09-22T10:16:30+09:00"}
     base.update(over)
     return base
 
@@ -129,27 +132,50 @@ def test_writes_require_transaction_and_rollback(seeded):
     assert seeded.conn.in_transaction is False
 
 
+def test_nested_failure_is_rolled_back_even_if_caught(db):
+    """중첩 단위(load_seed)가 실패했는데 바깥이 예외를 삼켜도, 실패한 단위의 쓰기는 커밋되지 않는다 (전체 성공/전체 거절)."""
+    s = seed()
+    s.append(s.pop(0))  # 충돌 물건(A1)을 마지막에 두어 앞의 4개가 먼저 써지게 한다
+    with db.transaction():
+        db.conn.execute("INSERT INTO subjects (subject_id, subject_type, recorded_at) VALUES (?, 'parcel', ?)", (A1, now_utc()))
+    with db.transaction():
+        db.set_meta("note", "outer")
+        try:
+            db.load_seed(s)
+        except DbError as e:
+            assert e.code == "subject_type_conflict"
+    st = db.status()
+    assert st["counts"]["assets"] == 0 and st["counts"]["subjects"] == 1, "실패한 시드 단위의 쓰기는 되돌려졌다"
+    assert st["dataset_version"] == 0 and db.meta("note") == "outer", "바깥 단위의 쓰기는 남는다"
+    assert db.conn.in_transaction is False
+    # 중첩이 성공하면 바깥과 함께 커밋된다
+    with db.transaction():
+        db.conn.execute("DELETE FROM subjects WHERE subject_id = ?", (A1,))
+        r = db.load_seed(seed())
+    assert r.inserted == 5 and db.status()["counts"]["assets"] == 5 and db.status()["dataset_version"] == 1
+
+
 # ---- 시드 승계 ----
 
 def test_load_seed_inherits_ids_and_is_idempotent(db):
     s = seed()
     r = db.load_seed(s)
-    assert (r.inserted, r.updated, r.unchanged) == (5, 0, 0)
+    assert (r.inserted, r.updated, r.unchanged, r.dataset_version) == (5, 0, 0, 1)
     assert r.asset_ids == [a["asset_id"] for a in s]
     assets = {a["asset_id"]: a for a in db.list_assets()}
     assert assets[A1]["lon"] == 126.9986 and assets[A1]["lat"] == 37.5702 and assets[A1]["address"] is None
     assert assets[s[2]["asset_id"]]["lon"] is None and assets[s[2]["asset_id"]]["address"].startswith("서울 종로구 가상로 3")
     assert all(a["tracking_status"] == "unreviewed" and a["resolution_status"] == "confirmed" for a in assets.values())
     r2 = db.load_seed(s)
-    assert (r2.inserted, r2.updated, r2.unchanged) == (0, 0, 5)
+    assert (r2.inserted, r2.updated, r2.unchanged, r2.dataset_version) == (0, 0, 5, 1), "변화 없음만이면 dataset_version 유지"
     s[0]["label"] = "가상 물건 1 (이름 변경)"
     with db.transaction():
         db.conn.execute("UPDATE assets SET tracking_status = 'watch' WHERE asset_id = ?", (A1,))
     r3 = db.load_seed(s)
-    assert (r3.inserted, r3.updated, r3.unchanged) == (0, 1, 4)
+    assert (r3.inserted, r3.updated, r3.unchanged, r3.dataset_version) == (0, 1, 4, 2), "정본이 바뀐 배치는 dataset_version 을 올린다"
     a1 = {a["asset_id"]: a for a in db.list_assets()}[A1]
     assert a1["label"] == "가상 물건 1 (이름 변경)" and a1["tracking_status"] == "watch", "관심 단계는 시드로 바뀌지 않는다"
-    assert db.status()["dataset_version"] == 0, "시드 승계는 dataset_version 을 올리지 않는다"
+    assert db.status()["dataset_version"] == 2
 
 
 def test_load_seed_rejects_whole_batch(db):
@@ -158,7 +184,7 @@ def test_load_seed_rejects_whole_batch(db):
     with pytest.raises(ValidationError) as e:
         db.load_seed(s)
     assert any("data_mode" in m for m in e.value.errors)
-    assert db.status()["counts"]["assets"] == 0, "일부만 반영하지 않는다"
+    assert db.status()["counts"]["assets"] == 0 and db.status()["dataset_version"] == 0, "일부만 반영하지 않고 버전도 올리지 않는다"
     bad = seed()
     bad[0]["extra"] = 1
     with pytest.raises(ValidationError):
@@ -284,13 +310,21 @@ def test_record_time_rules_in_validation_and_db(seeded):
         ({"observed_at": "2026-02-30", "observed_at_precision": "date"}, "observed_at"),
         ({"observed_at": "2026-09-22T10:15:00", "observed_at_precision": "datetime"}, "observed_at"),
         ({"device_created_at": "2026-09-22 10:16"}, "device_created_at"),
-        ({"recorded_at": "2026-09-22T10:20:00+09:00"}, "recorded_at"),
-        ({"recorded_at": "2026-09-22T01:20:00.123Z"}, "recorded_at"),
         ({"effective_from": "yesterday"}, "effective_from"),
     ]
     for over, key in cases:
-        errs = record_errors(field_record(**over))
+        errs = record_errors(field_record(recorded_at=FIXED_NOW, **over))
         assert any(key in m for m in errs), (over, errs)
+    for bad in ("2026-09-22T10:20:00+09:00", "2026-09-22T01:20:00.123Z", "2026-09-22"):
+        assert any("recorded_at" in m for m in record_errors(field_record(recorded_at=bad))), bad
+    # 입력이 recorded_at 을 가져오면 거절한다 (기기 입력 시각·관측 시각과 정본 반영 시각의 분리)
+    for fn in (lambda: seeded.insert_record(field_record(recorded_at=FIXED_NOW)),
+               lambda: seeded.add_evidence(U(1), {"document_id": DOC_ID, "recorded_at": FIXED_NOW}),
+               lambda: seeded.add_source_document({"document_id": U(9), "document_kind": "manual_entry", "title": "x", "collected_at": FIXED_NOW, "recorded_at": FIXED_NOW})):
+        with pytest.raises(ValidationError) as e:
+            with seeded.transaction():
+                fn()
+        assert any("입력이 정하지 않는다" in m for m in e.value.errors)
     # DB 쪽 모양 검사도 독립적으로 막는다 (검증 함수를 우회한 삽입)
     with pytest.raises(sqlite3.IntegrityError):
         with seeded.transaction():
@@ -306,12 +340,11 @@ def test_record_time_rules_in_validation_and_db(seeded):
         seeded.insert_record(field_record(record_id=U(2), observed_at="2026-09-22", observed_at_precision="date"))
     got = seeded.get_record(U(2))
     assert got["observed_at"] == "2026-09-22" and got["observed_at_precision"] == "date" and got["device_created_at"] == "2026-09-22T10:16:30+09:00"
-    assert got["recorded_at"] == "2026-09-22T01:20:00Z"
-    # recorded_at 을 주지 않으면 PC 가 UTC 로 부여한다
+    assert got["recorded_at"] == FIXED_NOW, "정본 시각은 저장소 시계가 부여한다"
+    # 시계를 바꾸면 그 값이 들어간다 (실제 운영은 now_utc)
+    seeded.now = now_utc
     with seeded.transaction():
-        rec = field_record(record_id=U(3))
-        del rec["recorded_at"]
-        seeded.insert_record(rec)
+        seeded.insert_record(field_record(record_id=U(3)))
     assert is_utc_iso(seeded.get_record(U(3))["recorded_at"])
 
 
@@ -388,10 +421,17 @@ def test_evidence_and_attachments(seeded):
     with pytest.raises(sqlite3.IntegrityError):
         with seeded.transaction():
             seeded.conn.execute("DELETE FROM source_documents WHERE document_id = ?", (DOC_ID,))  # 근거가 참조 중
+    for bad in ({"document_kind": "rumor"}, {"collected_at": "yesterday"}, {"collected_at": "2026-09-22"}, {"collected_at": "2026-09-22T10:00:00"},
+                {"source_published_at": "last week"}, {"sha256": "xyz"}, {"title": ""}):
+        with pytest.raises(ValidationError):
+            with seeded.transaction():
+                seeded.add_source_document({"document_id": U(5), "document_kind": "manual_entry", "title": "x", "collected_at": "2026-09-22T00:00:00Z", **bad})
+    with seeded.transaction():
+        seeded.add_source_document({"document_id": U(5), "document_kind": "official_file", "title": "고시 (가상)", "collected_at": "2026-09-22T00:00:00Z", "source_published_at": "2026-09-01"})
     with pytest.raises(ValidationError):
         with seeded.transaction():
-            seeded.add_source_document({"document_id": U(5), "document_kind": "rumor", "title": "x", "collected_at": "2026-09-22T00:00:00Z"})
-    assert seeded.status()["ok"]
+            seeded.add_attachment(U(1), {"attachment_id": U(6), "rel_path": "photos/y.png", "sha256": "d" * 64, "mime": "image/png", "bytes": 1, "tags": [], "taken_at": "noon"})
+    assert seeded.status()["ok"] and seeded.status()["counts"]["source_documents"] == 2
 
 
 def test_fixture_events_map_to_records(seeded):
@@ -427,12 +467,14 @@ def test_cli_db_init_status_load_seed(tmp_path, capsys, monkeypatch):
     assert cli.main(["db", "init", "--study-id", "j5-synthetic-study", "--data-mode", "synthetic"]) == 1
     assert "exists" in capsys.readouterr().err
     assert cli.main(["db", "load-seed", str(SEED_PATH)]) == 0
-    assert "신규 5" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "신규 5" in out and "dataset_version 1" in out
     assert cli.main(["db", "load-seed", str(SEED_PATH)]) == 0
-    assert "변화 없음 5" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "변화 없음 5" in out and "dataset_version 1" in out
     assert cli.main(["db", "status", "--json"]) == 0
     st = json.loads(capsys.readouterr().out)
-    assert st["ok"] and st["counts"]["assets"] == 5 and st["study_id"] == "j5-synthetic-study" and st["dataset_version"] == 0
+    assert st["ok"] and st["counts"]["assets"] == 5 and st["study_id"] == "j5-synthetic-study" and st["dataset_version"] == 1
     assert cli.main(["db", "status"]) == 0
     out = capsys.readouterr().out
     assert "외래키 켜짐" in out and "integrity_check: ok" in out

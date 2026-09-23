@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from j5.db import schema as S
-from j5.db.validate import ValidationError, is_sha256, is_uuid, now_utc, record_errors, seed_asset_errors
+from j5.db.validate import ValidationError, is_sha256, is_uuid, now_utc, parse_date, parse_datetime, record_errors, seed_asset_errors
 from j5.schemas_loader import schema_errors
 
 DB_FILENAME = "j5.sqlite3"
@@ -33,6 +33,7 @@ class SeedResult:
     inserted: int = 0
     updated: int = 0
     unchanged: int = 0
+    dataset_version: int = 0  # 반영 후 값. 신규·갱신이 있으면 1 올라간다 (데이터 사전 §4)
     asset_ids: list[str] = field(default_factory=list)
 
 
@@ -57,6 +58,8 @@ class Db:
         self.conn = conn
         self.path = path
         self._depth = 0
+        # 정본 시각(recorded_at)의 시계. 입력이 정본 시각을 정하지 못하게 저장소가 항상 부여한다. 테스트는 이 속성으로 고정한다.
+        self.now = now_utc
 
     # ---- 열기·만들기 ----
     @staticmethod
@@ -128,21 +131,30 @@ class Db:
     # ---- 트랜잭션 ----
     @contextmanager
     def transaction(self):
-        """중첩 시 바깥 트랜잭션에 합류한다. 예외면 ROLLBACK."""
-        if self._depth == 0:
+        """바깥은 BEGIN IMMEDIATE, 중첩은 SAVEPOINT. 예외면 그 단위의 쓰기를 되돌린다.
+        중첩 단위의 실패를 바깥에서 잡더라도 실패한 단위의 쓰기는 이미 되돌려져 있어 부분 반영이 커밋되지 않는다."""
+        depth = self._depth
+        if depth == 0:
             self.conn.execute("BEGIN IMMEDIATE")
-        self._depth += 1
+        else:
+            self.conn.execute(f"SAVEPOINT sp{depth}")
+        self._depth = depth + 1
         try:
             yield
         except BaseException:
-            self._depth -= 1
-            if self._depth == 0:
+            self._depth = depth
+            if depth == 0:
                 self.conn.execute("ROLLBACK")
+            else:
+                self.conn.execute(f"ROLLBACK TO sp{depth}")
+                self.conn.execute(f"RELEASE sp{depth}")
             raise
         else:
-            self._depth -= 1
-            if self._depth == 0:
+            self._depth = depth
+            if depth == 0:
                 self.conn.execute("COMMIT")
+            else:
+                self.conn.execute(f"RELEASE sp{depth}")
 
     def _require_tx(self) -> None:
         if self._depth == 0:
@@ -194,15 +206,23 @@ class Db:
         }
 
     # ---- 시드 승계 (데이터 사전 §2: asset_id 를 그대로 승계) ----
+    def bump_dataset_version(self) -> int:
+        """정본 데이터가 바뀐 배치의 끝에서 호출한다. 중복 입력만 처리한 배치는 호출하지 않는다 (데이터 사전 §4)."""
+        self._require_tx()
+        v = int(self.meta("dataset_version") or 0) + 1
+        self.set_meta("dataset_version", str(v))
+        return v
+
     def load_seed(self, seed: list[dict]) -> SeedResult:
-        """assets.seed.json 배열을 subjects/assets 에 반영한다. 전체 성공 또는 전체 거절. dataset_version 은 바꾸지 않는다 (J5-010 의 반영 배치가 올린다)."""
+        """assets.seed.json 배열을 subjects/assets 에 반영한다. 전체 성공 또는 전체 거절.
+        신규·갱신이 하나라도 있으면 dataset_version 을 1 올린다(정본이 바뀌었으므로 이전 파생본은 구본이 된다). 변화 없음만이면 올리지 않는다."""
         errs = schema_errors("assets_seed.schema.json", seed)
         for a in seed if not errs else []:
             errs += seed_asset_errors(a, self.data_mode)
         if errs:
             raise ValidationError(errs)
         result = SeedResult()
-        now = now_utc()
+        now = self.now()
         with self.transaction():
             for a in seed:
                 aid = a["asset_id"]
@@ -229,6 +249,7 @@ class Db:
                         {**new, "asset_id": aid, "now": now})
                     result.updated += 1
                 result.asset_ids.append(aid)
+            result.dataset_version = self.bump_dataset_version() if (result.inserted or result.updated) else int(self.meta("dataset_version") or 0)
         return result
 
     # ---- 출처·기록·근거·첨부 ----
@@ -243,23 +264,29 @@ class Db:
             errs.append("title 필요")
         if doc.get("sha256") is not None and not is_sha256(doc["sha256"]):
             errs.append("sha256 형식")
-        if not doc.get("collected_at"):
-            errs.append("collected_at 필요")
+        if parse_datetime(doc.get("collected_at")) is None:
+            errs.append("collected_at: 시간대 오프셋이 있는 ISO 8601 (자료 확보 시각)")
+        sp = doc.get("source_published_at")
+        if sp is not None and parse_date(sp) is None and parse_datetime(sp) is None:
+            errs.append("source_published_at: 날짜 또는 시간대 있는 시각 또는 null")
+        errs += _no_caller_recorded_at(doc)
         if errs:
             raise ValidationError(errs)
         self.conn.execute(
             "INSERT INTO source_documents (document_id, document_kind, title, terms, location, sha256, source_published_at, collected_at, recorded_at, notes)"
             " VALUES (:document_id, :document_kind, :title, :terms, :location, :sha256, :source_published_at, :collected_at, :recorded_at, :notes)",
-            {"terms": None, "location": None, "sha256": None, "source_published_at": None, "notes": None, **doc, "recorded_at": doc.get("recorded_at") or now_utc()})
+            {"terms": None, "location": None, "sha256": None, "source_published_at": None, "notes": None, **doc, "recorded_at": self.now()})
         return doc["document_id"]
 
     def insert_record(self, rec: dict, *, evidence: list[dict] = (), attachments: list[dict] = ()) -> str:
         """records 한 행과 그 근거·첨부. rec 의 payload 는 딕셔너리로 받고 정규화 JSON 으로 저장한다.
         검증 실패는 ValidationError, 제약 위반은 sqlite3.IntegrityError 로 올라오며 트랜잭션은 호출자가 되돌린다."""
         self._require_tx()
-        rec = {"recorded_at": now_utc(), "device_created_at": None, "source_published_at": None, "collected_at": None,
-               "effective_from": None, "effective_to": None, "supersedes_id": None, **rec}
-        errs = record_errors(rec)
+        # recorded_at(정본 최초 반영 시각)은 PC 가 부여한다. 입력이 가져온 값은 거절해 기기 입력 시각·관측 시각과 섞이지 않게 한다 (데이터 사전 §1).
+        errs = _no_caller_recorded_at(rec)
+        rec = {"device_created_at": None, "source_published_at": None, "collected_at": None,
+               "effective_from": None, "effective_to": None, "supersedes_id": None, **rec, "recorded_at": self.now()}
+        errs += record_errors(rec)
         if errs:
             raise ValidationError(errs)
         payload_json = json.dumps(rec["payload"], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -277,20 +304,29 @@ class Db:
 
     def add_evidence(self, record_id: str, ev: dict) -> None:
         self._require_tx()
+        errs = _no_caller_recorded_at(ev)
+        if errs:
+            raise ValidationError(errs)
         self.conn.execute(
             "INSERT INTO record_evidence (record_id, field_path, document_id, locator, verification_status, recorded_at)"
             " VALUES (:record_id, :field_path, :document_id, :locator, :verification_status, :recorded_at)",
-            {"field_path": "$", "locator": None, "verification_status": "unverified", **ev, "record_id": record_id, "recorded_at": ev.get("recorded_at") or now_utc()})
+            {"field_path": "$", "locator": None, "verification_status": "unverified", **ev, "record_id": record_id, "recorded_at": self.now()})
 
     def add_attachment(self, record_id: str, att: dict) -> None:
         self._require_tx()
+        errs = _no_caller_recorded_at(att)
         tags = att.get("tags", [])
         if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
-            raise ValidationError(["attachment.tags 는 문자열 배열"])
+            errs.append("attachment.tags 는 문자열 배열")
+        taken = att.get("taken_at")
+        if taken is not None and parse_date(taken) is None and parse_datetime(taken) is None:
+            errs.append("attachment.taken_at: 날짜 또는 시간대 있는 시각 또는 null")
+        if errs:
+            raise ValidationError(errs)
         self.conn.execute(
             "INSERT INTO attachments (attachment_id, record_id, rel_path, sha256, mime, bytes, taken_at, tags_json, original_ref, recorded_at)"
             " VALUES (:attachment_id, :record_id, :rel_path, :sha256, :mime, :bytes, :taken_at, :tags_json, :original_ref, :recorded_at)",
-            {"taken_at": None, "original_ref": None, **att, "record_id": record_id, "tags_json": json.dumps(tags, ensure_ascii=False), "recorded_at": att.get("recorded_at") or now_utc()})
+            {"taken_at": None, "original_ref": None, **att, "record_id": record_id, "tags_json": json.dumps(tags, ensure_ascii=False), "recorded_at": self.now()})
 
     # ---- 조회 ----
     def get_record(self, record_id: str) -> dict | None:
@@ -307,6 +343,10 @@ class Db:
 
     def list_assets(self) -> list[dict]:
         return [dict(r) for r in self.conn.execute("SELECT * FROM assets ORDER BY label, asset_id")]
+
+
+def _no_caller_recorded_at(d: dict) -> list[str]:
+    return ["recorded_at 은 입력이 정하지 않는다. 정본 반영 시 PC 가 부여한다"] if "recorded_at" in d else []
 
 
 def _split_statements(sql: str) -> list[str]:
