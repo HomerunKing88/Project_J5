@@ -14,4 +14,8 @@
 
 - `view_manifest.schema.json`: 조회 파생본 `.j5view.zip`의 `manifest.json`. `source_dataset_version`·`projection_schema_version`·`generated_at`·`scope_ids`·`data_mode`(데이터 사전 §4)와 파일 목록(`assets.seed.json`·`assets.geojson`·`records.jsonl`·선택 `photos/`)의 바이트·해시.
 
+## 파일 (backup_schema 1.0.0, R1b J5-012)
+
+- `backup_manifest.schema.json`: 정본 백업 폴더의 `backup_manifest.json`. `dataset_version`·`db_schema_version`·`created_at`·테이블별 행 수와 파일 목록(`db/j5.sqlite3`·`photos/<sha 앞 2자>/<sha>.<ext>`)의 바이트·해시(데이터 사전 §12). 복구 후 이 값과 대조한다.
+
 이벤트 해시는 파일에 있는 행의 UTF-8 바이트를 그대로 sha256 한 값이다. 재직렬화하지 않는다. 검증은 jsonschema(고정 버전, `requirements-dev.txt`) Draft 2020-12로 한다. 스키마와 데이터 사전이 충돌하면 PR을 완료하지 않는다.

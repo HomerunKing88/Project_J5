@@ -1,4 +1,4 @@
-"""j5 명령줄. inspect(패키지 검사), copy(독립 사본), db(정본 SQLite: init/status/load-seed/import).
+"""j5 명령줄. inspect(패키지 검사), copy(독립 사본), db(정본 SQLite: init/status/load-seed/import/project/backup/restore/check-photos).
 
 종료 코드: 0 ok·반영·중복 / 1 reject·실패 / 2 hold·보류 / 3 사용 오류.
 """
@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from j5 import APP_VERSION
+from j5.db.backup import EXIT_BY_OUTCOME as BACKUP_EXIT, BackupError, check_photos, check_photos_text, create_backup, restore_backup, verify_backup_dir
 from j5.db.importer import EXIT_BY_OUTCOME, import_package
 from j5.db.projection import EXIT_BY_OUTCOME as PROJECT_EXIT, ProjectionError, build_projection, copy_latest
 from j5.db.store import Db, DbError, default_db_path
@@ -63,6 +64,20 @@ def _build_parser() -> argparse.ArgumentParser:
     dc.add_argument("dest_dir", type=Path)
     dc.add_argument("--data-home", type=Path)
     dc.add_argument("--allow-stale", action="store_true", help="구본 보존용 내보내기. 결과에 구버전임을 표시한다")
+    db_ = dsub.add_parser("backup", help="일관된 정본 사본 + 참조 사진 + 해시 목록을 만들고 다시 읽어 검증한다 (J5_DATA_HOME/backups 또는 --dest)")
+    db_.add_argument("--data-home", type=Path, help="정본·사진이 있는 실데이터 홈. 생략 시 J5_DATA_HOME")
+    db_.add_argument("--dest", type=Path, help="백업을 둘 상위 폴더 (예: 외장 드라이브). 생략 시 J5_DATA_HOME/backups")
+    db_.add_argument("--json", action="store_true")
+    dv = dsub.add_parser("backup-verify", help="백업 폴더를 전부 다시 읽어 검증한다 (정본 불필요)")
+    dv.add_argument("backup_dir", type=Path)
+    dv.add_argument("--json", action="store_true")
+    dr = dsub.add_parser("restore", help="백업을 빈 폴더에 복구하고 기록 수·해시·사진 연결을 확인한다 (기존 정본은 덮어쓰지 않음)")
+    dr.add_argument("backup_dir", type=Path)
+    dr.add_argument("dest_home", type=Path, help="비어 있거나 없는 폴더. 복구 후 J5_DATA_HOME 으로 쓴다")
+    dr.add_argument("--json", action="store_true")
+    dk = dsub.add_parser("check-photos", help="사진 대사: 정본이 참조한 사진의 존재·해시와 미참조 파일을 보고한다 (삭제 없음)")
+    dk.add_argument("--data-home", type=Path)
+    dk.add_argument("--json", action="store_true")
     return p
 
 
@@ -84,6 +99,8 @@ def _db_path(args) -> Path | None:
 
 
 def _db_main(args) -> int:
+    if args.db_command in ("restore", "backup-verify"):
+        return _db_offline(args)
     path = _db_path(args)
     if path is None:
         return USAGE_ERROR
@@ -117,6 +134,12 @@ def _db_main(args) -> int:
                             line += f" · 마지막 게시 {ps['published_at']}"
                         if ps.get("last_failed_at"):
                             line += f" · 마지막 실패 {ps['last_failed_at']}"
+                        print(line)
+                    bs = st.get("backup") or {}
+                    if bs:
+                        line = f"백업: {bs['state']}"
+                        if bs.get("backup_at"):
+                            line += f" · 마지막 백업 {bs['backup_at']} ({bs.get('backup_dir')})"
                         print(line)
                 return 0 if st["ok"] else 1
             if args.db_command == "load-seed":
@@ -160,6 +183,20 @@ def _db_main(args) -> int:
                 print(f"사본 작성됨: {r['dest']} ({r['bytes']} 바이트, sha256 {r['sha256']}) · 파생본 v{r['source_dataset_version']} {r['generated_at']} · {label}")
                 print("이 사본은 백업 완료를 뜻하지 않는다.")
                 return 0
+            if args.db_command == "backup":
+                home = _data_home(args)
+                if home is None:
+                    return USAGE_ERROR
+                r = create_backup(db, home, dest_root=args.dest)
+                sys.stdout.write(r.to_json() if args.json else r.to_text())
+                return BACKUP_EXIT[r.outcome]
+            if args.db_command == "check-photos":
+                home = _data_home(args)
+                if home is None:
+                    return USAGE_ERROR
+                c = check_photos(db, home)
+                sys.stdout.write(json.dumps(c, ensure_ascii=True, sort_keys=True, indent=2) + "\n" if args.json else check_photos_text(c))
+                return 0 if c["ok_all"] else 1
     except DbError as e:
         print(f"정본 오류 [{e.code}]: {e.message}", file=sys.stderr)
         return 1
@@ -172,6 +209,30 @@ def _db_main(args) -> int:
             print(f"  {m}", file=sys.stderr)
         return 1
     return USAGE_ERROR
+
+
+def _db_offline(args) -> int:
+    """정본 연결 없이 하는 명령: 백업 검증·복구."""
+    if not args.backup_dir.is_dir():
+        print(f"백업 폴더가 없음: {args.backup_dir}", file=sys.stderr)
+        return USAGE_ERROR
+    if args.db_command == "backup-verify":
+        try:
+            v = verify_backup_dir(args.backup_dir)
+        except (BackupError, DbError, OSError, sqlite3.Error) as e:
+            print(f"백업 검증 실패 [{getattr(e, 'code', type(e).__name__)}]: {getattr(e, 'message', e)}", file=sys.stderr)
+            return 1
+        m = v["manifest"]
+        if args.json:
+            print(json.dumps({"ok": True, "manifest_sha256": v["manifest_sha256"], "dataset_version": m["dataset_version"], "db_schema_version": m["db_schema_version"],
+                              "created_at": m["created_at"], "counts": v["counts"], "photos": v["photos"]}, ensure_ascii=True, sort_keys=True, indent=2))
+        else:
+            print(f"백업 검증 통과: {args.backup_dir} · 정본 v{m['dataset_version']} (db_schema {m['db_schema_version']}, {m['created_at']}) · 사진 {v['photos']}장 연결 확인")
+            print("행 수: " + ", ".join(f"{k} {v_}" for k, v_ in v["counts"].items()))
+        return 0
+    r = restore_backup(args.backup_dir, args.dest_home)
+    sys.stdout.write(r.to_json() if args.json else r.to_text())
+    return BACKUP_EXIT[r.outcome]
 
 
 def _load_seed(path: Path) -> list[dict] | None:
