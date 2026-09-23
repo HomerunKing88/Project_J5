@@ -213,7 +213,7 @@ def test_collect_paginates_and_classifies_months(server, home):
     rep3 = report_from_raw(home, "11110", ["202608"])
     assert rep3["months"][0]["items"] == 5 and rep3["months"][0]["run_id"] == run2.run_id and rep3["months"][0]["other_runs"] == [run.run_id], "두 실행을 합치지 않는다"
     assert report_from_raw(home, "11110", ["202608"], run.run_id)["months"][0]["items"] == 7
-    assert rt.list_runs(home, "11110", "202608") == sorted([run.run_id, run2.run_id])
+    assert rt.list_runs(home, "11110", "202608") == [run.run_id, run2.run_id], "같은 초라도 파일 생성 순서(무작위 접미사 아님)로 정렬"
     assert "다른 실행 1개는 제외" in rt.report_text(rep3)
 
 
