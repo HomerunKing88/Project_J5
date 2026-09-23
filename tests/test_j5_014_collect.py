@@ -52,7 +52,8 @@ class _Handler(BaseHTTPRequestHandler):
         if sc["kind"] == "http_error":
             self.send_response(500); self.end_headers(); self.wfile.write(b"boom"); return
         if sc["kind"] == "forbidden":
-            body = (f"<OpenAPI_ServiceResponse><cmmMsgHeader><errMsg>SERVICE ERROR</errMsg><returnAuthMsg>SERVICE_KEY_IS_NOT_REGISTERED_ERROR for {self.path}</returnAuthMsg>"
+            echoed = self.path.replace("%2B", "%2b").replace("%2F", "%2f").replace("%3D", "%3d")  # 게이트웨이가 부호화를 바꿔 되비치는 상황
+            body = (f"<OpenAPI_ServiceResponse><cmmMsgHeader><errMsg>SERVICE ERROR</errMsg><returnAuthMsg>SERVICE_KEY_IS_NOT_REGISTERED_ERROR for {echoed}</returnAuthMsg>"
                     "<returnReasonCode>30</returnReasonCode></cmmMsgHeader></OpenAPI_ServiceResponse>").encode("utf-8")
             self.send_response(403); self.send_header("Content-Type", "application/xml"); self.end_headers(); self.wfile.write(body); return
         if sc["kind"] == "api_error":
@@ -118,6 +119,12 @@ def test_config_parse_key_sources_permission_and_redaction(home, tmp_path, monke
     from urllib.parse import quote
     assert redact(f"k={quote(KEY, safe='')}", KEY) == "k=<redacted>", "부호화된 형태도 가린다"
     assert redact("nothing", None) == "nothing"
+    # 리뷰 반영(PR #44): 되비친 URL 이 부호화를 바꿔도(소문자 16진수, 다른 파라미터 이름 대소문자) 가려진다. 구조적 가림은 키를 몰라도 동작한다
+    enc_lower = quote(KEY, safe="").replace("%2B", "%2b").replace("%2F", "%2f").replace("%3D", "%3d")
+    assert enc_lower != quote(KEY, safe="")
+    assert redact(f"<msg>bad url /api?servicekey={enc_lower}&x=1</msg>", KEY) == "<msg>bad url /api?servicekey=<redacted>&x=1</msg>"
+    assert redact(f"key seen: {enc_lower} end", KEY) == "key seen: <redacted> end", "파라미터 밖에 있어도 소문자 16진수 형태를 가린다"
+    assert redact(f"a?serviceKey={KEY}&b", None) == "a?serviceKey=<redacted>&b", "키를 모를 때도 파라미터 값은 가린다"
 
 
 def test_url_building_and_input_validation():
@@ -194,6 +201,8 @@ def test_collect_paginates_and_classifies_months(server, home):
     assert f.error_body_path and f.error_body_path.endswith("-http403.txt") and f.error_body is None
     saved = (home / f.error_body_path).read_text(encoding="utf-8")
     assert "SERVICE_KEY_IS_NOT_REGISTERED_ERROR" in saved and KEY not in saved and "<redacted>" in saved
+    from urllib.parse import quote as _q
+    assert _q(KEY, safe="").lower() not in saved.lower() and "serviceKey=<redacted>" in saved, "부호화가 바뀐 되비침도 가려진다"
     assert by["201502"].pages[0].error.endswith("응답 사유: boom") and by["201502"].pages[0].error_body_path
     assert not run.ok
     # 되비친 URL 이 든 오류 문구에도 키가 없다 (결과 객체·화면 출력·JSON)
