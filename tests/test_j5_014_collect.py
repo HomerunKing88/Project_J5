@@ -236,10 +236,21 @@ def test_collect_paginates_and_classifies_months(server, home):
     rep_d = report_from_raw(home, "11110", ["202608"], run.run_id, dist_fields=("umdNm", "없는필드"))
     assert rep_d["dist_fields"] == ["umdNm", "없는필드"] and sum(rep_d["months"][0]["fields"]["umdNm"]["distribution"].values()) == 7
     assert rt.field_distribution([{"a": "x"}, {"a": "y"}, {"a": "x"}, {"b": "z"}], "a") == {"x": 2, "": 1, "y": 1}
-    # 기록 파일이 깨져도 재요약은 된다 (totalCount 만 None)
-    (home / run.run_path).write_text("{not json", encoding="utf-8")
-    assert report_from_raw(home, "11110", ["202608"], run.run_id)["months"][0]["total_count"] is None
+    # 기록 파일이 깨져도 재요약은 된다 (totalCount 만 None). JSON 이지만 구조가 다른 경우도 같다
+    for broken in ("{not json", '{"months": null}', '{"months": [1, {"deal_ymd": "202608", "total_count": true, "outcome": 3}]}', "[]"):
+        (home / run.run_path).write_text(broken, encoding="utf-8")
+        m0 = report_from_raw(home, "11110", ["202608"], run.run_id)["months"][0]
+        assert m0["total_count"] is None and m0["collected_outcome"] is None and m0["items"] == 7, broken
     (home / run.run_path).write_text(json.dumps(run_doc, ensure_ascii=False), encoding="utf-8")
+    # API 오류 응답만 저장된 달(정상 페이지 없음)은 재요약에서 no_raw 이되 수집 결과 failed 와 실행 ID 가 보인다 (자료 없음과 구분)
+    m_err = report_from_raw(home, "11110", ["201507"], run.run_id)["months"][0]
+    assert m_err["outcome"] == "no_raw" and m_err["files"] == [] and m_err["collected_outcome"] == "failed" and m_err["run_id"] == run.run_id
+    assert "2015-07: no_raw" in rt.report_text(report_from_raw(home, "11110", ["201507"], run.run_id)) and "수집 결과 failed" in rt.report_text(report_from_raw(home, "11110", ["201507"], run.run_id))
+    # API 오류 XML(resultCode 30)이 저장된 달: 실행 목록에는 들어가므로 기본 선택(최근 실행)에서도 failed 로 보인다
+    m_api = report_from_raw(home, "11110", ["201501"])["months"][0]
+    assert m_api["outcome"] == "no_raw" and m_api["collected_outcome"] == "failed" and m_api["run_id"] == run.run_id and m_api["items"] == 0
+    m_none = report_from_raw(home, "11110", ["209912"], run.run_id)["months"][0]
+    assert m_none["outcome"] == "no_raw" and m_none["run_id"] is None and m_none["collected_outcome"] is None, "받은 적 없는 달은 실행 ID 도 없다"
     # 같은 달을 다시 받으면 새 실행 ID 의 파일이 옆에 쌓이고(덮어쓰기 없음), 재요약은 기본으로 가장 최근 실행 하나만 센다
     _Handler.scenarios = {"202608": {"kind": "pages", "items": [item(i) for i in range(5)]}}
     run2 = collect_months(home, key=KEY, key_source="test", lawd_cd="11110", months=["202608"], endpoint=server, num_rows=3, sleep=lambda s: None)

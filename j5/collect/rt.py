@@ -448,12 +448,16 @@ def _run_record_total(data_home: Path, lawd_cd: str, deal_ymd: str, run_id: str)
     p = Path(data_home) / RAW_DIR / lawd_cd / f"run-{run_id}.json"
     try:
         doc = json.loads(p.read_text(encoding="utf-8"))
-        for m in doc.get("months", []):
-            if m.get("deal_ymd") == deal_ymd:
-                tc = m.get("total_count")
-                return (tc if isinstance(tc, int) else None), (m.get("outcome") if isinstance(m.get("outcome"), str) else None)
-    except (OSError, ValueError, AttributeError):
-        pass
+    except (OSError, ValueError):
+        return None, None
+    months = doc.get("months") if isinstance(doc, dict) else None
+    if not isinstance(months, list):
+        return None, None
+    for m in months:
+        if isinstance(m, dict) and m.get("deal_ymd") == deal_ymd:
+            tc = m.get("total_count")
+            oc = m.get("outcome")
+            return (tc if isinstance(tc, int) and not isinstance(tc, bool) else None), (oc if isinstance(oc, str) else None)
     return None, None
 
 
@@ -465,12 +469,13 @@ def report_from_raw(data_home: Path, lawd_cd: str, months: list[str], run_id: st
         runs = list_runs(data_home, lawd_cd, deal_ymd)
         chosen = run_id if run_id is not None else (runs[-1] if runs else None)
         items, files = load_month_items(data_home, lawd_cd, deal_ymd, chosen) if chosen else ([], [])
-        total, collected = _run_record_total(data_home, lawd_cd, deal_ymd, chosen) if files else (None, None)
+        # 실행 기록은 선택한 실행이 있으면 항상 읽는다: 정상 페이지가 없는 실행(API 오류 응답만 저장됨)도 `failed` 로 구분되어야 한다
+        total, collected = _run_record_total(data_home, lawd_cd, deal_ymd, chosen) if chosen else (None, None)
         summary = summarize_items(items)
         for f in dist_fields:
             if f in summary["fields"]:
                 summary["fields"][f]["distribution"] = field_distribution(items, f)
-        out.append({"deal_ymd": deal_ymd, "outcome": "from_raw" if files else "no_raw", "collected_outcome": collected, "run_id": chosen if files else None,
+        out.append({"deal_ymd": deal_ymd, "outcome": "from_raw" if files else "no_raw", "collected_outcome": collected, "run_id": chosen if (files or collected) else None,
                     "other_runs": [r for r in runs if r != chosen], "total_count": total, "files": files, **summary})
     return {"run_id": run_id, "provider": PROVIDER, "endpoint": None, "lawd_cd": lawd_cd, "generated_at": _now(), "dist_fields": list(dist_fields),
             "note": "저장된 원본에서 다시 요약 (네트워크 없음). 월마다 한 실행만 센다", "months": out}
