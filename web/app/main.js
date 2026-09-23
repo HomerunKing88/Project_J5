@@ -6,7 +6,7 @@ import { uuid4, isUuid } from "./uuid.js";
 import { isoWithOffset, fromDatetimeLocal, toDatetimeLocal, localDate } from "./time.js";
 import { buildEvent, validateEvent, lineBytes, PHOTO_TAGS, PHOTO_TAG_LABEL, CHANGE_STATUS_LABEL, PHOTO_LIMIT } from "./event.js";
 import { validateSeed } from "./seed.js";
-import { validateParcels, assetsInParcel, parcelTitle, fmtArea } from "./parcels.js";
+import { validateParcels, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea } from "./parcels.js";
 import { selectRecords, planBatches, buildPackage, hasRemainingBatches, studyIdError } from "./export.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
@@ -162,12 +162,12 @@ function showParcel(feature) {
   const src = state.parcels?.source;
   $("parcel-meta").textContent = `도형면적 ${fmtArea(p.area_m2_geom, p.area_missing_reason)} (공부면적 아님)` + (p.jimok ? ` · 지목 ${p.jimok}` : "") + (p.jibun_mismatch ? " · 원본 지번과 PNU 불일치" : "") +
     (src ? ` · ${src.name} ${src.geometry_version}` : "");
-  const inside = assetsInParcel(feature, state.assets);
-  $("parcel-assets").replaceChildren(...inside.map((a) => el("li", {},
-    el("span", { text: a.label }), el("span", { class: "badge", text: a.data_mode }),
+  const inside = parcelAssets(feature, state.assets);
+  $("parcel-assets").replaceChildren(...inside.map(({ asset: a, basis }) => el("li", {},
+    el("span", { text: a.label }), el("span", { class: "badge", text: a.data_mode }), el("span", { class: "badge", text: BASIS_LABEL[basis] }),
     el("button", { text: "관측 기록", onclick: () => startObservation(a) }),
   )));
-  if (!inside.length) $("parcel-assets").append(el("li", { class: "muted", text: "이 필지 안에 위치점 있는 물건이 없다. PC 에서 시드에 추가한 뒤 다시 불러온다." }));
+  if (!inside.length) $("parcel-assets").append(el("li", { class: "muted", text: "이 필지에 연결되거나 위치점이 들어 있는 물건이 없다. PC 에서 시드·연결을 넣은 뒤 다시 불러온다." }));
   $("parcel-panel").hidden = false;
 }
 

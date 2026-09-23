@@ -16,6 +16,7 @@ from pathlib import Path
 from j5 import APP_VERSION
 from j5.db.backup import EXIT_BY_OUTCOME as BACKUP_EXIT, BackupError, check_photos, check_photos_text, create_backup, restore_backup, verify_backup_dir
 from j5.db.importer import EXIT_BY_OUTCOME, import_package
+from j5.db.parcels import BUNDLE_SCHEMA as PARCELS_BUNDLE_SCHEMA, LINKS_SCHEMA as PARCELS_LINKS_SCHEMA, apply_links, load_bundle, load_json as load_parcels_json, suggest_links
 from j5.db.projection import EXIT_BY_OUTCOME as PROJECT_EXIT, ProjectionError, build_projection, copy_latest
 from j5.db.store import Db, DbError, default_db_path
 from j5.db.survey import apply_input, compare, compare_text, load_input, overview, overview_text, vacancy, vacancy_text
@@ -93,6 +94,15 @@ def _build_parser() -> argparse.ArgumentParser:
     sc.add_argument("--json", action="store_true")
     so = dsub.add_parser("survey-overview", help="경로·표본틀·세션·점포 현황")
     so.add_argument("--json", action="store_true")
+    pl = dsub.add_parser("parcels-load", help="필지 번들(.j5parcels.json, j5 parcels convert 출력)을 정본 parcels 에 반영한다 (PNU 기준, 새 도형 기준일이면 갱신)")
+    pl.add_argument("bundle", type=Path)
+    pl.add_argument("--json", action="store_true")
+    ps_ = dsub.add_parser("parcels-suggest", help="위치점을 품는 필지를 물건마다 찾아 연결 제안 파일을 만든다 (정본에 쓰지 않음, 검토 후 parcels-link)")
+    ps_.add_argument("--out", type=Path, help="제안을 쓸 JSON 파일 (덮어쓰지 않음). 생략하면 표준 출력")
+    ps_.add_argument("--effective-from", help="연결 시작일 YYYY-MM-DD (기본 오늘, UTC)")
+    pk = dsub.add_parser("parcels-link", help="검토한 연결 파일(asset_components_input)을 정본 asset_components 에 반영한다")
+    pk.add_argument("file", type=Path)
+    pk.add_argument("--json", action="store_true")
 
     pa = sub.add_parser("parcels", help="필지 경계·지번 (ADR-13): 연속지적도 SHP → 폰 지도용 번들(.j5parcels.json)")
     psub = pa.add_subparsers(dest="parcels_command", required=True)
@@ -257,6 +267,35 @@ def _db_main(args) -> int:
             if args.db_command == "survey-overview":
                 o = overview(db)
                 sys.stdout.write(json.dumps(o, ensure_ascii=True, sort_keys=True, indent=2) + "\n" if args.json else overview_text(o))
+                return 0
+            if args.db_command == "parcels-load":
+                if not args.bundle.is_file():
+                    print(f"번들 파일이 없음: {args.bundle}", file=sys.stderr)
+                    return USAGE_ERROR
+                r = load_bundle(db, load_parcels_json(args.bundle, PARCELS_BUNDLE_SCHEMA))
+                sys.stdout.write(json.dumps(r.to_dict(), ensure_ascii=True, sort_keys=True, indent=2) + "\n" if args.json else r.to_text())
+                return 0
+            if args.db_command == "parcels-suggest":
+                eff = args.effective_from or db.now()[:10]
+                sug = suggest_links(db, effective_from=eff)
+                text_ = json.dumps({k: v for k, v in sug.items() if not k.startswith("_")}, ensure_ascii=False, indent=2) + "\n"
+                if args.out is None:
+                    sys.stdout.write(text_)
+                else:
+                    if args.out.exists():
+                        print(f"출력 파일이 이미 있다 (덮어쓰지 않음): {args.out}", file=sys.stderr)
+                        return 1
+                    args.out.parent.mkdir(parents=True, exist_ok=True)
+                    args.out.write_text(text_, encoding="utf-8")
+                    print(f"연결 제안 {len(sug['links'])}건 → {args.out}. 검토·수정한 뒤 `j5 db parcels-link {args.out}` 로 반영한다")
+                print(f"위치점 없는 물건 {len(sug['_unlocated_asset_ids'])}, 필지 밖 위치점 {len(sug['_unmatched_asset_ids'])}", file=sys.stderr)
+                return 0
+            if args.db_command == "parcels-link":
+                if not args.file.is_file():
+                    print(f"연결 파일이 없음: {args.file}", file=sys.stderr)
+                    return USAGE_ERROR
+                r = apply_links(db, load_parcels_json(args.file, PARCELS_LINKS_SCHEMA))
+                sys.stdout.write(json.dumps(r.to_dict(), ensure_ascii=True, sort_keys=True, indent=2) + "\n" if args.json else r.to_text())
                 return 0
     except DbError as e:
         print(f"정본 오류 [{e.code}]: {e.message}", file=sys.stderr)

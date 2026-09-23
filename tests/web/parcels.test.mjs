@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { validateParcels, labelPoint, pointInFeature, assetsInParcel, parcelTitle, fmtArea, polygonsOf, MAX_PARCELS } from "../../web/app/parcels.js";
+import { validateParcels, labelPoint, pointInFeature, assetsInParcel, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, polygonsOf, MAX_PARCELS } from "../../web/app/parcels.js";
 import { worldBbox, parcelPathD, parcelLabelVisible, mercator, fitView, FIT_MAX_SCALE, PARCEL_LOCAL_K } from "../../web/app/map.js";
 
 const bundle = () => JSON.parse(readFileSync(new URL("../fixtures/parcels/synthetic.j5parcels.json", import.meta.url), "utf8"));
@@ -66,6 +66,17 @@ test("labelPoint·pointInFeature·assetsInParcel: 구멍·다중 조각·물건 
   assert.deepEqual(assetsInParcel(by["3"], s).map((a) => a.label), ["가상 물건 5"]);
   assert.deepEqual(assetsInParcel(hole, s), []);
   assert.deepEqual(assetsInParcel(mt, s), []);
+  // 정본 연결(asset_ids, 파생본): 주소만 있는 물건 3 을 필지 4-2 에 연결하면 위치점 없이도 뜬다. 위치점 포함과 근거를 구분한다
+  const linkedHole = { ...hole, properties: { ...hole.properties, asset_ids: [s[2].asset_id] } };
+  assert.deepEqual(parcelAssets(linkedHole, s).map((x) => [x.asset.label, x.basis]), [["가상 물건 3", "linked"]]);
+  const linkedP1 = { ...p1, properties: { ...p1.properties, asset_ids: [s[0].asset_id, s[2].asset_id] } };
+  assert.deepEqual(parcelAssets(linkedP1, s).map((x) => [x.asset.label, x.basis]), [["가상 물건 1", "both"], ["가상 물건 3", "linked"]]);
+  assert.deepEqual(parcelAssets(p1, s).map((x) => [x.asset.label, x.basis]), [["가상 물건 1", "inside"]]);
+  assert.equal(BASIS_LABEL.inside, "위치점 포함 (연결 미확정)");
+  const withIds = bundle(); withIds.features[0].properties.asset_ids = [s[0].asset_id]; withIds.features[0].properties.geometry_version = "2026-09-01";
+  assert.deepEqual(validateParcels(withIds), [], "파생본의 asset_ids·geometry_version 허용");
+  withIds.features[0].properties.asset_ids = "x";
+  assert.ok(validateParcels(withIds).some((e) => e.includes("asset_ids")));
   assert.equal(parcelTitle(p1.properties), "가상동 1");
   assert.equal(parcelTitle({ ...p1.properties, emd_name: null }), "9999900100 1");
   assert.equal(fmtArea(12.34), "12.3 ㎡");

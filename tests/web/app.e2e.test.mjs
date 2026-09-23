@@ -202,7 +202,7 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     // 물건 없는 필지 (구멍 있는 4-2): 안내만
     await cdp.clickRect('#map-svg path.parcel[data-pnu="9999900100100040002"]');
     await cdp.waitFor("document.getElementById('parcel-title').textContent === '가상동 4-2'");
-    assert.match(await cdp.eval("document.getElementById('parcel-assets').textContent"), /위치점 있는 물건이 없다/);
+    assert.match(await cdp.eval("document.getElementById('parcel-assets').textContent"), /연결되거나 위치점이 들어 있는 물건이 없다/);
     assert.ok((await cdp.eval(VISIBLE_LABELS)).includes("4-2"), "선택한 필지의 지번은 항상 보인다");
     await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
     await cdp.waitFor("document.getElementById('parcel-panel').hidden && document.querySelectorAll('#map-svg path.parcel.sel').length === 0");
@@ -225,11 +225,20 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.setFiles("#parcels-file", [parcelsBad]);
     await cdp.waitFor("document.getElementById('parcels-note').textContent.includes('필지 파일 오류')");
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel').length"), 6);
-    const parcelsFile = join(tmp, "jongno.j5parcels.json");
-    writeFileSync(parcelsFile, parcelsFixture);
+    // 파생본(parcels.geojson) 형식: 정본에서 연결한 물건(asset_ids)이 있으면 위치점 없는 물건도 필지 패널에 뜬다 (J5-013B-2)
+    const linked = JSON.parse(parcelsFixture);
+    const f42 = linked.features.find((f) => f.properties.label === "4-2");
+    f42.properties.asset_ids = ["7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a52"];
+    f42.properties.geometry_version = "2026-09-01";
+    const parcelsFile = join(tmp, "parcels.geojson");
+    writeFileSync(parcelsFile, JSON.stringify(linked));
     await cdp.setFiles("#parcels-file", [parcelsFile]);
-    await cdp.waitFor("document.getElementById('parcels-note').textContent.includes('file:jongno.j5parcels.json')");
+    await cdp.waitFor("document.getElementById('parcels-note').textContent.includes('file:parcels.geojson')");
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel').length"), 6);
+    await cdp.clickRect('#map-svg path.parcel[data-pnu="9999900100100040002"]');
+    await cdp.waitFor("!document.getElementById('parcel-panel').hidden && document.getElementById('parcel-title').textContent === '가상동 4-2'");
+    assert.deepEqual(await cdp.eval("Array.from(document.querySelectorAll('#parcel-assets li')).map(li => [li.firstChild.textContent, li.querySelectorAll('.badge')[1].textContent])"), [["가상 물건 3", "정본 연결"]], "정본 연결(asset_ids)만으로도 위치점 없는 물건이 뜬다");
+    await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
     // 관측 (사진 1장, 태그 1개)
     const photo = join(tmp, "front.png");
     writeFileSync(photo, png1x1([0, 128, 255]));

@@ -6,7 +6,7 @@
 
 - `index.html` + `app/main.js`: R1a 현장 기록 앱 (J5-006). 설정(study_id·자료 모드·경로 버전 ID) → 시드 불러오기(가상 5개 또는 기기의 파일) → 필지 번들 불러오기(선택) → 물건 선택(목록, 지도의 점, 또는 필지 탭 → 그 안의 물건) → 관측 저장(상태·시각/날짜·설명·사진·태그) → 저장 목록. 목록이 주 화면이고 지도가 실패해도 목록으로 동작한다.
 - `app/map.js`: 최소 지도(J5-005, ADR-12). Web Mercator 투영으로 `location_point` 있는 물건만 SVG 점·라벨로 그린다(가상은 점선 빈 원, 실제·비공개는 채운 원). 드래그·핀치·휠·버튼으로 이동·확대, 점 탭으로 관측 시작, 축척 막대. 필지 번들이 있으면 점 아래 층에 경계 path(로컬 단위 + 그룹 transform, 가상은 점선)와 지번 라벨(픽셀 단위, 필지가 충분히 클 때만)을 그리고 필지 탭으로 필지 패널을 연다(J5-013B-1, ADR-13). 배경 타일·외부 통신 없음.
-- `app/parcels.js`: 필지 번들(`.j5parcels.json`) 검증(`schemas/parcels_bundle.schema.json` 핵심 규칙), 라벨 위치, 점-필지 포함 판정(구멍 제외), 필지 안의 물건 찾기. PNU 는 물건 ID 가 아니다.
+- `app/parcels.js`: 필지 번들(`.j5parcels.json`, 파생본 `parcels.geojson`) 검증(`schemas/parcels_bundle.schema.json` 핵심 규칙), 라벨 위치, 점-필지 포함 판정(구멍 제외), 필지의 물건 찾기(정본 연결 `asset_ids` + 위치점 포함, 근거 표시). PNU 는 물건 ID 가 아니고 폰은 연결을 편집하지 않는다.
 - `app/db.js`: IndexedDB(`j5`, v2). 스토어 meta·assets·events(객체 + 고정 행 바이트 + 해시)·photos(sha256 → Blob)·parcels(필지 번들 한 벌). 관측과 사진은 한 트랜잭션으로 저장하고 실패 시 '저장됨'으로 표시하지 않는다. 자동 삭제 없음.
 - `app/event.js`: 이벤트 작성·정규화(키 정렬·압축·비ASCII 보존 + LF)·검증. 정규화 바이트는 `tests/fixtures/make_packages.py`와 같다.
 - `app/export.js`: 내보내기(J5-007). 현재 study_id·자료 모드의 기록을 골라 한도(§3.3)에 맞춰 묶음을 나누고, 고정 행 바이트·참조 사진·manifest 로 `.j5field.zip` 을 만든다. 파일 저장 뒤 "파일 저장 확인"을 눌러야 기록이 `내보냄`이 된다.

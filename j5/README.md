@@ -102,4 +102,12 @@ python -m j5 parcels convert <연속지적도.shp 또는 .zip> --out <이름>.j5
 - `convert`: 범위와 겹치는 필지만 WGS84 GeoJSON 번들(`schemas/parcels_bundle.schema.json`)로 만든다. PNU(19자리)·지번 라벨·지목·도형면적(공부면적 아님)·bbox 를 속성으로 두고, 같은 PNU 는 MultiPolygon 으로 합친다. 원본은 수정하지 않고 출력은 임시 파일 검증 뒤 교체하며 덮어쓰지 않는다. 상한 8,000 필지(`--max-features`, 계약 상한 이하만). ZIP 은 항목·합계·압축비 상한을 검사한다.
 - 좌표계 변환은 표준 라이브러리로 구현했다(횡축 메르카토르 Krüger 급수, Korean 1985 데이텀은 EPSG 공식 Molodensky-Badekas). pyproj 계산값과 mm 이내로 대조했다(`tests/test_j5_013b_parcels.py`). .prj 가 없으면 `--crs` 가 필요하다.
 - 번들은 폰 앱의 "필지 파일 불러오기" 로 넣는다. 실제 번들·원본 SHP 는 `J5_DATA_HOME/raw/`, `J5_DATA_HOME/exports/private/` 등 실데이터 홈에 두고 저장소에 넣지 않는다. 이용허락 유형은 배포처에서 확인해 `--license` 로 기록한다.
-- 정본 `parcels` 테이블·PNU↔asset_id 연결은 J5-013B-2.
+- 정본 반영·연결 (J5-013B-2):
+
+```text
+python -m j5 db [--db 경로] parcels-load <번들.j5parcels.json> [--json]
+python -m j5 db [--db 경로] parcels-suggest [--out 제안.json] [--effective-from YYYY-MM-DD]
+python -m j5 db [--db 경로] parcels-link <제안.json> [--json]
+```
+
+  `parcels-load` 는 PNU 기준으로 정본 `parcels`(db_schema 5) 에 넣는다(같은 내용 변화 없음, 더 새로운 도형 기준일이면 갱신, 같은 기준일·다른 내용이나 더 오래된 기준일은 거절). 번들 data_mode 는 정본과 맞아야 하고(synthetic ↔ synthetic, real ↔ private_real), 반영한 번들은 `source_documents` 에 남는다. `parcels-suggest` 는 물건 위치점을 품는 필지를 찾아 연결 제안 파일(`schemas/asset_components_input.schema.json`)을 만들 뿐 정본에 쓰지 않는다. 검토·수정한 파일을 `parcels-link` 로 반영하면 `asset_components` 에 적용 기간·근거와 함께 저장되고 dataset_version 이 오른다. 이후 `project` 의 파생본에 `parcels.geojson`(필지 + 연결 물건 `asset_ids`)이 들어가며 폰의 "필지 파일 불러오기" 로 그대로 넣는다.

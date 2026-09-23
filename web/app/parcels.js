@@ -50,6 +50,7 @@ export function validateParcels(doc) {
     if (p.pnu !== f.id) errs.push(`${at} properties.pnu 와 id 가 다름`);
     if (typeof p.label !== "string" || !p.label.length || p.label.length > 20) errs.push(`${at} label`);
     if (!isBbox(p.bbox)) errs.push(`${at} bbox`);
+    if ("asset_ids" in p && !(Array.isArray(p.asset_ids) && p.asset_ids.every((x) => typeof x === "string"))) errs.push(`${at} asset_ids`);
     if (p.area_m2_geom === null ? typeof p.area_missing_reason !== "string" : (typeof p.area_m2_geom !== "number" || p.area_m2_geom < 0)) errs.push(`${at} area_m2_geom (null 이면 area_missing_reason 필요)`);
   }
   return errs;
@@ -111,10 +112,19 @@ export function pointInFeature(pt, feature) {
   return false;
 }
 
-/** 위치점이 이 필지 안에 있는 물건들. PNU↔asset_id 연결은 정본(R2) 몫이고 여기서는 위치로만 찾는다. */
+/** 위치점이 이 필지 안에 있는 물건들 (위치로만 찾는다). */
 export function assetsInParcel(feature, assets) {
   return assets.filter((a) => Array.isArray(a.location_point) && a.location_point.length === 2 && pointInFeature(a.location_point, feature));
 }
+
+/** 이 필지의 물건: 정본 연결(asset_ids, 파생본에만 있음)과 위치점 포함을 합친다. 각 항목에 근거(linked / inside / both)를 붙인다. */
+export function parcelAssets(feature, assets) {
+  const linked = new Set(feature.properties?.asset_ids ?? []);
+  const inside = new Set(assetsInParcel(feature, assets).map((a) => a.asset_id));
+  return assets.filter((a) => linked.has(a.asset_id) || inside.has(a.asset_id))
+    .map((a) => ({ asset: a, basis: linked.has(a.asset_id) && inside.has(a.asset_id) ? "both" : linked.has(a.asset_id) ? "linked" : "inside" }));
+}
+export const BASIS_LABEL = { both: "정본 연결 · 위치점 포함", linked: "정본 연결", inside: "위치점 포함 (연결 미확정)" };
 
 export function parcelTitle(props) {
   return `${props.emd_name ?? props.emd_code} ${props.label}`;
