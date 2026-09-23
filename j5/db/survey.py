@@ -18,7 +18,7 @@ from pathlib import Path
 
 from j5.db import schema as S
 from j5.db.store import Db, DbError
-from j5.db.validate import ValidationError, parse_datetime, to_utc_iso
+from j5.db.validate import ValidationError, parse_date, parse_datetime
 from j5.schemas_loader import schema_errors
 
 CONFIRMED_STATUSES = ("occupied", "vacant")
@@ -50,6 +50,13 @@ def _canon(obj) -> str:
 
 def _hash(obj) -> str:
     return hashlib.sha256(_canon(obj).encode("utf-8")).hexdigest()
+
+
+def _require_dates(pairs: list[tuple[str, object]]) -> None:
+    """스키마의 format=date 와 별개로 코드에서도 달력상 존재하는 날짜인지 확인한다 (2026-02-31 같은 값을 막는다)."""
+    bad = [f"{name}: {value}" for name, value in pairs if value is not None and parse_date(value) is None]
+    if bad:
+        raise ValidationError(["달력상 존재하지 않는 날짜: " + "; ".join(bad)])
 
 
 def load_input(path: Path) -> dict:
@@ -89,6 +96,7 @@ def _apply_route_version(db: Db, doc: dict, r: ApplyResult) -> None:
     seg_ids = [s["segment_id"] for s in doc["segments"]]
     if len(set(seg_ids)) != len(seg_ids):
         raise ValidationError(["segments 의 segment_id 가 중복된다"])
+    _require_dates([("effective_from", doc["effective_from"])])
     content = {"route_id": route["route_id"], "effective_from": doc["effective_from"], "previous_version_id": doc["previous_version_id"],
                "change_reason": doc["change_reason"], "segments": doc["segments"]}
     h = _hash(content)
@@ -137,6 +145,7 @@ def _apply_units(db: Db, doc: dict, r: ApplyResult) -> None:
         raise ValidationError(["units 의 unit_id 가 중복된다"])
     for u in doc["units"]:
         uid = u["unit_id"]
+        _require_dates([(f"{uid}.opened_on", u.get("opened_on")), (f"{uid}.closed_on", u.get("closed_on"))])
         if u.get("asset_id") and db.conn.execute("SELECT 1 FROM assets WHERE asset_id = ?", (u["asset_id"],)).fetchone() is None:
             raise ValidationError([f"{uid}: asset_id {u['asset_id']} 가 정본 물건에 없다"])
         lon, lat = (u["location_point"] if u.get("location_point") else (None, None))
@@ -162,6 +171,7 @@ def _apply_units(db: Db, doc: dict, r: ApplyResult) -> None:
             r.updated += 1
         r.ids.append(uid)
     for ln in doc.get("links", []):
+        _require_dates([(f"link.{ln['from_unit_id']}.effective_from", ln["effective_from"])])
         for k in ("from_unit_id", "to_unit_id"):
             if db.conn.execute("SELECT 1 FROM survey_units WHERE unit_id = ?", (ln[k],)).fetchone() is None:
                 raise ValidationError([f"링크의 {k} {ln[k]} 가 점포 목록에 없다"])
@@ -183,6 +193,7 @@ def _apply_units(db: Db, doc: dict, r: ApplyResult) -> None:
 def _apply_frame_version(db: Db, doc: dict, r: ApplyResult) -> None:
     now = db.now()
     fvid = doc["frame_version_id"]
+    _require_dates([("confirmed_on", doc["confirmed_on"])])
     members = sorted(doc["unit_ids"])
     content = {"name": doc["name"], "selection_rule": doc["selection_rule"], "unit_ids": members, "confirmed_on": doc["confirmed_on"],
                "previous_version_id": doc["previous_version_id"], "change_reason": doc["change_reason"]}
@@ -245,8 +256,11 @@ def _apply_session(db: Db, doc: dict, r: ApplyResult) -> None:
     for o in doc["observations"]:
         if db.conn.execute("SELECT 1 FROM survey_units WHERE unit_id = ?", (o["unit_id"],)).fetchone() is None:
             raise ValidationError([f"관측의 unit_id {o['unit_id']} 가 점포 목록에 없다"])
-        if parse_datetime(o["observed_at"]) is None:
+        obs_at = parse_datetime(o["observed_at"])
+        if obs_at is None:
             raise ValidationError([f"{o['unit_id']}: observed_at 은 시간대 오프셋이 있는 ISO 8601"])
+        if obs_at < started or (ended is not None and obs_at > ended):
+            raise ValidationError([f"{o['unit_id']}: observed_at {o['observed_at']} 이 세션 시간({doc['started_at']} ~ {doc['ended_at'] or '진행 중'}) 밖이다. 다른 시점의 관측은 그 시점의 세션에 넣는다"])
         if o.get("record_id") and db.conn.execute("SELECT 1 FROM records WHERE record_id = ?", (o["record_id"],)).fetchone() is None:
             raise ValidationError([f"{o['unit_id']}: record_id {o['record_id']} 가 정본 기록에 없다"])
     header = {"route_version_id": doc["route_version_id"], "frame_version_id": doc["frame_version_id"], "started_at": doc["started_at"], "ended_at": doc["ended_at"],
@@ -321,8 +335,9 @@ def compare(db: Db, session_a: str, session_b: str) -> dict:
     fb = {x[0] for x in db.conn.execute("SELECT unit_id FROM survey_frame_members WHERE frame_version_id = ?", (b["frame_version_id"],))}
     oa = {r["unit_id"]: r["status"] for r in db.conn.execute("SELECT unit_id, status FROM unit_observations WHERE session_id = ?", (session_a,))}
     ob = {r["unit_id"]: r["status"] for r in db.conn.execute("SELECT unit_id, status FROM unit_observations WHERE session_id = ?", (session_b,))}
-    start_a = to_utc_iso(parse_datetime(a["started_at"]))[:10]
-    start_b = to_utc_iso(parse_datetime(b["started_at"]))[:10]
+    # 링크의 effective_from 은 현지 달력 날짜다. 세션 시작 시각의 오프셋을 그대로 둔 현지 날짜와 비교한다 (UTC 로 바꾸면 자정 근처에서 날짜가 밀린다)
+    start_a = parse_datetime(a["started_at"]).date().isoformat()
+    start_b = parse_datetime(b["started_at"]).date().isoformat()
     lo, hi = min(start_a, start_b), max(start_a, start_b)
     broken: set[str] = set()
     breaks = []
@@ -358,8 +373,9 @@ def overview(db: Db) -> dict:
         " LEFT JOIN unit_observations o ON o.session_id = s.session_id GROUP BY s.session_id ORDER BY s.started_at")]
     units = db.conn.execute("SELECT COUNT(*), SUM(closed_on IS NOT NULL) FROM survey_units").fetchone()
     refs = db.conn.execute("SELECT COUNT(*) FROM record_survey_refs x WHERE x.route_version_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM survey_route_versions v WHERE v.route_version_id = x.route_version_id)").fetchone()[0]
+    frefs = db.conn.execute("SELECT COUNT(*) FROM record_survey_refs x WHERE x.frame_version_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM survey_frame_versions f WHERE f.frame_version_id = x.frame_version_id)").fetchone()[0]
     return {"routes": routes, "frames": frames, "sessions": sessions, "units": units[0], "units_closed": units[1] or 0,
-            "records_with_unknown_route_version": refs}
+            "records_with_unknown_route_version": refs, "records_with_unknown_frame_version": frefs}
 
 
 def vacancy_text(v: dict) -> str:
@@ -396,4 +412,6 @@ def overview_text(o: dict) -> str:
         lines.append(f"  세션 {s['session_id']} {s['started_at']} · 관측 {s['observations']}")
     if o["records_with_unknown_route_version"]:
         lines.append(f"정본에 없는 경로 버전을 참조한 현장 기록 {o['records_with_unknown_route_version']}건 (경로 버전 파일을 반영하면 연결된다)")
+    if o["records_with_unknown_frame_version"]:
+        lines.append(f"정본에 없는 표본틀 버전을 참조한 현장 기록 {o['records_with_unknown_frame_version']}건 (표본틀 파일을 반영하면 연결된다)")
     return "\n".join(lines) + "\n"

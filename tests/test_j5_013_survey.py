@@ -225,3 +225,52 @@ def test_cli_survey_commands(home, capsys, monkeypatch, tmp_path):
     assert "observation_immutable" in capsys.readouterr().err
     assert cli.main(["db", "survey-vacancy", "4a5b6c7d-0004-4000-8000-000000000099"]) == 1
     assert cli.main(["db", "survey-apply", str(tmp_path / "none.json")]) == cli.USAGE_ERROR
+
+
+def test_review_fixes_session_window_dates_frame_refs_and_local_day(db, home):
+    """Codex 리뷰(PR #39): 세션 시간 밖 관측 거절, 달력에 없는 날짜 거절, 표본틀 미해결 참조 표시, 단절 판정은 세션 현지 날짜."""
+    apply_all(db, ["route_v1", "units_v1", "frame_v1"])
+    # 세션 시간(10:00~11:00) 밖 관측은 거절: 이전·이후 모두
+    for when in ("2026-09-22T09:59:00+09:00", "2026-09-23T10:05:00+09:00"):
+        d = doc("session_1"); d["observations"][0]["observed_at"] = when
+        with pytest.raises(ValidationError) as e:
+            apply_input(db, d)
+        assert "세션 시간" in e.value.errors[0]
+    # 진행 중 세션(ended_at null)은 시작 이후면 허용
+    d = doc("session_1"); d["ended_at"] = None; d["observations"][0]["observed_at"] = "2026-09-22T15:00:00+09:00"
+    assert apply_input(db, d).outcome == "applied"
+    # 달력에 없는 날짜는 스키마와 코드 양쪽에서 거절
+    d = doc("route_v2"); d["effective_from"] = "2026-02-31"
+    with pytest.raises(ValidationError):
+        apply_input(db, d)
+    d = doc("units_v2"); d["links"][0]["effective_from"] = "2026-13-01"
+    with pytest.raises(ValidationError):
+        apply_input(db, d)
+    from j5.db import survey as SV
+    with pytest.raises(ValidationError) as e:
+        SV._require_dates([("x", "2026-02-31")])
+    assert "달력상" in e.value.errors[0]
+    # 표본틀 미해결 참조: 이벤트가 frame_version_id 를 적었는데 표본틀 파일이 아직 없으면 overview 가 표시한다
+    with db.transaction():
+        db.conn.execute("INSERT INTO record_survey_refs (record_id, route_version_id, frame_version_id, recorded_at) SELECT record_id, ?, ?, ? FROM records LIMIT 0", (ROUTE_V1, FRAME_V2, db.now()))
+    assert import_package(db, PACKAGES / "valid", home).outcome == "applied"
+    with db.transaction():
+        db.conn.execute("UPDATE record_survey_refs SET frame_version_id = ?", (FRAME_V2,))
+    o = overview(db)
+    assert o["records_with_unknown_route_version"] == 0 and o["records_with_unknown_frame_version"] == 3
+    from j5.db.survey import overview_text
+    assert "표본틀 버전을 참조한 현장 기록 3건" in overview_text(o)
+    apply_all(db, ["route_v2", "units_v2", "frame_v2"])
+    assert overview(db)["records_with_unknown_frame_version"] == 0
+
+
+def test_compare_uses_session_local_day_for_breaks(db):
+    """통합이 2026-10-11 에 유효하고 B 세션이 2026-10-11 00:30 +09:00 에 시작하면(UTC 로는 10-10) 단절로 잡혀야 한다."""
+    apply_all(db, ["route_v1", "units_v1", "frame_v1", "session_1", "route_v2", "units_v2", "frame_v2"])
+    d = doc("session_2")
+    d["started_at"] = "2026-10-11T00:30:00+09:00"; d["ended_at"] = "2026-10-11T01:30:00+09:00"
+    for o in d["observations"]:
+        o["observed_at"] = "2026-10-11T01:00:00+09:00"
+    apply_input(db, d)
+    c = compare(db, S1, S2)
+    assert len(c["breaks"]) == 2 and sorted(c["broken_units"]) == sorted([U[3], U[4], U[6]]) and c["common"]["units"] == 3
