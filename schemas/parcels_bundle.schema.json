@@ -52,6 +52,8 @@
     "count": { "type": "integer", "minimum": 0 },
     "bbox": { "oneOf": [{ "$ref": "#/$defs/bbox" }, { "type": "null" }] },
     "warnings": { "type": "array", "items": { "type": "string" } },
+    "study_id": { "description": "파생본(정본 parcels)에서만: 정본의 study_id. 폰은 설정의 study_id 와 대조한다", "type": "string", "minLength": 1, "maxLength": 100 },
+    "source_dataset_version": { "description": "파생본에서만: 생성 시점의 정본 dataset_version", "type": "integer", "minimum": 0 },
     "features": {
       "type": "array",
       "maxItems": 8000,

@@ -244,10 +244,17 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     const f42 = linked.features.find((f) => f.properties.label === "4-2");
     f42.properties.asset_ids = ["7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a52"];
     f42.properties.geometry_version = "2026-09-01";
+    linked.study_id = "other-study"; linked.source_dataset_version = 3;
+    const parcelsOther = join(tmp, "parcels-other.geojson");
+    writeFileSync(parcelsOther, JSON.stringify(linked));
+    await cdp.setFiles("#parcels-file", [parcelsOther]);
+    await cdp.waitFor("document.getElementById('parcels-note').textContent.includes('study_id(other-study)가 설정(e2e-study)과 다르다')");
+    linked.study_id = "e2e-study";
     const parcelsFile = join(tmp, "parcels.geojson");
     writeFileSync(parcelsFile, JSON.stringify(linked));
     await cdp.setFiles("#parcels-file", [parcelsFile]);
     await cdp.waitFor("document.getElementById('parcels-note').textContent.includes('file:parcels.geojson')");
+    assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /정본 v3 · file:parcels\.geojson · 정본 연결 포함$/);
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel').length"), 6);
     await cdp.clickRect('#map-svg path.parcel[data-pnu="9999900100100040002"]');
     await cdp.waitFor("!document.getElementById('parcel-panel').hidden && document.getElementById('parcel-title').textContent === '가상동 4-2'");
@@ -285,6 +292,13 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.waitFor("document.querySelectorAll('#record-list li').length === 1");
     assert.ok((await cdp.eval("document.getElementById('record-list').textContent")).includes("현재 시드에 없는 물건"));
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.pt').length"), 2, "시드 교체 후 지도도 2개");
+    // 시드가 바뀌면 번들의 정본 연결은 확인되지 않은 것으로 본다: 필지 4-2 의 "가상 물건 3" 연결을 보여 주지 않는다 (J5-013B-2 리뷰 반영)
+    assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /시드가 바뀐 뒤라 표시하지 않음/);
+    await cdp.clickRect('#map-svg path.parcel[data-pnu="9999900100100040002"]');
+    await cdp.waitFor("!document.getElementById('parcel-panel').hidden && document.getElementById('parcel-title').textContent === '가상동 4-2'");
+    assert.equal(await cdp.eval("document.querySelectorAll('#parcel-assets li button').length"), 0, "오래된 정본 연결로 관측을 시작하지 못한다");
+    assert.match(await cdp.eval("document.getElementById('parcel-assets').textContent"), /정본 연결 1건은 시드가 바뀐 뒤 확인되지 않아/);
+    await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
     // 주소만 있는 시드: 지도에는 점이 없고 목록으로 선택한다
     const seedAddr = join(tmp, "seed-addr.json");
     writeFileSync(seedAddr, JSON.stringify([seedAll[2]]));

@@ -18,10 +18,11 @@ from pathlib import Path
 
 from j5.db.store import Db, DbError
 from j5.db.validate import ValidationError, parse_date
-from j5.parcels.convert import point_in_ring
+from j5.parcels.convert import MAX_FEATURES, point_in_ring
 from j5.schemas_loader import schema_errors
 
 BUNDLE_SCHEMA = "parcels_bundle.schema.json"
+BESSEL_WARNING = "Bessel(Korean 1985) 자료를 EPSG 공식 매개변수로 옮겼다. 공식 정확도 수 m 급이며 지도에서 위치점과 대조한다"
 LINKS_SCHEMA = "asset_components_input.schema.json"
 BUNDLE_MODE_TO_DB = {"synthetic": "synthetic", "real": "private_real"}
 
@@ -91,6 +92,7 @@ def _parcel_content(feature: dict, src: dict) -> dict:
             "jimok": p["jimok"], "jibun_raw": p["jibun_raw"], "jibun_mismatch": p["jibun_mismatch"], "geom_area_m2": p["area_m2_geom"],
             "geom_area_missing_reason": p["area_missing_reason"], "geometry": feature["geometry"], "bbox": p["bbox"], "geometry_version": src["geometry_version"],
             "source_name": src["name"], "source_crs": f"EPSG:{src['crs']['epsg']}" if src["crs"].get("epsg") else src["crs"]["name"],
+            "source_ellipsoid": src["crs"]["ellipsoid"], "source_datum_shift": src["crs"]["datum_shift"],
             "source_shp_sha256": src["shp_sha256"], "source_license": src["license"]}
 
 
@@ -130,6 +132,10 @@ def load_bundle(db: Db, doc: dict) -> ParcelLoadResult:
             else:
                 raise DbError("parcel_older", f"PNU {feature['id']}: 번들 기준일 {content['geometry_version']} 이 정본의 {cur['geometry_version']} 보다 오래됐다. 반영하지 않는다")
         changed = any(a in ("insert", "update") for a, *_ in plan)
+        n_insert = sum(1 for a, *_ in plan if a == "insert")
+        total_after = db.conn.execute("SELECT COUNT(*) FROM parcels").fetchone()[0] + n_insert
+        if total_after > MAX_FEATURES:
+            raise DbError("parcels_limit", f"반영 후 정본 필지가 {total_after}개로 파생본·폰 상한 {MAX_FEATURES}개를 넘는다. 조사 범위를 좁힌 번들로 다시 만든다 (정본은 바꾸지 않았다)")
         # 2) 출처 문서를 먼저 남기고(필지 행이 참조), 필지를 반영한다
         if changed:
             db.add_source_document({"document_id": doc_id, "document_kind": "official_file", "title": f"{src['name']} (도형 기준일 {src['geometry_version']}, {src['file']})",
@@ -147,10 +153,10 @@ def load_bundle(db: Db, doc: dict) -> ParcelLoadResult:
                 db.conn.execute(
                     "INSERT INTO parcels (parcel_id, pnu, label, emd_code, emd_name, mountain, bon, bu, jimok, jibun_raw, jibun_mismatch,"
                     " registered_area_m2, registered_area_missing_reason, geom_area_m2, geom_area_missing_reason, geometry_json, geometry_version, bbox_json,"
-                    " source_name, source_crs, source_shp_sha256, source_license, source_document_id, data_mode, content_hash, recorded_at, updated_at)"
+                    " source_name, source_crs, source_ellipsoid, source_datum_shift, source_shp_sha256, source_license, source_document_id, data_mode, content_hash, recorded_at, updated_at)"
                     " VALUES (:parcel_id, :pnu, :label, :emd_code, :emd_name, :mountain, :bon, :bu, :jimok, :jibun_raw, :jibun_mismatch,"
                     " NULL, 'not_collected', :geom_area_m2, :geom_area_missing_reason, :geometry_json, :geometry_version, :bbox_json,"
-                    " :source_name, :source_crs, :source_shp_sha256, :source_license, :source_document_id, :data_mode, :content_hash, :now, :now)",
+                    " :source_name, :source_crs, :source_ellipsoid, :source_datum_shift, :source_shp_sha256, :source_license, :source_document_id, :data_mode, :content_hash, :now, :now)",
                     {**row, "parcel_id": pid})
                 r.inserted += 1
             else:
@@ -158,7 +164,7 @@ def load_bundle(db: Db, doc: dict) -> ParcelLoadResult:
                     "UPDATE parcels SET label = :label, emd_code = :emd_code, emd_name = :emd_name, mountain = :mountain, bon = :bon, bu = :bu, jimok = :jimok,"
                     " jibun_raw = :jibun_raw, jibun_mismatch = :jibun_mismatch, geom_area_m2 = :geom_area_m2, geom_area_missing_reason = :geom_area_missing_reason,"
                     " geometry_json = :geometry_json, geometry_version = :geometry_version, bbox_json = :bbox_json, source_name = :source_name, source_crs = :source_crs,"
-                    " source_shp_sha256 = :source_shp_sha256, source_license = :source_license, source_document_id = :source_document_id, content_hash = :content_hash,"
+                    " source_ellipsoid = :source_ellipsoid, source_datum_shift = :source_datum_shift, source_shp_sha256 = :source_shp_sha256, source_license = :source_license, source_document_id = :source_document_id, content_hash = :content_hash,"
                     " updated_at = :now WHERE pnu = :pnu", row)
                 r.updated += 1
         if changed:
@@ -192,7 +198,8 @@ def active_links(db: Db, on_date: str | None = None) -> list[dict]:
     out = []
     for r in rows:
         d = dict(r)
-        if on_date is not None and (d["effective_from"] > on_date or (d["effective_to"] is not None and d["effective_to"] < on_date)):
+        # 적용 기간은 반개구간 [effective_from, effective_to): 종료일 당일은 유효하지 않다 (데이터 사전 §1)
+        if on_date is not None and (d["effective_from"] > on_date or (d["effective_to"] is not None and d["effective_to"] <= on_date)):
             continue
         out.append(d)
     return out
@@ -239,8 +246,8 @@ def apply_links(db: Db, doc: dict) -> LinkResult:
     now = db.now()
     with db.transaction():
         for i, l in enumerate(doc["links"]):
-            if l["effective_to"] is not None and l["effective_to"] < l["effective_from"]:
-                raise ValidationError([f"links[{i}]: effective_to 가 effective_from 보다 앞선다"])
+            if l["effective_to"] is not None and l["effective_to"] <= l["effective_from"]:
+                raise ValidationError([f"links[{i}]: effective_to 는 effective_from 보다 뒤여야 한다 (반개구간, 같은 날이면 빈 기간)"])
             if db.conn.execute("SELECT 1 FROM assets WHERE asset_id = ?", (l["asset_id"],)).fetchone() is None:
                 raise ValidationError([f"links[{i}]: 물건 {l['asset_id']} 이 정본에 없다 (시드를 먼저 반영한다)"])
             p = db.conn.execute("SELECT parcel_id FROM parcels WHERE pnu = ?", (l["pnu"],)).fetchone()
@@ -249,12 +256,12 @@ def apply_links(db: Db, doc: dict) -> LinkResult:
             cur = db.conn.execute("SELECT component_id, effective_to, basis, note FROM asset_components WHERE asset_id = ? AND component_subject_id = ? AND effective_from = ?",
                                   (l["asset_id"], p["parcel_id"], l["effective_from"])).fetchone()
             new = {"effective_to": l["effective_to"], "basis": l["basis"], "note": l.get("note")}
-            # 같은 (물건, 필지) 의 다른 기간과 겹치면 거절한다 (한 시점에 같은 연결이 두 행이면 유효 연결이 모호해진다)
+            # 같은 (물건, 필지) 의 다른 기간과 겹치면 거절한다 (한 시점에 같은 연결이 두 행이면 유효 연결이 모호해진다). 기간은 반개구간이라 끝날 = 다음 시작일은 겹침이 아니다
             for o in db.conn.execute("SELECT effective_from, effective_to FROM asset_components WHERE asset_id = ? AND component_subject_id = ? AND effective_from <> ?",
                                      (l["asset_id"], p["parcel_id"], l["effective_from"])):
                 a0, a1 = l["effective_from"], l["effective_to"]
                 b0, b1 = o["effective_from"], o["effective_to"]
-                if (a1 is None or a1 >= b0) and (b1 is None or b1 >= a0):
+                if (a1 is None or a1 > b0) and (b1 is None or b1 > a0):
                     raise ValidationError([f"links[{i}]: 같은 물건·필지의 기존 연결({b0}~{b1 or '진행 중'})과 기간이 겹친다. 기존 연결의 종료일을 먼저 정한다"])
             if cur is None:
                 cid = str(uuid.uuid4())
@@ -281,7 +288,7 @@ def apply_links(db: Db, doc: dict) -> LinkResult:
 
 # ---------------------------------------------------------------- 파생본용 조회
 
-def parcels_bundle_from_db(db: Db, *, generated_at: str) -> dict | None:
+def parcels_bundle_from_db(db: Db, *, generated_at: str, source_dataset_version: int | None = None) -> dict | None:
     """정본 parcels 전체를 폰이 읽는 번들 형식(j5parcels 1.0.0)으로. 필지가 없으면 None. 물건 연결은 feature.properties.asset_ids (유효한 연결만).
     출처 요약은 가장 최근 도형 기준일의 출처를 쓰고, 다른 출처가 섞여 있으면 warnings 에 적는다."""
     rows = [dict(r) for r in db.conn.execute("SELECT * FROM parcels ORDER BY pnu")]
@@ -308,10 +315,17 @@ def parcels_bundle_from_db(db: Db, *, generated_at: str) -> dict | None:
     epsg = None
     if latest["source_crs"] and latest["source_crs"].startswith("EPSG:") and latest["source_crs"][5:].isdigit():
         epsg = int(latest["source_crs"][5:])
+    crs_mix = sorted({(p["source_crs"], p["source_ellipsoid"], p["source_datum_shift"]) for p in rows})
+    if len(crs_mix) > 1:
+        warnings.append("원본 좌표계가 섞여 있다: " + "; ".join(f"{c or '?'} ({e or '?'}, {d or '변환 없음'})" for c, e, d in crs_mix))
+    if any(p["source_datum_shift"] == "korean1985" for p in rows):
+        warnings.append(BESSEL_WARNING)
     return {
         "type": "FeatureCollection", "j5parcels": "1.0.0", "data_mode": "synthetic" if db.data_mode == "synthetic" else "real", "generated_at": generated_at,
+        "study_id": db.meta("study_id"), "source_dataset_version": source_dataset_version if source_dataset_version is not None else int(db.meta("dataset_version") or 0),
         "source": {"name": latest["source_name"], "file": "j5.sqlite3 (정본 parcels)", "shp_sha256": latest["source_shp_sha256"] or "0" * 64, "dbf_sha256": "0" * 64,
-                   "crs": {"epsg": epsg, "name": latest["source_crs"] or "unknown", "ellipsoid": "WGS84", "datum_shift": None, "detected_from": "argument"},
+                   "crs": {"epsg": epsg, "name": latest["source_crs"] or "unknown", "ellipsoid": latest["source_ellipsoid"] or "WGS84",
+                           "datum_shift": latest["source_datum_shift"], "detected_from": "argument"},
                    "encoding": "utf-8", "record_count": len(rows), "geometry_version": latest["geometry_version"], "license": latest["source_license"], "fields": []},
         "clip": {"bbox": bbox, "center": None, "radius_m": None}, "count": len(rows), "bbox": bbox, "warnings": warnings, "features": features,
     }

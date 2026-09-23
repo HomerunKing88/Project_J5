@@ -108,7 +108,7 @@ def _read_snapshot(db: Db, *, generated_at: str) -> dict:
         atts: dict[str, list[dict]] = {}
         for r in db.conn.execute("SELECT record_id, sha256, mime, bytes, tags_json, taken_at, rel_path FROM attachments ORDER BY record_id, sha256"):
             atts.setdefault(r["record_id"], []).append(dict(r))
-        parcels = parcels_bundle_from_db(db, generated_at=generated_at) if db._has_table("parcels") else None
+        parcels = parcels_bundle_from_db(db, generated_at=generated_at, source_dataset_version=version) if db._has_table("parcels") else None
         return {"version": version, "study_id": db.meta("study_id"), "data_mode": db.data_mode, "assets": assets, "records": records, "attachments": atts, "parcels": parcels}
 
 
@@ -274,8 +274,8 @@ def verify_projection_dir(out: Path, *, expected_version: int | None = None, exp
         pb = json.loads((out / PARCELS_FILE).read_text(encoding="utf-8"))
         if schema_errors("parcels_bundle.schema.json", pb) or pb["count"] != n_parcels or len(pb["features"]) != n_parcels:
             raise ProjectionError("verify_parcels", "parcels.geojson 이 번들 스키마·필지 수와 맞지 않는다")
-        if pb.get("generated_at") != manifest["generated_at"]:
-            raise ProjectionError("verify_parcels_version", "parcels.geojson 의 생성 시각이 manifest 와 다르다")
+        if pb.get("generated_at") != manifest["generated_at"] or pb.get("source_dataset_version") != manifest["source_dataset_version"] or pb.get("study_id") != manifest["study_id"]:
+            raise ProjectionError("verify_parcels_version", "parcels.geojson 의 생성 시각·정본 버전·study_id 가 manifest 와 다르다")
         for f in pb["features"]:
             if not set(f["properties"].get("asset_ids", [])) <= set(ids):
                 raise ProjectionError("verify_parcel_link", f"필지 {f['id']} 의 연결 물건이 물건 목록에 없다")

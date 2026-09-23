@@ -72,6 +72,11 @@ test("labelPoint·pointInFeature·assetsInParcel: 구멍·다중 조각·물건 
   const linkedP1 = { ...p1, properties: { ...p1.properties, asset_ids: [s[0].asset_id, s[2].asset_id] } };
   assert.deepEqual(parcelAssets(linkedP1, s).map((x) => [x.asset.label, x.basis]), [["가상 물건 1", "both"], ["가상 물건 3", "linked"]]);
   assert.deepEqual(parcelAssets(p1, s).map((x) => [x.asset.label, x.basis]), [["가상 물건 1", "inside"]]);
+  assert.deepEqual(parcelAssets(linkedP1, s, { linksValid: false }).map((x) => [x.asset.label, x.basis]), [["가상 물건 1", "inside"]], "시드가 바뀐 뒤에는 정본 연결을 쓰지 않는다");
+  const proj = bundle(); proj.study_id = "j5-synthetic-study"; proj.source_dataset_version = 3;
+  assert.deepEqual(validateParcels(proj), [], "파생본의 study_id·source_dataset_version 허용");
+  proj.source_dataset_version = -1;
+  assert.ok(validateParcels(proj).some((e) => e.includes("source_dataset_version")));
   assert.equal(BASIS_LABEL.inside, "위치점 포함 (연결 미확정)");
   const withIds = bundle(); withIds.features[0].properties.asset_ids = [s[0].asset_id]; withIds.features[0].properties.geometry_version = "2026-09-01";
   assert.deepEqual(validateParcels(withIds), [], "파생본의 asset_ids·geometry_version 허용");

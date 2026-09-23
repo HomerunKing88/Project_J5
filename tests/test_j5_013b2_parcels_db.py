@@ -120,25 +120,31 @@ def test_suggest_and_apply_links(db, tmp_path):
     r2 = apply_links(db, doc2)
     assert r2.outcome == "applied" and r2.updated == 1 and r2.inserted == 1 and r2.dataset_version == 4
     assert [l["pnu"] for l in active_links(db, "2027-01-01") if l["asset_id"] == A[0]] == [], "종료일 뒤에는 유효하지 않다"
+    assert [l["pnu"] for l in active_links(db, "2026-12-31") if l["asset_id"] == A[0]] == [], "종료일 당일도 유효하지 않다 (반개구간)"
+    assert [l["pnu"] for l in active_links(db, "2026-12-30") if l["asset_id"] == A[0]] == [P1]
+    assert any(l["pnu"] == P1 for l in suggest_links(db, effective_from="2026-12-31")["links"]), "종료일부터는 다시 제안한다"
     # 오류: 정본에 없는 물건·필지, 날짜 순서, 달력에 없는 날짜, 스키마
     for links, code in (([{"asset_id": "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a99", "pnu": P1, "effective_from": "2026-09-23", "effective_to": None, "basis": "manual"}], "물건"),
                         ([{"asset_id": A[0], "pnu": "1111017500100010000", "effective_from": "2026-09-23", "effective_to": None, "basis": "manual"}], "PNU"),
-                        ([{"asset_id": A[0], "pnu": P1, "effective_from": "2026-09-23", "effective_to": "2026-09-01", "basis": "manual"}], "앞선다"),
+                        ([{"asset_id": A[0], "pnu": P1, "effective_from": "2026-09-23", "effective_to": "2026-09-01", "basis": "manual"}], "뒤여야"),
                         ([{"asset_id": A[0], "pnu": P1, "effective_from": "2026-02-30", "effective_to": None, "basis": "manual"}], "date")):
         with pytest.raises(ValidationError) as e:
             apply_links(db, {"kind": "asset_components", "links": links})
         assert code in str(e.value)
     with pytest.raises(ValidationError):
         apply_links(db, {"kind": "asset_components", "links": [{"asset_id": A[0], "pnu": P1}]})
-    # 같은 물건·필지의 겹치는 기간은 거절, 이어지는 기간은 허용 (물건 1·필지 1: 2026-09-23~2026-12-31 뒤 2027-01-01~)
+    # 같은 물건·필지의 겹치는 기간은 거절, 반개구간이라 끝날 = 다음 시작일은 허용 (물건 1·필지 1: [2026-09-23, 2026-12-31) 뒤 [2026-12-31, ∞))
     with pytest.raises(ValidationError) as e:
         apply_links(db, {"kind": "asset_components", "links": [{"asset_id": A[0], "pnu": P1, "effective_from": "2026-10-01", "effective_to": None, "basis": "manual"}]})
     assert "겹친다" in str(e.value)
     with pytest.raises(ValidationError):
         apply_links(db, {"kind": "asset_components", "links": [{"asset_id": A[2], "pnu": P42, "effective_from": "2026-01-01", "effective_to": "2026-09-30", "basis": "manual"}]})
-    r3 = apply_links(db, {"kind": "asset_components", "links": [{"asset_id": A[0], "pnu": P1, "effective_from": "2027-01-01", "effective_to": None, "basis": "manual"}]})
-    assert r3.inserted == 1 and [l["effective_from"] for l in active_links(db, "2027-03-01") if l["asset_id"] == A[0]] == ["2027-01-01"]
-    assert db.status()["dataset_version"] == 5, "실패는 정본을 바꾸지 않는다"
+    assert apply_links(db, {"kind": "asset_components", "links": [{"asset_id": A[2], "pnu": P42, "effective_from": "2026-01-01", "effective_to": "2026-09-23", "basis": "manual"}]}).inserted == 1, "끝날 = 기존 시작일은 겹침이 아니다"
+    with pytest.raises(ValidationError):
+        apply_links(db, {"kind": "asset_components", "links": [{"asset_id": A[2], "pnu": P42, "effective_from": "2026-03-01", "effective_to": "2026-03-01", "basis": "manual"}]})
+    r3 = apply_links(db, {"kind": "asset_components", "links": [{"asset_id": A[0], "pnu": P1, "effective_from": "2026-12-31", "effective_to": None, "basis": "manual"}]})
+    assert r3.inserted == 1 and [l["effective_from"] for l in active_links(db, "2027-03-01") if l["asset_id"] == A[0]] == ["2026-12-31"]
+    assert db.status()["dataset_version"] == 6, "실패는 정본을 바꾸지 않는다"
     with pytest.raises(ValidationError):
         suggest_links(db, effective_from="2026-13-01")
 
@@ -164,6 +170,8 @@ def test_projection_includes_parcels_geojson_with_links(db, home):
     by = {f["id"]: f["properties"] for f in pb["features"]}
     assert by[P1]["asset_ids"] == [A[0]] and by[P11]["asset_ids"] == [A[1]] and by[P42]["asset_ids"] == [] and by[P1]["geometry_version"] == "2026-09-01"
     assert pb["source"]["name"] == "가상 연속지적도 (synthetic)" and pb["source"]["crs"]["epsg"] == 5186 and pb["warnings"] == []
+    assert pb["source"]["crs"]["ellipsoid"] == "GRS80" and pb["source"]["crs"]["datum_shift"] is None, "원본 좌표계 정보를 그대로 전한다"
+    assert pb["study_id"] == STUDY and pb["source_dataset_version"] == 3
     manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
     assert any(f["path"] == "parcels.geojson" for f in manifest["files"]) and manifest["counts"]["parcels"] == 6
     # 검증기: 연결 물건이 목록 밖이면 거절, 필지 수가 다르면 거절
@@ -193,6 +201,34 @@ def test_projection_includes_parcels_geojson_with_links(db, home):
     load_bundle(db, b2)
     mixed = parcels_bundle_from_db(db, generated_at="2026-10-02T00:00:00Z")
     assert mixed["source"]["geometry_version"] == "2026-10-01" and any("섞여" in w for w in mixed["warnings"])
+    # Bessel(Korean 1985) 출처는 좌표계·데이텀 변환이 보존되고 정확도 경고가 다시 붙는다
+    b5 = bundle()
+    b5["source"]["geometry_version"] = "2026-11-01"
+    b5["source"]["crs"] = {"epsg": 5174, "name": "Korean 1985 / Modified Central Belt", "ellipsoid": "Bessel", "datum_shift": "korean1985", "detected_from": "prj"}
+    load_bundle(db, b5)
+    bes = parcels_bundle_from_db(db, generated_at="2026-11-02T00:00:00Z")
+    assert bes["source"]["crs"] == {"epsg": 5174, "name": "EPSG:5174", "ellipsoid": "Bessel", "datum_shift": "korean1985", "detected_from": "argument"}
+    assert any("Bessel" in w for w in bes["warnings"])
+    row = dict(db.conn.execute("SELECT source_ellipsoid, source_datum_shift FROM parcels WHERE pnu = ?", (P1,)).fetchone())
+    assert row == {"source_ellipsoid": "Bessel", "source_datum_shift": "korean1985"}
+
+
+def test_aggregate_parcel_limit_enforced_on_load(db, monkeypatch):
+    """리뷰 반영: 번들마다 8,000 이하라도 여러 번 넣으면 정본 합계가 상한을 넘어 파생본이 영영 실패한다. 반영 전에 합계를 검사한다."""
+    from j5.db import parcels as PM
+    load_bundle(db, bundle())
+    monkeypatch.setattr(PM, "MAX_FEATURES", 8)
+    b2 = bundle()
+    for i, f in enumerate(b2["features"][:3]):
+        f["id"] = f["properties"]["pnu"] = f"9999900200100{i:02d}0000"
+    b2["features"] = b2["features"][:3]
+    b2["count"] = 3
+    with pytest.raises(DbError) as e:
+        load_bundle(db, b2)
+    assert e.value.code == "parcels_limit" and db.status()["counts"]["parcels"] == 6 and db.status()["dataset_version"] == 2
+    b2["features"] = b2["features"][:2]
+    b2["count"] = 2
+    assert load_bundle(db, b2).inserted == 2 and db.status()["counts"]["parcels"] == 8
 
 
 def test_parcels_survive_backup_and_restore(db, home, tmp_path):

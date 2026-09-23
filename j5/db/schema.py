@@ -361,6 +361,8 @@ CREATE TABLE parcels (
   bbox_json                      TEXT NOT NULL CHECK (json_valid(bbox_json) AND json_type(bbox_json) = 'array' AND json_array_length(bbox_json) = 4),
   source_name                    TEXT NOT NULL CHECK (length(source_name) > 0),
   source_crs                     TEXT,
+  source_ellipsoid               TEXT CHECK (source_ellipsoid IS NULL OR source_ellipsoid IN ('GRS80', 'WGS84', 'Bessel')),
+  source_datum_shift             TEXT CHECK (source_datum_shift IS NULL OR source_datum_shift = 'korean1985'),
   source_shp_sha256              TEXT CHECK (source_shp_sha256 IS NULL OR source_shp_sha256 GLOB '{SHA256_GLOB}'),
   source_license                 TEXT,
   source_document_id             TEXT REFERENCES source_documents (document_id),

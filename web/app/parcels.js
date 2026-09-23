@@ -4,7 +4,7 @@
 export const PARCELS_FORMAT = "1.0.0";
 export const MAX_PARCELS = 8000;
 const PNU_RE = /^[0-9]{19}$/;
-const TOP_ALLOWED = new Set(["type", "j5parcels", "data_mode", "generated_at", "source", "clip", "count", "bbox", "warnings", "features"]);
+const TOP_ALLOWED = new Set(["type", "j5parcels", "data_mode", "generated_at", "source", "clip", "count", "bbox", "warnings", "features", "study_id", "source_dataset_version"]);
 const PROP_REQUIRED = ["pnu", "label", "emd_code", "emd_name", "mountain", "bon", "bu", "jimok", "jibun_raw", "jibun_mismatch", "area_m2_geom", "area_missing_reason", "bbox"];
 
 const isLonLat = (p) => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite) && p[0] >= -180 && p[0] <= 180 && p[1] >= -90 && p[1] <= 90;
@@ -29,6 +29,8 @@ export function validateParcels(doc) {
     if (!src.crs || typeof src.crs !== "object" || !("epsg" in src.crs) || !("name" in src.crs)) errs.push("source.crs 누락");
   }
   if (!doc.clip || !isBbox(doc.clip.bbox)) errs.push("clip.bbox 누락");
+  if ("study_id" in doc && (typeof doc.study_id !== "string" || !doc.study_id.length)) errs.push("study_id 형식");
+  if ("source_dataset_version" in doc && !(Number.isInteger(doc.source_dataset_version) && doc.source_dataset_version >= 0)) errs.push("source_dataset_version 형식");
   if (!Array.isArray(doc.features)) { errs.push("features 가 배열이 아님"); return errs; }
   if (doc.features.length > MAX_PARCELS) errs.push(`필지가 ${MAX_PARCELS}개를 넘음 (${doc.features.length})`);
   if (doc.count !== doc.features.length) errs.push(`count(${doc.count})와 features 수(${doc.features.length})가 다름`);
@@ -117,9 +119,10 @@ export function assetsInParcel(feature, assets) {
   return assets.filter((a) => Array.isArray(a.location_point) && a.location_point.length === 2 && pointInFeature(a.location_point, feature));
 }
 
-/** 이 필지의 물건: 정본 연결(asset_ids, 파생본에만 있음)과 위치점 포함을 합친다. 각 항목에 근거(linked / inside / both)를 붙인다. */
-export function parcelAssets(feature, assets) {
-  const linked = new Set(feature.properties?.asset_ids ?? []);
+/** 이 필지의 물건: 정본 연결(asset_ids, 파생본에만 있음)과 위치점 포함을 합친다. 각 항목에 근거(linked / inside / both)를 붙인다.
+ *  linksValid 가 false 면(번들을 넣은 뒤 시드가 바뀜) 정본 연결은 쓰지 않는다: 오래된 연결로 엉뚱한 물건에 관측이 붙지 않게 한다. */
+export function parcelAssets(feature, assets, { linksValid = true } = {}) {
+  const linked = new Set(linksValid ? (feature.properties?.asset_ids ?? []) : []);
   const inside = new Set(assetsInParcel(feature, assets).map((a) => a.asset_id));
   return assets.filter((a) => linked.has(a.asset_id) || inside.has(a.asset_id))
     .map((a) => ({ asset: a, basis: linked.has(a.asset_id) && inside.has(a.asset_id) ? "both" : linked.has(a.asset_id) ? "linked" : "inside" }));
