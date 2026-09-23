@@ -18,6 +18,7 @@ import pytest
 from j5 import cli
 from j5.parcels.convert import Clip, ConvertError, ConvertOptions, convert, inspect_source, parcel_props, parse_jibun, rings_to_polygons, write_bundle
 from j5.parcels.crs import KNOWN, CrsError, Transformer, forward_tm, parse_crs_arg, parse_prj
+from j5.parcels import shp as shpmod
 from j5.parcels.shp import ShapeError, guess_encoding, iter_dbf_records, iter_shapes, open_source, read_dbf_fields
 from j5.schemas_loader import schema_errors
 from tests.conftest import zip_dir
@@ -139,6 +140,28 @@ def test_zip_input_and_unsafe_zip_rejected(tmp_path):
     assert e.value.code == "shp_missing"
 
 
+def test_zip_cumulative_size_and_ratio_limits(tmp_path, monkeypatch):
+    """리뷰 반영(PR #41): 항목별 상한만으로는 여러 항목의 합계가 메모리를 넘칠 수 있다. 읽기 전에 합계·압축비를 검사한다."""
+    z = zip_dir(SHP.parent, tmp_path / "parcels.zip")
+    monkeypatch.setattr(shpmod, "MAX_TOTAL_BYTES", 1500)   # fixture 합계(약 2.2KB)보다 작게
+    with pytest.raises(ShapeError) as e:
+        open_source(z)
+    assert e.value.code == "zip_too_big"
+    monkeypatch.setattr(shpmod, "MAX_TOTAL_BYTES", 10 ** 9)
+    # 압축비: 0 으로 채운 큰 .dbf 를 넣은 ZIP (해제 3MB, 압축 수 KB)
+    d = tmp_path / "bomb"
+    d.mkdir()
+    for ext in (".shp", ".prj", ".cpg"):
+        shutil.copyfile(SHP.with_suffix(ext), d / f"b{ext}")
+    (d / "b.dbf").write_bytes(SHP.with_suffix(".dbf").read_bytes() + b"\x00" * (3 * 1024 * 1024))
+    zb = zip_dir(d, tmp_path / "bomb.zip")
+    with pytest.raises(ShapeError) as e:
+        open_source(zb)
+    assert e.value.code == "zip_ratio"
+    monkeypatch.setattr(shpmod, "MAX_RATIO", 10 ** 6)
+    assert open_source(zb).name == "b", "비율 상한을 풀면 읽힌다 (파일 자체는 정상 구조)"
+
+
 def test_multiple_layers_need_layer_option(tmp_path):
     d = tmp_path / "two"
     d.mkdir()
@@ -193,6 +216,18 @@ def test_rings_orientation_holes_and_multipart():
     assert ring_signed_area(polys[0][0]) > 0 and ring_signed_area(polys[0][1]) < 0, "GeoJSON 방향으로 뒤집힘"
     assert polygons_area(polys) == 100 - 36 + 25
     assert rings_to_polygons([[(0, 0), (1, 1)]]) == [], "점 2개는 버림"
+    # 리뷰 반영(PR #41): 구멍 소속은 링 순서가 아니라 포함 관계. 구멍이 먼저 오거나 다른 외곽 뒤에 와도 품는 외곽에 붙는다
+    hole_in_cw2 = [(21, 1), (23, 1), (23, 3), (21, 3), (21, 1)]
+    polys2 = rings_to_polygons([hole_ccw, cw2, hole_in_cw2, cw])
+    assert len(polys2) == 2
+    first = next(p for p in polys2 if p[0][0] == cw[0] or p[0][0] in cw)
+    second = next(p for p in polys2 if p is not first)
+    assert len(first) == 2 and len(second) == 2, "각 외곽에 구멍 하나씩"
+    assert polygons_area(polys2) == (100 - 36) + (25 - 4)
+    # 어느 외곽에도 안 들어가는 반시계 링은 외곽으로 취급 (버리지 않는다)
+    orphan = [(50, 50), (51, 50), (51, 51), (50, 51), (50, 50)]
+    polys3 = rings_to_polygons([cw, orphan])
+    assert len(polys3) == 2 and polygons_area(polys3) == 101
 
 
 def test_convert_fixture_props_and_clip(tmp_path):
@@ -236,7 +271,11 @@ def test_duplicate_pnu_merged_and_bad_pnu_skipped(tmp_path):
     assert any("PNU 가 19자리" in w for w in b["warnings"])
     with pytest.raises(ConvertError) as e:
         convert(base.with_suffix(".shp"), _opts(max_features=3))
-    assert e.value.code == "too_many_features"
+    assert e.value.code == "too_many_features" and "--max-features" in e.value.message
+    # 리뷰 반영(PR #41): 계약 상한(8000)을 넘는 --max-features 는 받지 않는다 (스키마·폰 검증기와 어긋나므로)
+    with pytest.raises(ConvertError) as e:
+        convert(base.with_suffix(".shp"), _opts(max_features=8001))
+    assert e.value.code == "bad_max_features"
 
 
 def test_encoding_override_and_utf8_cpg(tmp_path):
@@ -265,6 +304,28 @@ def test_shp_dbf_record_count_mismatch_rejected(tmp_path):
     assert e.value.code == "count_mismatch"
 
 
+def test_geographic_source_area_is_null_with_reason(tmp_path):
+    """리뷰 반영(PR #41): 지리좌표 원본은 도형면적을 0 이 아니라 null + 사유로 둔다 (AGENTS: 결측은 null 과 사유)."""
+    recs = []
+    for pnu, jibun, outers, holes in mk.PARCELS:
+        rings = [list(reversed(r)) for r in outers] + [list(r) for r in holes]   # 경위도 그대로, Shapefile 방향
+        recs.append((rings, {"PNU": pnu, "JIBUN": jibun, "BCHK": "1", "SGG_OID": 1, "COL_ADM_SE": "99999"}))
+    base = tmp_path / "geo" / "geo"
+    geog = 'GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]'
+    mk.write_shapefile(base, recs, mk.FIELDS, geog)
+    b = convert(base.with_suffix(".shp"), _opts())
+    assert b["count"] == 6 and b["source"]["crs"]["epsg"] == 4326
+    for f in b["features"]:
+        assert f["properties"]["area_m2_geom"] is None and f["properties"]["area_missing_reason"] == "source_geographic_crs"
+    assert any("null" in w for w in b["warnings"])
+    assert schema_errors("parcels_bundle.schema.json", {k: v for k, v in b.items() if k != "stats"}) == []
+    by = {f["properties"]["label"]: f for f in b["features"]}
+    assert by["1"]["geometry"]["coordinates"][0][0] == [126.99855, 37.57005]
+    # 평면좌표 원본은 면적이 있고 사유는 null
+    b2 = convert(SHP, _opts())
+    assert all(f["properties"]["area_missing_reason"] is None and f["properties"]["area_m2_geom"] > 0 for f in b2["features"])
+
+
 def test_options_validation():
     for bad in ({"geometry_version": "2026-9-1"}, {"geometry_version": "2026-02-30"}, {"source_name": " "}, {"data_mode": "private_real"}):
         with pytest.raises(ConvertError):
@@ -289,8 +350,13 @@ def test_write_bundle_schema_and_no_overwrite(tmp_path):
         write_bundle(b, tmp_path / "x.json")
     bad = dict(b)
     bad["features"] = [{"type": "Feature", "id": "1"}]
-    with pytest.raises(ConvertError):
+    with pytest.raises(ConvertError) as e:
         write_bundle(bad, tmp_path / "y.j5parcels.json")
+    assert e.value.code == "verify"
+    # 리뷰 반영(PR #41): 검증 실패는 최종 이름의 파일도 임시 파일도 남기지 않아 재시도가 exists 로 막히지 않는다
+    assert not (tmp_path / "y.j5parcels.json").exists() and not [p for p in tmp_path.iterdir() if ".tmp-" in p.name]
+    write_bundle(b, tmp_path / "y.j5parcels.json")
+    assert (tmp_path / "y.j5parcels.json").is_file() and not [p for p in tmp_path.iterdir() if ".tmp-" in p.name]
 
 
 def test_fixture_is_reproducible_and_web_copy_identical(tmp_path):

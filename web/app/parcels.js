@@ -5,7 +5,7 @@ export const PARCELS_FORMAT = "1.0.0";
 export const MAX_PARCELS = 8000;
 const PNU_RE = /^[0-9]{19}$/;
 const TOP_ALLOWED = new Set(["type", "j5parcels", "data_mode", "generated_at", "source", "clip", "count", "bbox", "warnings", "features"]);
-const PROP_REQUIRED = ["pnu", "label", "emd_code", "emd_name", "mountain", "bon", "bu", "jimok", "jibun_raw", "jibun_mismatch", "area_m2_geom", "bbox"];
+const PROP_REQUIRED = ["pnu", "label", "emd_code", "emd_name", "mountain", "bon", "bu", "jimok", "jibun_raw", "jibun_mismatch", "area_m2_geom", "area_missing_reason", "bbox"];
 
 const isLonLat = (p) => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite) && p[0] >= -180 && p[0] <= 180 && p[1] >= -90 && p[1] <= 90;
 const isRing = (r) => Array.isArray(r) && r.length >= 4 && r.every(isLonLat);
@@ -50,7 +50,7 @@ export function validateParcels(doc) {
     if (p.pnu !== f.id) errs.push(`${at} properties.pnu 와 id 가 다름`);
     if (typeof p.label !== "string" || !p.label.length || p.label.length > 20) errs.push(`${at} label`);
     if (!isBbox(p.bbox)) errs.push(`${at} bbox`);
-    if (typeof p.area_m2_geom !== "number" || p.area_m2_geom < 0) errs.push(`${at} area_m2_geom`);
+    if (p.area_m2_geom === null ? typeof p.area_missing_reason !== "string" : (typeof p.area_m2_geom !== "number" || p.area_m2_geom < 0)) errs.push(`${at} area_m2_geom (null 이면 area_missing_reason 필요)`);
   }
   return errs;
 }
@@ -120,6 +120,6 @@ export function parcelTitle(props) {
   return `${props.emd_name ?? props.emd_code} ${props.label}`;
 }
 
-export function fmtArea(m2) {
-  return Number.isFinite(m2) ? `${m2.toFixed(1)} ㎡` : "-";
+export function fmtArea(m2, reason) {
+  return Number.isFinite(m2) ? `${m2.toFixed(1)} ㎡` : `미확인 (${reason ?? "사유 없음"})`;
 }

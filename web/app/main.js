@@ -160,7 +160,7 @@ function showParcel(feature) {
   $("parcel-mode").textContent = state.parcels?.data_mode === "synthetic" ? "가상 필지" : "연속지적도";
   $("parcel-pnu").textContent = feature.id;
   const src = state.parcels?.source;
-  $("parcel-meta").textContent = `도형면적 ${fmtArea(p.area_m2_geom)} (공부면적 아님)` + (p.jimok ? ` · 지목 ${p.jimok}` : "") + (p.jibun_mismatch ? " · 원본 지번과 PNU 불일치" : "") +
+  $("parcel-meta").textContent = `도형면적 ${fmtArea(p.area_m2_geom, p.area_missing_reason)} (공부면적 아님)` + (p.jimok ? ` · 지목 ${p.jimok}` : "") + (p.jibun_mismatch ? " · 원본 지번과 PNU 불일치" : "") +
     (src ? ` · ${src.name} ${src.geometry_version}` : "");
   const inside = assetsInParcel(feature, state.assets);
   $("parcel-assets").replaceChildren(...inside.map((a) => el("li", {},

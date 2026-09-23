@@ -99,7 +99,7 @@ python -m j5 parcels convert <연속지적도.shp 또는 .zip> --out <이름>.j5
 ```
 
 - `inspect`: 필드·레코드 수·도형 종류·원본 bbox·좌표계 판정(.prj → 알려진 EPSG 5173~5188 표)·WGS84 bbox·표본 레코드. 변환 전에 WGS84 bbox 가 종로 부근인지 확인한다(좌표계를 잘못 고르면 수백 m 이상 어긋난다).
-- `convert`: 범위와 겹치는 필지만 WGS84 GeoJSON 번들(`schemas/parcels_bundle.schema.json`)로 만든다. PNU(19자리)·지번 라벨·지목·도형면적(공부면적 아님)·bbox 를 속성으로 두고, 같은 PNU 는 MultiPolygon 으로 합친다. 원본은 수정하지 않고 출력은 덮어쓰지 않는다. 상한 8,000 필지(`--max-features`).
+- `convert`: 범위와 겹치는 필지만 WGS84 GeoJSON 번들(`schemas/parcels_bundle.schema.json`)로 만든다. PNU(19자리)·지번 라벨·지목·도형면적(공부면적 아님)·bbox 를 속성으로 두고, 같은 PNU 는 MultiPolygon 으로 합친다. 원본은 수정하지 않고 출력은 임시 파일 검증 뒤 교체하며 덮어쓰지 않는다. 상한 8,000 필지(`--max-features`, 계약 상한 이하만). ZIP 은 항목·합계·압축비 상한을 검사한다.
 - 좌표계 변환은 표준 라이브러리로 구현했다(횡축 메르카토르 Krüger 급수, Korean 1985 데이텀은 EPSG 공식 Molodensky-Badekas). pyproj 계산값과 mm 이내로 대조했다(`tests/test_j5_013b_parcels.py`). .prj 가 없으면 `--crs` 가 필요하다.
 - 번들은 폰 앱의 "필지 파일 불러오기" 로 넣는다. 실제 번들·원본 SHP 는 `J5_DATA_HOME/raw/`, `J5_DATA_HOME/exports/private/` 등 실데이터 홈에 두고 저장소에 넣지 않는다. 이용허락 유형은 배포처에서 확인해 `--license` 로 기록한다.
 - 정본 `parcels` 테이블·PNU↔asset_id 연결은 J5-013B-2.

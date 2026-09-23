@@ -82,7 +82,7 @@
         "properties": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["pnu", "label", "emd_code", "emd_name", "mountain", "bon", "bu", "jimok", "jibun_raw", "jibun_mismatch", "area_m2_geom", "bbox"],
+          "required": ["pnu", "label", "emd_code", "emd_name", "mountain", "bon", "bu", "jimok", "jibun_raw", "jibun_mismatch", "area_m2_geom", "area_missing_reason", "bbox"],
           "properties": {
             "pnu": { "$ref": "#/$defs/pnu" },
             "label": { "description": "지도에 쓰는 짧은 지번 (예: 123-4, 산12-1)", "type": "string", "minLength": 1, "maxLength": 20 },
@@ -94,7 +94,8 @@
             "jimok": { "description": "원본 JIBUN 끝의 지목 글자. 없으면 null", "type": ["string", "null"], "maxLength": 10 },
             "jibun_raw": { "type": ["string", "null"], "maxLength": 50 },
             "jibun_mismatch": { "description": "원본 JIBUN 의 번호가 PNU 와 다르면 true (PNU 를 우선)", "type": "boolean" },
-            "area_m2_geom": { "description": "원본 평면좌표에서 계산한 도형면적(㎡). 공부면적이 아니다", "type": "number", "minimum": 0 },
+            "area_m2_geom": { "description": "원본 평면좌표에서 계산한 도형면적(㎡). 공부면적이 아니다. 계산할 수 없으면 null 과 사유", "type": ["number", "null"], "minimum": 0 },
+            "area_missing_reason": { "type": ["string", "null"], "enum": ["source_geographic_crs", null] },
             "bbox": { "$ref": "#/$defs/bbox" }
           }
         }

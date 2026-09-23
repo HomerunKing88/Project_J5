@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -105,10 +106,25 @@ def _closed(ring: list[tuple[float, float]]) -> list[tuple[float, float]]:
     return ring if ring and ring[0] == ring[-1] else ring + [ring[0]]
 
 
+def point_in_ring(pt: tuple[float, float], ring: list[tuple[float, float]]) -> bool:
+    x, y = pt
+    inside = False
+    j = len(ring) - 1
+    for i in range(len(ring)):
+        xi, yi = ring[i]
+        xj, yj = ring[j]
+        if (yi > y) != (yj > y) and x < (xj - xi) * (y - yi) / (yj - yi) + xi:
+            inside = not inside
+        j = i
+    return inside
+
+
 def rings_to_polygons(rings: list[list[tuple[float, float]]]) -> list[list[list[tuple[float, float]]]]:
     """Shapefile 규칙(외곽 시계방향, 구멍 반시계)으로 링을 폴리곤 단위로 묶고 GeoJSON 방향(외곽 반시계, 구멍 시계)으로 뒤집는다.
-    반환: [[outer, hole, ...], ...] (원본 좌표계)."""
-    polys: list[list[list[tuple[float, float]]]] = []
+    구멍은 링 순서가 아니라 포함 관계로 소속을 정한다(구멍의 꼭짓점을 품는 가장 작은 외곽). 어느 외곽에도 안 들어가는 반시계 링은
+    외곽으로 취급한다. 반환: [[outer, hole, ...], ...] (원본 좌표계)."""
+    outers: list[tuple[float, list[tuple[float, float]]]] = []   # (면적, 반시계 링)
+    holes: list[list[tuple[float, float]]] = []
     for ring in rings:
         r = _closed([p for p in ring])
         if len(r) < 4:
@@ -116,14 +132,22 @@ def rings_to_polygons(rings: list[list[tuple[float, float]]]) -> list[list[list[
         area = ring_signed_area(r)
         if area == 0:
             continue
-        if area < 0:            # 시계방향 = 외곽
-            polys.append([list(reversed(r))])
-        else:                   # 반시계 = 구멍 → 직전 외곽에 붙인다 (외곽이 아직 없으면 외곽으로 취급)
-            if polys:
-                polys[-1].append(list(reversed(r)))
-            else:
-                polys.append([r])
-    return polys
+        if area < 0:            # 시계방향 = 외곽 → GeoJSON 방향으로 뒤집음
+            outers.append((-area, list(reversed(r))))
+        else:                   # 반시계 = 구멍 후보
+            holes.append(r)
+    polys: list[list[list[tuple[float, float]]]] = [[o] for _, o in outers]
+    orphan: list[list[list[tuple[float, float]]]] = []
+    for h in holes:
+        best = None
+        for idx, (area, outer) in enumerate(outers):
+            if point_in_ring(h[0], outer) and (best is None or area < outers[best][0]):
+                best = idx
+        if best is None:
+            orphan.append([h])                      # 외곽으로 취급 (이미 반시계)
+        else:
+            polys[best].append(list(reversed(h)))   # 구멍은 시계방향
+    return polys + orphan
 
 
 def polygons_area(polys: list[list[list[tuple[float, float]]]]) -> float:
@@ -281,6 +305,8 @@ def convert(path: Path, opts: ConvertOptions) -> dict:
         raise ConvertError("bad_geometry_version", f"달력에 없는 날짜: {opts.geometry_version}") from None
     if opts.data_mode not in ("synthetic", "real"):
         raise ConvertError("bad_data_mode", "data_mode 는 synthetic 또는 real")
+    if not (1 <= opts.max_features <= MAX_FEATURES):
+        raise ConvertError("bad_max_features", f"--max-features 는 1~{MAX_FEATURES} (번들 계약·폰 검증기의 상한과 같다)")
     if not opts.source_name.strip():
         raise ConvertError("bad_source_name", "--source-name 이 필요하다 (예: '연속지적도 서울특별시 종로구')")
     try:
@@ -324,11 +350,12 @@ def convert(path: Path, opts: ConvertOptions) -> dict:
             if not _intersects(bbox, opts.clip.bbox):
                 stats["outside"] += 1
                 continue
-            area = polygons_area(polys_src) if not crs.geographic else 0.0
+            area = polygons_area(polys_src) if not crs.geographic else None
             if pnu in by_pnu:
                 stats["merged_duplicates"] += 1
                 by_pnu[pnu]["polys"].extend(polys)
-                by_pnu[pnu]["area"] += area
+                if area is not None:
+                    by_pnu[pnu]["area"] += area
             else:
                 props = parcel_props(pnu, row.get(jibun_field) if jibun_field else None, opts.emd_names)
                 if props["jibun_mismatch"]:
@@ -336,7 +363,8 @@ def convert(path: Path, opts: ConvertOptions) -> dict:
                 by_pnu[pnu] = {"polys": polys, "area": area, "props": props}
                 order.append(pnu)
             if len(by_pnu) > opts.max_features:
-                raise ConvertError("too_many_features", f"범위 안 필지가 {opts.max_features}개를 넘는다. 범위를 좁히거나 --max-features 를 올린다 (폰 성능은 별도 확인)")
+                hint = "범위를 좁힌다" if opts.max_features >= MAX_FEATURES else f"범위를 좁히거나 --max-features 를 올린다 (계약 상한 {MAX_FEATURES})"
+                raise ConvertError("too_many_features", f"범위 안 필지가 {opts.max_features}개를 넘는다. {hint}")
     except ShapeError as e:
         raise ConvertError(e.code, e.message) from None
     except CrsError as e:
@@ -348,10 +376,12 @@ def convert(path: Path, opts: ConvertOptions) -> dict:
         polys = [[[[round(x, COORD_DECIMALS), round(y, COORD_DECIMALS)] for x, y in ring] for ring in poly] for poly in item["polys"]]
         geom = {"type": "Polygon", "coordinates": polys[0]} if len(polys) == 1 else {"type": "MultiPolygon", "coordinates": polys}
         bbox = _bbox_of(item["polys"])
-        props = {**item["props"], "area_m2_geom": round(item["area"], 1), "bbox": [round(v, COORD_DECIMALS) for v in bbox]}
+        area = None if item["area"] is None else round(item["area"], 1)
+        props = {**item["props"], "area_m2_geom": area, "area_missing_reason": None if area is not None else "source_geographic_crs",
+                 "bbox": [round(v, COORD_DECIMALS) for v in bbox]}
         features.append({"type": "Feature", "id": pnu, "geometry": geom, "properties": props})
     if crs.geographic:
-        warnings.append("원본이 지리좌표라 도형면적(area_m2_geom)을 0 으로 두었다")
+        warnings.append("원본이 지리좌표라 도형면적(area_m2_geom)을 null (사유 source_geographic_crs) 로 두었다")
     if stats["bad_pnu"] > 5:
         warnings.append(f"PNU 형식 오류 레코드 총 {stats['bad_pnu']}건 (앞 5건만 표시)")
     if stats["jibun_mismatch"]:
@@ -390,12 +420,19 @@ def write_bundle(bundle: dict, out: Path) -> dict:
     doc = {k: v for k, v in bundle.items() if k != "stats"}
     text = json.dumps(doc, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(text, encoding="utf-8")
-    back = json.loads(out.read_text(encoding="utf-8"))
-    errs = schema_errors(SCHEMA, back)
-    if errs or back["count"] != len(back["features"]):
-        out.unlink(missing_ok=True)
-        raise ConvertError("verify", "쓴 파일을 다시 읽어 검증하는 데 실패했다: " + "; ".join(errs[:3]))
+    # 같은 폴더의 임시 파일에 쓰고 다시 읽어 검증한 뒤 원자적으로 교체한다. 중간에 실패하면 최종 이름의 파일은 남지 않는다.
+    tmp = out.with_name(f".{out.name}.tmp-{os.getpid()}")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        back = json.loads(tmp.read_text(encoding="utf-8"))
+        errs = schema_errors(SCHEMA, back)
+        if errs or back["count"] != len(back["features"]):
+            raise ConvertError("verify", "쓴 파일을 다시 읽어 검증하는 데 실패했다: " + "; ".join(errs[:3]))
+        if out.exists():
+            raise ConvertError("exists", f"출력 파일이 이미 있다 (덮어쓰지 않음): {out}")
+        os.replace(tmp, out)
+    finally:
+        tmp.unlink(missing_ok=True)
     return {"path": str(out), "bytes": len(text.encode("utf-8")), "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest()}
 
 

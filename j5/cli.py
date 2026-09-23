@@ -117,7 +117,7 @@ def _build_parser() -> argparse.ArgumentParser:
     pc.add_argument("--emd-name", action="append", default=[], metavar="CODE=이름", help="법정동 코드(10자리)→이름. 반복 가능")
     pc.add_argument("--pnu-field", help="PNU 필드 이름 (기본 PNU)")
     pc.add_argument("--jibun-field", help="지번 필드 이름 (기본 JIBUN)")
-    pc.add_argument("--max-features", type=int, default=8000, help="범위 안 필지 상한 (기본 8000)")
+    pc.add_argument("--max-features", type=int, default=8000, help="범위 안 필지 상한 (기본이자 최대 8000, 번들 계약과 같다)")
     pc.add_argument("--synthetic", action="store_true", help="가상자료 표시 (data_mode synthetic)")
     pc.add_argument("--json", action="store_true")
     return p

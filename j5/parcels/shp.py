@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Iterator
 
 MAX_MEMBER_BYTES = 800 * 1024 * 1024  # ZIP 항목 하나의 상한 (시·군·구 연속지적도는 수십 MB 급)
+MAX_TOTAL_BYTES = 1200 * 1024 * 1024  # 읽어 들이는 항목(.shp/.dbf/.prj/.cpg)의 압축 해제 합계 상한
+MAX_RATIO = 200                       # 압축 해제 합계 / 압축 크기 합계 상한 (ZIP 폭탄 차단)
 POLYGON_TYPES = {5, 15, 25}
 NULL_SHAPE = 0
 
@@ -105,6 +107,13 @@ def _open_zip(path: Path, layer: str | None) -> ShapeSource:
                 by_ext[low[len(stem):]] = i
         if ".dbf" not in by_ext:
             raise ShapeError("dbf_missing", f"ZIP 안에 {Path(stem).name}.dbf 가 없다")
+        # 읽기 전에 선언된 크기로 항목별·누적·압축비 상한을 검사한다 (실제 크기는 읽은 뒤 대조)
+        total = sum(i.file_size for i in by_ext.values())
+        compressed = sum(i.compress_size for i in by_ext.values())
+        if total > MAX_TOTAL_BYTES:
+            raise ShapeError("zip_too_big", f"ZIP 의 SHP 항목 합계가 상한을 넘는다: {total} 바이트 > {MAX_TOTAL_BYTES}")
+        if total > 1024 * 1024 and total > MAX_RATIO * max(compressed, 1):
+            raise ShapeError("zip_ratio", f"ZIP 압축비가 비정상이다 (해제 {total} / 압축 {compressed} 바이트). 과도한 압축 해제를 차단한다")
 
         def read(info: zipfile.ZipInfo) -> bytes:
             if info.file_size > MAX_MEMBER_BYTES:

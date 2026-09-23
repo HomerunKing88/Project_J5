@@ -31,6 +31,10 @@ test("validateParcels: fixture 통과, 흔한 오류 감지", () => {
   assert.ok(validateParcels(ring).some((e) => e.includes("좌표 형식")));
   const noSrc = bundle(); delete noSrc.source.geometry_version;
   assert.ok(validateParcels(noSrc).some((e) => e.includes("geometry_version")));
+  const areaNull = bundle(); areaNull.features[0].properties.area_m2_geom = null;
+  assert.ok(validateParcels(areaNull).some((e) => e.includes("area_missing_reason")), "null 면적은 사유가 필요");
+  areaNull.features[0].properties.area_missing_reason = "source_geographic_crs";
+  assert.deepEqual(validateParcels(areaNull), []);
   assert.deepEqual(validateParcels([]), ["객체가 아님"]);
   assert.ok(validateParcels({ ...bundle(), features: "x" }).some((e) => e.includes("배열")));
   const many = bundle(); many.features = Array.from({ length: MAX_PARCELS + 1 }, (_, i) => ({ ...many.features[0], id: String(1e18 + i).padStart(19, "0") })); many.count = many.features.length;
@@ -65,7 +69,7 @@ test("labelPoint·pointInFeature·assetsInParcel: 구멍·다중 조각·물건 
   assert.equal(parcelTitle(p1.properties), "가상동 1");
   assert.equal(parcelTitle({ ...p1.properties, emd_name: null }), "9999900100 1");
   assert.equal(fmtArea(12.34), "12.3 ㎡");
-  assert.equal(fmtArea(null), "-");
+  assert.equal(fmtArea(null, "source_geographic_crs"), "미확인 (source_geographic_crs)");
 });
 
 test("map: worldBbox·parcelPathD·parcelLabelVisible", () => {
