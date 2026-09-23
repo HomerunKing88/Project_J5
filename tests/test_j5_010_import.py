@@ -265,13 +265,67 @@ def test_existing_photo_with_different_content_fails_without_touching_it(db, hom
     assert bad.read_bytes() == b"garbage" and db.status()["counts"]["records"] == 0
 
 
-def test_package_sha256_is_stable_for_dir_and_zip(tmp_path):
+def test_package_sha256_is_stable_for_dir_and_zip(db, home, tmp_path):
     a = package_sha256(PACKAGES / "valid")
     copy = tmp_path / "copy"
     shutil.copytree(PACKAGES / "valid", copy)
     assert package_sha256(copy) == a
     z = zip_dir(PACKAGES / "valid", tmp_path / "v.zip")
     assert package_sha256(z) == hashlib.sha256(z.read_bytes()).hexdigest() != a
+    assert import_package(db, copy, home).package_sha256 == a, "반영기가 기록하는 식별자는 검사에서 읽은 해시 목록으로 만든 같은 값"
+    # 폴더 식별자는 검사기의 항목 규칙·한도를 거친다: 허용되지 않은 항목이 있으면 거절
+    bad = tmp_path / "bad"
+    shutil.copytree(PACKAGES / "valid", bad)
+    (bad / "notes.txt").write_text("x", encoding="utf-8")
+    from j5.package.reader import ContainerError
+    with pytest.raises(ContainerError):
+        package_sha256(bad)
+
+
+def test_disallowed_entry_in_dir_is_rejected_before_reading(db, home, tmp_path, monkeypatch):
+    bad = tmp_path / "bad"
+    shutil.copytree(PACKAGES / "valid", bad)
+    (bad / "huge.bin").write_bytes(b"\0" * 1024)
+    import j5.db.importer as imp
+    calls = []
+    orig = imp.inspect_source
+    monkeypatch.setattr(imp, "inspect_source", lambda *a, **k: (calls.append(1), orig(*a, **k))[1])
+    r = import_package(db, bad, home)
+    assert r.outcome == "rejected" and "entry_not_allowed" in codes(r) and calls == [], "항목 규칙에서 막혀 검사·내용 읽기까지 가지 않는다"
+    assert db.status()["counts"]["records"] == 0 and runs(db)[-1][0] == "rejected"
+
+
+def test_zip_over_size_limit_is_rejected_without_hashing(db, home, tmp_path):
+    from j5.package.limits import Limits
+    z = zip_dir(PACKAGES / "valid", tmp_path / "v.zip")
+    r = import_package(db, z, home, limits=Limits(compressed=100))
+    assert r.outcome == "rejected" and "zip_compressed_size" in codes(r) and db.status()["counts"]["records"] == 0
+
+
+def test_package_changed_between_inspect_and_read_fails(db, home, tmp_path, monkeypatch):
+    """검사 뒤 항목이 바뀌면(폴더 패키지 동기화 중 등) 검사 때 해시와 달라 실패한다. 정본은 그대로."""
+    pkg = tmp_path / "moving"
+    shutil.copytree(PACKAGES / "valid", pkg)
+    import j5.db.importer as imp
+    orig = imp.inspect_source
+
+    def inspect_then_mutate(*a, **k):
+        orig(*a, **k)
+        obs = pkg / "observations.jsonl"
+        obs.write_bytes(obs.read_bytes().replace(b"1\xec\xb8\xb5", b"2\xec\xb8\xb5"))  # '1층' → '2층'
+    monkeypatch.setattr(imp, "inspect_source", inspect_then_mutate)
+    r = import_package(db, pkg, home)
+    assert r.outcome == "failed" and "package_changed_during_import" in codes(r)
+    assert db.status()["counts"]["records"] == 0 and db.status()["dataset_version"] == 1 and r.orphan_photos == []
+
+
+def test_attachment_taken_at_is_preserved(db, home, tmp_path):
+    e = event(E4, ASSETS[0][0], "change_observed", None, [GREEN])
+    e["attachment_refs"][0]["taken_at"] = "2026-09-22T10:14:30+09:00"
+    pkg = write_pkg(tmp_path / "taken", [line_bytes(e)], [GREEN], "5e5e0000-0000-4000-8000-0000000000c1")
+    r = import_package(db, pkg, home)
+    assert r.outcome == "applied", r.to_text()
+    assert db.conn.execute("SELECT taken_at FROM attachments WHERE record_id = ?", (E4,)).fetchone()[0] == "2026-09-22T10:14:30+09:00"
 
 
 # ---- CLI ----

@@ -20,7 +20,8 @@ from j5.db.store import Db
 from j5.db.validate import RECORD_PAYLOAD_SCHEMAS, ValidationError, now_utc
 from j5.package.limits import DEFAULT_LIMITS, Limits
 from j5.package.reader import ContainerError, open_package
-from j5.package.validate import OBSERVATIONS, event_hash, inspect_package
+from j5.package.report import Report
+from j5.package.validate import MANIFEST, OBSERVATIONS, event_hash, inspect_source
 
 PHOTOS_DIR = "photos"
 LOG_FILE = Path("logs") / "import.log"
@@ -83,21 +84,45 @@ class ImportFailure(Exception):
         self.code, self.message = code, message
 
 
-def package_sha256(path: Path, chunk: int = 1 << 20) -> str:
-    """ZIP 은 파일 바이트, 폴더(풀어 놓은 패키지)는 항목 이름·내용 해시 목록의 해시."""
+def _zip_sha256(path: Path, limits: Limits) -> str:
+    """ZIP 파일 바이트의 sha256. 한도(§3.3 compressed)를 넘는 파일은 읽지 않는다."""
+    size = path.stat().st_size
+    if size > limits.compressed:
+        raise ContainerError("zip_compressed_size", str(path), f"ZIP 크기 {size} 바이트가 한도 {limits.compressed}를 넘음")
     h = hashlib.sha256()
-    if path.is_file():
-        with open(path, "rb") as f:
-            for b in iter(lambda: f.read(chunk), b""):
-                h.update(b)
-        return h.hexdigest()
-    for p in sorted(x for x in path.rglob("*") if x.is_file()):
-        fh = hashlib.sha256()
-        with open(p, "rb") as f:
-            for b in iter(lambda: f.read(chunk), b""):
-                fh.update(b)
-        h.update(p.relative_to(path).as_posix().encode("utf-8") + b"\0" + fh.hexdigest().encode() + b"\n")
+    with open(path, "rb") as f:
+        for b in iter(lambda: f.read(limits.chunk), b""):
+            h.update(b)
     return h.hexdigest()
+
+
+def dir_identifier(digests: dict[str, str]) -> str:
+    """풀어 놓은 폴더 패키지의 식별자: 항목 이름·내용 해시 목록의 sha256."""
+    h = hashlib.sha256()
+    for name in sorted(digests):
+        h.update(name.encode("utf-8") + b"\0" + digests[name].encode() + b"\n")
+    return h.hexdigest()
+
+
+def _dir_metadata_id(path: Path) -> str:
+    """내용을 읽지 않은 임시 식별자(이름·크기 목록). 검사에서 거절된 폴더 패키지의 수입 기록에만 쓴다."""
+    h = hashlib.sha256(b"unverified-dir\n")
+    for p in sorted(x for x in path.rglob("*") if x.is_file() or x.is_symlink()):
+        h.update(p.relative_to(path).as_posix().encode("utf-8") + b"\0" + str(p.lstat().st_size).encode() + b"\n")
+    return h.hexdigest()
+
+
+def package_sha256(path: Path, limits: Limits = DEFAULT_LIMITS) -> str:
+    """패키지 식별자. ZIP 은 파일 바이트, 폴더는 허용 항목만 한도 안에서 읽은 내용 해시 목록의 해시 (검사기의 항목 규칙·한도를 그대로 쓴다)."""
+    path = Path(path)
+    if path.is_file():
+        return _zip_sha256(path, limits)
+    with open_package(path, limits) as src:
+        digests = {}
+        for e in src.entries():
+            cap = limits.manifest if e.name == MANIFEST else limits.photo if e.name.startswith("photos/") else limits.uncompressed
+            digests[e.name] = src.read(e.name, cap)[1]
+    return dir_identifier(digests)
 
 
 def photo_rel_path(sha: str, ext: str) -> str:
@@ -169,15 +194,46 @@ def import_package(db: Db, path: Path, data_home: Path, *, limits: Limits = DEFA
     path = Path(path)
     data_home = Path(data_home)
     started = db.now()
-    result = ImportResult(package=path.name, package_sha256=package_sha256(path))
+    result = ImportResult(package=path.name, package_sha256="")
     result.dataset_version_before = result.dataset_version_after = int(db.meta("dataset_version") or 0)
     report_dict: dict = {}
     stored_now: list[str] = []
     try:
+        # ---- 0. 패키지를 한 번만 연다. 검사와 읽기가 같은 핸들·같은 스냅샷을 쓰고, 다시 읽는 항목은 검사 때의 해시와 대조한다 ----
+        try:
+            result.package_sha256 = _zip_sha256(path, limits) if path.is_file() else _dir_metadata_id(path)
+            src = open_package(path, limits)
+        except ContainerError as e:
+            result.add("reject", e.code, e.path, e.message)
+            if not result.package_sha256:
+                result.package_sha256 = _dir_metadata_id(path) if path.is_dir() else hashlib.sha256(b"unhashed:" + path.name.encode("utf-8")).hexdigest()
+            return _finish(db, data_home, result, "rejected", started, {"findings": result.findings}, "패키지를 열 수 없거나 한도를 넘어 거절했다")
+        with src:
+            return _import_open(db, src, path, data_home, limits, result, started, stored_now)
+    except (ImportFailure, ContainerError) as e:
+        result.add("error", e.code, path.name, e.message)
+        result.orphan_photos = list(stored_now)
+        result.dataset_version_after = result.dataset_version_before
+        return _finish(db, data_home, result, "failed", started, report_dict,
+                       f"실패 [{e.code}]: {e.message}. 정본은 되돌렸고 입력 원본은 그대로다" + (". 보관한 사진은 정리대기로 남겼다" if stored_now else ""))
+
+
+def _same_snapshot(report: Report, name: str, digest: str) -> None:
+    if report.file_digests.get(name) != digest:
+        raise ImportFailure("package_changed_during_import", f"{name} 의 내용이 검사 때와 다르다. 패키지가 바뀌는 중이면 완료 후 다시 넣는다")
+
+
+def _import_open(db: Db, src, path: Path, data_home: Path, limits: Limits, result: ImportResult, started: str, stored_now: list[str]) -> ImportResult:
+    report_dict: dict = {}
+    try:
         # ---- 1. 검사 (정본 물건 목록을 시드로) ----
         seed = [{"asset_id": a["asset_id"], "data_mode": a["data_mode"]} for a in db.list_assets()]
-        report = inspect_package(path, seed=seed, study_id=db.meta("study_id"), limits=limits)
+        report = Report(source=str(path))
+        report.kind = src.kind
+        inspect_source(src, report, seed=seed, study_id=db.meta("study_id"), limits=limits)
         report_dict = report.to_dict()
+        if path.is_dir() and report.verdict() != "reject":
+            result.package_sha256 = dir_identifier(report.file_digests)
         result.package_id = report.package_id
         for f in report.sorted_findings():
             result.add(f.level, f.code, f.path, f.message)
@@ -200,60 +256,63 @@ def import_package(db: Db, path: Path, data_home: Path, *, limits: Limits = DEFA
             result.add("info", "package_already_imported", path.name, f"같은 파일이 이미 처리됐다 (run {prev[0]}, {prev[1]})")
             return _finish(db, data_home, result, "duplicate", started, report_dict, "같은 파일을 다시 넣었다. 아무것도 바꾸지 않았다")
 
-        # ---- 3. 이벤트 행·해시, 대장 대조, 정정 대상 ----
+        # ---- 3. 이벤트 행·해시, 대장 대조, 정정 대상 (검사한 스냅샷과 같은지 항목마다 대조) ----
         events: list[dict] = []
-        with open_package(path, limits) as src:
-            manifest = json.loads(src.read("manifest.json", limits.manifest)[0].decode("utf-8"))
-            obs_raw, _ = src.read(OBSERVATIONS, limits.uncompressed)
-            seen: set[str] = set()
-            for seg in obs_raw.split(b"\n"):
-                if not seg:
-                    continue
-                ev = json.loads(seg.decode("utf-8"))
-                if ev["event_id"] in seen:
-                    continue  # 같은 바이트 반복은 검사에서 확인됐다
-                seen.add(ev["event_id"])
-                line = seg + b"\n"
-                events.append({"ev": ev, "line": line, "hash": event_hash(line)})
-            ledger = {r[0]: (r[1], r[2]) for r in db.conn.execute("SELECT event_id, event_hash, record_id FROM import_events WHERE outcome = 'inserted'")}
-            new_events: list[dict] = []
-            for e in events:
-                eid = e["ev"]["event_id"]
-                if eid in ledger:
-                    if ledger[eid][0] != e["hash"]:
-                        result.add("hold", "event_id_conflict_with_canonical", eid, "정본에 같은 event_id 가 다른 내용으로 이미 반영되어 있다")
-                    else:
-                        e["skip"] = True
+        raw, digest = src.read(MANIFEST, limits.manifest)
+        _same_snapshot(report, MANIFEST, digest)
+        manifest = json.loads(raw.decode("utf-8"))
+        obs_raw, digest = src.read(OBSERVATIONS, limits.uncompressed)
+        _same_snapshot(report, OBSERVATIONS, digest)
+        seen: set[str] = set()
+        for seg in obs_raw.split(b"\n"):
+            if not seg:
+                continue
+            ev = json.loads(seg.decode("utf-8"))
+            if ev["event_id"] in seen:
+                continue  # 같은 바이트 반복은 검사에서 확인됐다
+            seen.add(ev["event_id"])
+            line = seg + b"\n"
+            events.append({"ev": ev, "line": line, "hash": event_hash(line)})
+        ledger = {r[0]: (r[1], r[2]) for r in db.conn.execute("SELECT event_id, event_hash, record_id FROM import_events WHERE outcome = 'inserted'")}
+        new_events: list[dict] = []
+        for e in events:
+            eid = e["ev"]["event_id"]
+            if eid in ledger:
+                if ledger[eid][0] != e["hash"]:
+                    result.add("hold", "event_id_conflict_with_canonical", eid, "정본에 같은 event_id 가 다른 내용으로 이미 반영되어 있다")
                 else:
-                    new_events.append(e)
-            new_ids = {e["ev"]["event_id"] for e in new_events}
-            for e in new_events:
-                c = e["ev"]["corrects_event_id"]
-                if c and c not in ledger and c not in new_ids:
-                    result.add("hold", "corrects_target_missing", e["ev"]["event_id"], f"정정 대상 {c} 가 정본에도 이 패키지에도 없다. 대상이 담긴 패키지를 먼저 반영한다")
-            if any(f["level"] == "hold" for f in result.findings):
-                return _finish(db, data_home, result, "held", started, report_dict, "전체 입력을 보류했다. 정본과 입력 원본은 그대로다")
-            result.events_new = len(new_events)
-            result.events_skipped += len(events) - len(new_events)
-            if not new_events:
-                return _finish(db, data_home, result, "duplicate", started, report_dict, "새 이벤트가 없다. dataset_version 을 올리지 않는다")
-            new_events = _order_events(new_events)
+                    e["skip"] = True
+            else:
+                new_events.append(e)
+        new_ids = {e["ev"]["event_id"] for e in new_events}
+        for e in new_events:
+            c = e["ev"]["corrects_event_id"]
+            if c and c not in ledger and c not in new_ids:
+                result.add("hold", "corrects_target_missing", e["ev"]["event_id"], f"정정 대상 {c} 가 정본에도 이 패키지에도 없다. 대상이 담긴 패키지를 먼저 반영한다")
+        if any(f["level"] == "hold" for f in result.findings):
+            return _finish(db, data_home, result, "held", started, report_dict, "전체 입력을 보류했다. 정본과 입력 원본은 그대로다")
+        result.events_new = len(new_events)
+        result.events_skipped += len(events) - len(new_events)
+        if not new_events:
+            return _finish(db, data_home, result, "duplicate", started, report_dict, "새 이벤트가 없다. dataset_version 을 올리지 않는다")
+        new_events = _order_events(new_events)
 
-            # ---- 4. 사진 보관 (새 이벤트가 참조하는 것만) ----
-            needed: dict[str, tuple[str, str]] = {}
-            for e in new_events:
-                for ref in e["ev"]["attachment_refs"]:
-                    needed[ref["sha256"]] = (ref["path"], ref["path"].rsplit(".", 1)[-1])
-            for sha, (pkg_path, ext) in sorted(needed.items()):
-                data, digest = src.read(pkg_path, limits.photo, code="photo_size_exceeded")
-                if digest != sha:
-                    raise ImportFailure("photo_hash_changed", f"{pkg_path} 의 해시가 검사 때와 다르다")
-                rel, new = _store_photo(data_home, sha, ext, data)
-                if new:
-                    stored_now.append(rel)
-                    result.photos_stored += 1
-                else:
-                    result.photos_reused += 1
+        # ---- 4. 사진 보관 (새 이벤트가 참조하는 것만) ----
+        needed: dict[str, tuple[str, str]] = {}
+        for e in new_events:
+            for ref in e["ev"]["attachment_refs"]:
+                needed[ref["sha256"]] = (ref["path"], ref["path"].rsplit(".", 1)[-1])
+        for sha, (pkg_path, ext) in sorted(needed.items()):
+            data, digest = src.read(pkg_path, limits.photo, code="photo_size_exceeded")
+            _same_snapshot(report, pkg_path, digest)
+            if digest != sha:
+                raise ImportFailure("photo_hash_changed", f"{pkg_path} 의 해시가 첨부 참조와 다르다")
+            rel, new = _store_photo(data_home, sha, ext, data)
+            if new:
+                stored_now.append(rel)
+                result.photos_stored += 1
+            else:
+                result.photos_reused += 1
 
         # ---- 5. 정본 반영 (한 트랜잭션) ----
         run_id = str(uuid.uuid4())
@@ -278,7 +337,7 @@ def import_package(db: Db, path: Path, data_home: Path, *, limits: Limits = DEFA
                     atts = [{
                         "attachment_id": str(uuid.uuid5(_NS, f"attachment:{ev['event_id']}:{ref['sha256']}")),
                         "rel_path": photo_rel_path(ref["sha256"], ref["path"].rsplit(".", 1)[-1]), "sha256": ref["sha256"], "mime": ref["mime"],
-                        "bytes": ref["bytes"], "tags": list(ref["tags"]),
+                        "bytes": ref["bytes"], "tags": list(ref["tags"]), "taken_at": ref.get("taken_at"),  # 촬영 시각은 폰이 기록한 값을 그대로 보존
                     } for ref in ev["attachment_refs"]]
                     db.insert_record(rec, evidence=[{"document_id": doc_id, "locator": f"{OBSERVATIONS}#event_id={ev['event_id']}"}], attachments=atts)
                     db.conn.execute("INSERT INTO import_events (run_id, event_id, event_hash, line, outcome, record_id) VALUES (?, ?, ?, ?, 'inserted', ?)",
@@ -302,13 +361,11 @@ def import_package(db: Db, path: Path, data_home: Path, *, limits: Limits = DEFA
         _append_log(data_home, _log_entry(result, started))
         return result
     except (ImportFailure, ContainerError) as e:
-        code = e.code
-        msg = e.message
-        result.add("error", code, path.name, msg)
+        result.add("error", e.code, path.name, e.message)
         result.orphan_photos = list(stored_now)
         result.dataset_version_after = result.dataset_version_before
         return _finish(db, data_home, result, "failed", started, report_dict,
-                       f"실패 [{code}]: {msg}. 정본은 되돌렸고 입력 원본은 그대로다" + (". 보관한 사진은 정리대기로 남겼다" if stored_now else ""))
+                       f"실패 [{e.code}]: {e.message}. 정본은 되돌렸고 입력 원본은 그대로다" + (". 보관한 사진은 정리대기로 남겼다" if stored_now else ""))
 
 
 def _is_under(path: Path, root: Path) -> bool:

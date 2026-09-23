@@ -31,6 +31,7 @@ class Report:
     schema_version: str | None = None
     counts: dict[str, int] = field(default_factory=dict)
     findings: list[Finding] = field(default_factory=list)
+    file_digests: dict[str, str] = field(default_factory=dict)  # 검사에서 실제로 읽은 항목의 sha256 (반영기가 같은 스냅샷인지 대조)
 
     def add(self, level: str, code: str, path: str, message: str) -> None:
         self.findings.append(Finding(level, code, path, message))
