@@ -1,8 +1,9 @@
 # 가상 fixture (J5-003)
 
-모두 가상자료다. `python tests/fixtures/make_packages.py`로 결정적으로 다시 만든다. 사진은 1x1 PNG다.
+모두 가상자료다. `python tests/fixtures/make_packages.py`(패키지)와 `python tests/fixtures/make_parcels.py`(필지)로 결정적으로 다시 만든다. 사진은 1x1 PNG다.
 
 - `assets.seed.synthetic.json`: 가상 물건 5개. 좌표·주소는 가상값이다.
+- `parcels/`: 가상 필지 6개 (J5-013B-1). `python tests/fixtures/make_parcels.py` 가 `synthetic_shp/`(EPSG:5186 Shapefile: 구멍 1·두 조각 1·산 지번 1, 시도 코드 99 는 존재하지 않음)와 `synthetic.j5parcels.json`(= `web/data/parcels.synthetic.j5parcels.json`)을 만든다. 가상 시드 물건 1·2·4·5 가 필지 1·1-1·2·3 안에 있다.
 - `survey/`: 조사 경로·점포·표본틀·세션 수동 입력 예제 8종 (J5-013A). 목록과 기대 집계는 `survey/README.md`.
 - `packages/<case>/`: ZIP을 풀어 놓은 형태의 패키지. `python -m j5 inspect <폴더>`로 검사할 수 있고, 테스트는 같은 폴더를 ZIP으로 묶어서도 검사한다.
 

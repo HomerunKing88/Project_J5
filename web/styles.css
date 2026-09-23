@@ -33,3 +33,12 @@ ul.plain li button { margin-left: 8px; }
 .lg { display: inline-block; width: 12px; height: 12px; border-radius: 50%; vertical-align: middle; margin-left: 6px; }
 .lg-syn { border: 1px dashed currentColor; }
 .lg-real { background: currentColor; }
+/* 필지 (J5-013B-1): 경계는 로컬 단위 path + 그룹 transform, 선 굵기는 non-scaling-stroke. 라벨은 픽셀 단위 text. */
+.parcel { fill: #8881; stroke: currentColor; stroke-width: 1; stroke-opacity: .6; pointer-events: visiblePainted; }
+.parcel.synthetic { stroke-dasharray: 4 2; }
+.parcel.sel { fill: #f9a4; stroke-width: 2; stroke-opacity: 1; }
+.parcel-label { font-size: 11px; fill: currentColor; text-anchor: middle; dominant-baseline: middle; paint-order: stroke; stroke: Canvas; stroke-width: 2.5px; pointer-events: none; }
+.lg-parcel { border: 1px solid currentColor; border-radius: 2px; }
+.parcel-panel { border: 1px dashed #8886; border-radius: 6px; padding: 8px; margin-top: 8px; }
+.mono { font-family: ui-monospace, Menlo, monospace; font-size: .9rem; }
+code { font-size: .9em; }

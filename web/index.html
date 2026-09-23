@@ -32,17 +32,33 @@
   <ul id="asset-list" class="plain"></ul>
 </section>
 
+<section id="sec-parcels">
+  <h2>필지 (연속지적도 경계·지번)</h2>
+  <p class="muted">PC 에서 <code>j5 parcels convert</code> 로 만든 <code>.j5parcels.json</code> 을 넣는다. 기기에서만 읽고 어디에도 보내지 않는다. PNU 는 필지 ID 이고 물건(asset) ID 가 아니다.</p>
+  <button id="load-synthetic-parcels">가상 필지 불러오기 (6개)</button>
+  <label>필지 파일 불러오기 <input id="parcels-file" type="file" accept="application/json,.json"></label>
+  <button id="clear-parcels">필지 제거</button>
+  <p id="parcels-note" class="muted"></p>
+</section>
+
 <section id="sec-map">
-  <h2>지도 (위치점만, 배경 없음)</h2>
-  <p class="muted">외부 타일·통신 없음. 북쪽이 위. 점을 누르면 관측 기록으로 간다. 지도가 안 보여도 위 목록에서 선택할 수 있다.</p>
-  <svg id="map-svg" role="img" aria-label="물건 위치점 지도"></svg>
+  <h2>지도 (필지 경계·지번, 배경 타일 없음)</h2>
+  <p class="muted">외부 타일·통신 없음. 북쪽이 위. 점을 누르면 관측 기록, 필지를 누르면 아래에 지번·PNU 와 그 안의 물건이 뜬다. 확대하면 지번이 보인다. 지도가 안 보여도 위 목록에서 선택할 수 있다.</p>
+  <svg id="map-svg" role="img" aria-label="필지 경계와 물건 위치점 지도"></svg>
   <div class="map-controls">
     <button id="map-zoom-in" aria-label="확대">+</button>
     <button id="map-zoom-out" aria-label="축소">−</button>
     <button id="map-fit">전체 보기</button>
-    <span id="map-legend" class="muted"><span class="lg lg-syn"></span> 가상자료(synthetic) <span class="lg lg-real"></span> 실제·비공개(private_real)</span>
+    <span id="map-legend" class="muted"><span class="lg lg-syn"></span> 가상자료(synthetic) <span class="lg lg-real"></span> 실제·비공개(private_real) <span class="lg lg-parcel"></span> 필지 경계</span>
   </div>
   <p id="map-note" class="muted"></p>
+  <div id="parcel-panel" class="parcel-panel" hidden>
+    <div><strong id="parcel-title"></strong> <span class="badge" id="parcel-mode"></span></div>
+    <div class="muted">PNU <span id="parcel-pnu" class="mono"></span></div>
+    <div class="muted" id="parcel-meta"></div>
+    <ul id="parcel-assets" class="plain"></ul>
+    <button id="parcel-close">닫기</button>
+  </div>
 </section>
 
 <section id="sec-observe" hidden>
