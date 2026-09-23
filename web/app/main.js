@@ -7,7 +7,7 @@ import { isoWithOffset, fromDatetimeLocal, toDatetimeLocal, localDate } from "./
 import { buildEvent, validateEvent, lineBytes, PHOTO_TAGS, PHOTO_TAG_LABEL, CHANGE_STATUS_LABEL, PHOTO_LIMIT } from "./event.js";
 import { validateSeed } from "./seed.js";
 import { selectRecords, planBatches, buildPackage, hasRemainingBatches, studyIdError } from "./export.js";
-import { createMap } from "./map.js";
+// 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
 export const APP_VERSION = "0.1.0";
 const $ = (id) => document.getElementById(id);
@@ -101,9 +101,10 @@ async function renderAssets() {
 }
 
 // ---- 지도 (J5-005) ----
-// 지도는 보조 화면이다. 만들거나 갱신하다 실패하면 안내만 남기고 목록·기록·내보내기는 그대로 동작한다.
-function initMap() {
+// 지도는 보조 화면이다. 모듈을 못 읽거나 만들거나 갱신하다 실패하면 안내만 남기고 목록·기록·내보내기는 그대로 동작한다.
+async function initMap() {
   try {
+    const { createMap } = await import("./map.js");
     state.map = createMap($("map-svg"), { onSelect: startObservation });
     $("map-zoom-in").addEventListener("click", () => mapCall((m) => m.zoomBy(2)));
     $("map-zoom-out").addEventListener("click", () => mapCall((m) => m.zoomBy(0.5)));
@@ -399,7 +400,7 @@ async function main() {
     return;
   }
   await loadSettings();
-  initMap();
+  await initMap();
   await renderAssets();
   await renderRecords();
   await renderExportHistory();

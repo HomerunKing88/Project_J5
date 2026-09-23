@@ -51,11 +51,12 @@ class Cdp {
     const port = 9500 + Math.floor(Math.random() * 400);
     const proc = spawn(chrome, ["--headless=new", "--no-sandbox", "--disable-gpu", `--remote-debugging-port=${port}`, `--user-data-dir=${join(tmp, "profile")}`, "about:blank"], { stdio: "ignore" });
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    // CI 러너의 첫 Chrome 기동은 10초를 넘길 수 있다 (0e59df6 의 web 작업이 10초에서 실패). 최대 60초 기다린다.
     let page;
-    for (let i = 0; i < 50 && !page; i++) {
+    for (let i = 0; i < 300 && !page; i++) {
       try { page = await (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: "PUT" })).json(); } catch { await sleep(200); }
     }
-    if (!page) { proc.kill(); throw new Error("Chromium CDP 연결 실패"); }
+    if (!page) { proc.kill(); throw new Error("Chromium CDP 연결 실패 (60초)"); }
     const c = new Cdp(proc, new WebSocket(page.webSocketDebuggerUrl));
     await new Promise((r) => (c.ws.onopen = r));
     for (const m of ["Runtime.enable", "Page.enable", "Log.enable", "Network.enable", "DOM.enable"]) await c.send(m);
@@ -131,10 +132,22 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
   const tmp = mkdtempSync(join(tmpdir(), "j5-e2e-"));
   const srv = await serve(WEB);
   const base = `http://127.0.0.1:${srv.address().port}`;
-  const cdp = await Cdp.launch(chrome, tmp);
+  let cdp;
   try {
+    // 브라우저 기동 실패도 finally 로 서버를 닫아야 한다. 안 닫으면 테스트 파일이 --test-timeout 까지 매달린다.
+    cdp = await Cdp.launch(chrome, tmp);
+    // 지도 모듈 로드 실패: map.js 요청을 막고 첫 접속 (서비스 워커가 아직 없을 때). 목록·설정은 그대로 동작하고 지도 절만 안내를 낸다.
+    await cdp.send("Network.setBlockedURLs", { urls: ["*/app/map.js"] });
     await cdp.navigate(`${base}/index.html`);
     await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.1.0')");
+    await cdp.waitFor("document.getElementById('map-note').textContent.includes('지도 표시 불가')");
+    assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li').length"), 1, "지도 모듈 없이도 목록 절이 그려진다");
+    const blockedLogs = cdp.errors.splice(0);
+    assert.ok(blockedLogs.every((e) => e.includes("ERR_BLOCKED_BY_CLIENT") || e.includes("Failed to load resource") || e.includes("map.js")), blockedLogs.join("; "));
+    await cdp.send("Network.setBlockedURLs", { urls: [] });
+    await cdp.navigate(`${base}/index.html`);
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.1.0')");
+    await cdp.waitFor("document.getElementById('map-note').textContent === ''");
     // 설정
     await cdp.eval("document.getElementById('study-id').value = 'e2e-study'; document.getElementById('save-settings').click(); 'ok'");
     await cdp.waitFor("document.getElementById('settings-note').textContent === '저장됨'");
@@ -327,7 +340,7 @@ print(json.dumps({"same_obs": h(a) == h(b), "same_pkg": ma["package_id"] == mb["
     }
     assert.deepEqual(cdp.errors, [], "브라우저 콘솔 오류 없음");
   } finally {
-    cdp.close();
+    cdp?.close();
     try { srv.closeAllConnections(); srv.close(); } catch {}
   }
 });
