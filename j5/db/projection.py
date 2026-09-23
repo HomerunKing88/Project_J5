@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
+import sqlite3
 import uuid
 import zipfile
 from dataclasses import asdict, dataclass, field
@@ -287,14 +287,60 @@ def read_latest(data_home: Path) -> dict | None:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+def _publish(db: Db, base: Path, pointer: dict, run_id: str, r: ProjectionResult, started: str, snapshot: dict) -> None:
+    """실행 기록(published 행)과 포인터 교체를 한 단위로 묶는다.
+    - 기록 행을 넣는 트랜잭션 안에서 포인터를 교체한다. 교체가 실패하면 트랜잭션이 되돌아가고 포인터는 그대로다.
+    - 커밋이 실패하면(잠금·디스크) 이미 바뀐 포인터를 이전 내용으로 되돌린다(보상). 이전 포인터가 없었으면 지운다."""
+    ptr = base / LATEST_POINTER
+    prev = ptr.read_bytes() if ptr.is_file() else None
+    ptmp = base / (LATEST_POINTER + ".tmp")
+    with open(ptmp, "w", encoding="utf-8") as f:
+        f.write(json.dumps(pointer, ensure_ascii=False, indent=2) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+    replaced = False
+    try:
+        with db.transaction():
+            _insert_run_row(db, run_id, r, "published", started, snapshot)
+            os.replace(ptmp, ptr)
+            replaced = True
+    except BaseException:
+        if replaced:
+            _restore_pointer(ptr, prev)
+        try:
+            ptmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
+def _restore_pointer(ptr: Path, prev: bytes | None) -> None:
+    try:
+        if prev is None:
+            ptr.unlink(missing_ok=True)
+        else:
+            back = ptr.with_name(ptr.name + ".restore")
+            with open(back, "wb") as f:
+                f.write(prev)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(back, ptr)
+    except OSError:
+        pass  # 복구도 실패하면 결과 메시지와 projection_status 의 파일 대조가 드러낸다
+
+
 def _record_run(db: Db, run_id: str, r: ProjectionResult, status: str, started: str, snapshot: dict | None) -> None:
     with db.transaction():
-        db.conn.execute(
-            "INSERT INTO projection_runs (run_id, source_dataset_version, projection_schema_version, data_mode, status, output_dir, zip_name, zip_sha256,"
-            " scope_count, record_count, started_at, finished_at, message, report_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (run_id, r.source_dataset_version, r.projection_schema_version, (snapshot or {}).get("data_mode") or db.data_mode, status,
-             r.output_dir, r.zip_name, r.zip_sha256, r.counts.get("assets", 0), r.counts.get("records", 0), started, db.now(), r.message or None,
-             json.dumps({"findings": r.findings, "counts": r.counts}, ensure_ascii=False, sort_keys=True)))
+        _insert_run_row(db, run_id, r, status, started, snapshot)
+
+
+def _insert_run_row(db: Db, run_id: str, r: ProjectionResult, status: str, started: str, snapshot: dict | None) -> None:
+    db.conn.execute(
+        "INSERT INTO projection_runs (run_id, source_dataset_version, projection_schema_version, data_mode, status, output_dir, zip_name, zip_sha256,"
+        " scope_count, record_count, started_at, finished_at, message, report_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (run_id, r.source_dataset_version, r.projection_schema_version, (snapshot or {}).get("data_mode") or db.data_mode, status,
+         r.output_dir, r.zip_name, r.zip_sha256, r.counts.get("assets", 0), r.counts.get("records", 0), started, db.now(), r.message or None,
+         json.dumps({"findings": r.findings, "counts": r.counts}, ensure_ascii=False, sort_keys=True)))
 
 
 def build_projection(db: Db, data_home: Path, *, photos: bool = False) -> ProjectionResult:
@@ -324,26 +370,21 @@ def build_projection(db: Db, data_home: Path, *, photos: bool = False) -> Projec
         pointer = {"source_dataset_version": snapshot["version"], "projection_schema_version": PROJECTION_SCHEMA_VERSION, "generated_at": started,
                    "run_id": run_id, "study_id": snapshot["study_id"], "data_mode": snapshot["data_mode"], "dir": result.output_dir,
                    "zip": zip_name, "zip_sha256": zip_sha}
-        ptmp = base / (LATEST_POINTER + ".tmp")
-        with open(ptmp, "w", encoding="utf-8") as f:
-            f.write(json.dumps(pointer, ensure_ascii=False, indent=2) + "\n")
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(ptmp, base / LATEST_POINTER)
-        result.outcome = "published"
         result.message = f"파생본 게시 (정본 v{snapshot['version']}). 최신본 포인터 교체"
-        _record_run(db, run_id, result, "published", started, snapshot)
+        _publish(db, base, pointer, run_id, result, started, snapshot)
+        result.outcome = "published"
         return result
-    except (ProjectionError, OSError, ValueError, KeyError) as e:
+    except (ProjectionError, OSError, ValueError, KeyError, sqlite3.Error) as e:
         code = getattr(e, "code", type(e).__name__)
         msg = getattr(e, "message", str(e))
         result.outcome = "failed"
+        partial = tmp if tmp.exists() else (base / f"ds{result.source_dataset_version}-{run_id[:8]}")
         result.output_dir = result.zip_name = result.zip_sha256 = None
         result.add("error", code, msg)
         failed_dir = base / f"failed-{run_id[:8]}"
-        if tmp.exists():
+        if partial.exists():
             try:
-                os.rename(tmp, failed_dir)
+                os.rename(partial, failed_dir)
                 result.add("warn", "partial_kept", f"부분 산출물을 {failed_dir.relative_to(data_home).as_posix()} 에 남겼다 (조회자료 아님, 자동 삭제하지 않음)")
             except OSError:
                 pass
@@ -362,32 +403,64 @@ def _safe(study_id: str) -> str:
     return (s or "study")[:40]
 
 
+def _check_pointer(data_home: Path) -> tuple[dict | None, str | None]:
+    """포인터와 그것이 가리키는 ZIP 을 실제로 확인한다. (포인터, 문제 코드)."""
+    try:
+        pointer = read_latest(data_home)
+    except (OSError, ValueError) as e:
+        return None, f"pointer_unreadable:{type(e).__name__}"
+    if pointer is None:
+        return None, "pointer_missing"
+    try:
+        z = Path(data_home) / pointer["dir"] / pointer["zip"]
+        if not z.is_file():
+            return pointer, "zip_missing"
+        if _sha256(z.read_bytes()) != pointer["zip_sha256"]:
+            return pointer, "zip_hash_mismatch"
+    except (KeyError, TypeError, OSError) as e:
+        return pointer, f"pointer_invalid:{type(e).__name__}"
+    return pointer, None
+
+
 def projection_status(db: Db, data_home: Path | None) -> dict:
-    """정본 버전과 게시된 파생본 버전의 차이, 마지막 성공·실패 시각. 화면 표시용."""
+    """정본 버전과 게시된 파생본 버전의 차이, 마지막 성공·실패 시각. data_home 이 있으면 포인터와 ZIP 파일까지 실제로 확인한다.
+    기록(projection_runs)만으로는 '최신' 이라고 말하지 않는다: 파일을 확인하지 못했으면 그렇다고 표시한다."""
     current = int(db.meta("dataset_version") or 0)
     pub = db.conn.execute("SELECT source_dataset_version, finished_at, output_dir, zip_name FROM projection_runs WHERE status = 'published' ORDER BY finished_at DESC, rowid DESC LIMIT 1").fetchone()
     fail = db.conn.execute("SELECT finished_at, message FROM projection_runs WHERE status = 'failed' ORDER BY finished_at DESC, rowid DESC LIMIT 1").fetchone()
-    pointer = read_latest(data_home) if data_home else None
     st = {"dataset_version": current, "published_version": pub[0] if pub else None, "published_at": pub[1] if pub else None,
           "published_dir": pub[2] if pub else None, "published_zip": pub[3] if pub else None,
           "last_failed_at": fail[0] if fail else None, "last_failed_message": fail[1] if fail else None,
-          "pointer_version": pointer["source_dataset_version"] if pointer else None}
-    st["stale"] = pub is None or pub[0] != current
-    st["state"] = "없음 (재생성 필요)" if pub is None else ("최신" if not st["stale"] else f"구본 (정본 v{current}, 파생본 v{pub[0]})")
+          "pointer_version": None, "pointer_checked": data_home is not None, "pointer_problem": None}
+    if data_home is None:
+        st["stale"] = pub is None or pub[0] != current
+        st["state"] = "없음 (재생성 필요)" if pub is None else (f"기록상 v{pub[0]} (파일 미확인: data_home 없음)" if not st["stale"] else f"구본 (정본 v{current}, 파생본 v{pub[0]}, 파일 미확인)")
+        return st
+    pointer, problem = _check_pointer(data_home)
+    st["pointer_problem"] = problem
+    if pointer is not None:
+        st["pointer_version"] = pointer.get("source_dataset_version")
+    if problem is not None:
+        st["stale"] = True
+        st["state"] = f"없음 (재생성 필요: {problem})" if pointer is None else f"손상 (재생성 필요: {problem}, 기록상 v{pointer.get('source_dataset_version')})"
+        return st
+    v = pointer["source_dataset_version"]
+    st["stale"] = v != current
+    st["state"] = "최신" if not st["stale"] else f"구본 (정본 v{current}, 파생본 v{v})"
     return st
 
 
 def copy_latest(db: Db, data_home: Path, dest_dir: Path, *, allow_stale: bool = False) -> dict:
     """게시된 최신 파생본 ZIP 의 독립 사본. 정본보다 오래된 파생본은 --allow-stale 없이는 내보내지 않는다 (데이터 사전 §4)."""
     st = projection_status(db, data_home)
-    pointer = read_latest(data_home)
+    pointer, problem = _check_pointer(data_home)
     if pointer is None:
         raise ProjectionError("no_projection", "게시된 파생본이 없다. 먼저 `j5 db project` 로 만든다")
+    if problem is not None:
+        raise ProjectionError("projection_damaged", f"게시된 파생본이 손상됐다 ({problem}). 다시 생성한다")
     if st["stale"] and not allow_stale:
         raise ProjectionError("stale", f"파생본이 구본이다 ({st['state']}). 최신용 내보내기를 막는다. 다시 생성하거나 구본 보존용이면 --allow-stale 을 준다")
     src = Path(data_home) / pointer["dir"] / pointer["zip"]
-    if _sha256(src.read_bytes()) != pointer["zip_sha256"]:
-        raise ProjectionError("zip_hash", "게시된 ZIP 의 해시가 포인터와 다르다. 다시 생성한다")
     try:
         r = copy_package(src, Path(dest_dir))
     except PreserveError as e:

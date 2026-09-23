@@ -50,7 +50,7 @@ python -m j5 db [--db 경로] project-copy <대상 폴더> [--data-home 경로] 
 ```
 
 - `project`: 고정 dataset_version 의 정본에서 `assets.seed.json`(시드 스키마 그대로)·`assets.geojson`·`records.jsonl`(·`photos/`)·`manifest.json` 을 전량 생성 → 다시 읽어 행수·참조·필수값·버전·해시 검증 → `.j5view.zip` 작성·항목 해시 대조 → `J5_DATA_HOME/exports/private/projections/ds<버전>-<run8>/` 게시 → `latest.json` 포인터 교체(db_schema 3: `projection_runs`). 실패하면 이전 파생본·포인터를 그대로 두고 부분 산출물은 `failed-<run8>/` 에 격리한다. 정본은 손대지 않는다.
-- `status` 가 `파생본: 최신 / 구본 (정본 vN, 파생본 vM) / 없음` 과 마지막 게시·실패 시각을 보여준다.
+- `status [--data-home]` 가 `파생본: 최신 / 구본 (정본 vN, 파생본 vM) / 손상·없음 (재생성 필요)` 과 마지막 게시·실패 시각을 보여준다. 포인터와 ZIP 파일을 실제로 확인하며, 실데이터 홈을 모르면 `파일 미확인` 으로 표시하고 '최신' 이라 하지 않는다.
 - `project-copy`: 게시된 최신 ZIP 의 독립 사본(덮어쓰기 금지·재검증·sha256 사이드카). 파생본이 정본보다 오래되면 막고, `--allow-stale` 일 때만 구본임을 표시하며 내보낸다.
 - 폰 앱은 ZIP 을 풀어 `assets.seed.json` 을 "시드 파일 불러오기" 로 넣는다(앱의 ZIP 직접 읽기는 이후 작업).
 

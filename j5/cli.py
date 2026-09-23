@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -45,7 +46,8 @@ def _build_parser() -> argparse.ArgumentParser:
     di = dsub.add_parser("init", help="빈 정본을 만든다 (기존 파일은 덮어쓰지 않음)")
     di.add_argument("--study-id", help="생략 시 J5_STUDY_ID")
     di.add_argument("--data-mode", choices=["synthetic", "private_real"], help="생략 시 J5_DATA_MODE")
-    ds = dsub.add_parser("status", help="스키마 버전·study_id·dataset_version·행 수·무결성·외래키 검사")
+    ds = dsub.add_parser("status", help="스키마 버전·study_id·dataset_version·행 수·무결성·외래키 검사·파생본 상태")
+    ds.add_argument("--data-home", type=Path, help="파생본 포인터·파일을 실제로 확인할 실데이터 홈. 생략 시 J5_DATA_HOME (없으면 파일 미확인으로 표시)")
     ds.add_argument("--json", action="store_true")
     dl = dsub.add_parser("load-seed", help="assets.seed.json 의 물건을 asset_id 그대로 승계해 반영한다")
     dl.add_argument("seed", type=Path)
@@ -98,7 +100,8 @@ def _db_main(args) -> int:
             return 0
         with Db.open(path) as db:
             if args.db_command == "status":
-                st = db.status()
+                home = args.data_home or (Path(os.environ["J5_DATA_HOME"]) if os.environ.get("J5_DATA_HOME") else None)
+                st = db.status(home)
                 if args.json:
                     print(json.dumps(st, ensure_ascii=True, indent=2))
                 else:
@@ -159,6 +162,9 @@ def _db_main(args) -> int:
                 return 0
     except DbError as e:
         print(f"정본 오류 [{e.code}]: {e.message}", file=sys.stderr)
+        return 1
+    except sqlite3.Error as e:
+        print(f"SQLite 오류 [{type(e).__name__}]: {e}. 정본은 트랜잭션 단위로 되돌아갔다", file=sys.stderr)
         return 1
     except ValidationError as e:
         print("입력 거절:", file=sys.stderr)

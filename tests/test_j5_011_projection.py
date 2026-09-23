@@ -72,7 +72,8 @@ def test_publish_full_projection_and_pointer(db, home):
     assert runs(db) == [("published", 1, 5, 0)]
     st = projection_status(db, home)
     assert st["stale"] is False and st["state"] == "최신" and st["published_version"] == 1
-    assert db.status()["projection"]["state"] == "최신" and db.status()["dataset_version"] == 1, "파생본 생성은 dataset_version 을 바꾸지 않는다"
+    assert db.status(home)["projection"]["state"] == "최신" and db.status()["dataset_version"] == 1, "파생본 생성은 dataset_version 을 바꾸지 않는다"
+    assert db.status()["projection"]["state"].startswith("기록상 v1") and db.status()["projection"]["pointer_checked"] is False, "data_home 없이는 '최신' 이라고 하지 않는다"
     # 검증기는 게시된 폴더에도 그대로 쓸 수 있다
     assert verify_projection_dir(out, expected_version=1)["counts"]["assets"] == 5
 
@@ -195,6 +196,83 @@ def test_verifier_catches_tampering(db, home):
     with pytest.raises(ProjectionError) as e:
         verify_projection_dir(out)
     assert e.value.code == "verify_extra_or_missing"
+
+
+class _Conn:
+    """sqlite3.Connection 대리자. 지정한 SQL 을 지정 횟수째에 실패시켜 잠금·디스크 오류를 흉내 낸다."""
+
+    def __init__(self, real, fail_sql: str, fail_on_nth: int, message: str):
+        self._real, self._fail_sql, self._nth, self._msg, self._count = real, fail_sql, fail_on_nth, message, 0
+
+    def execute(self, sql, *args):
+        if sql == self._fail_sql:
+            self._count += 1
+            if self._count == self._nth:
+                raise __import__("sqlite3").OperationalError(self._msg)
+        return self._real.execute(sql, *args)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def test_bookkeeping_failure_keeps_or_restores_previous_pointer(db, home, monkeypatch):
+    """게시 기록 행 삽입 실패(잠금) 와 커밋 실패(디스크) 모두에서 포인터는 이전 상태를 유지한다 (Codex P1)."""
+    r1 = build_projection(db, home)
+    prev = (home / P.PROJECTIONS_DIR / P.LATEST_POINTER).read_bytes()
+    assert import_package(db, PACKAGES / "valid", home).outcome == "applied"
+    # (a) 기록 행 삽입이 실패: 포인터 교체 전이라 그대로
+    real_conn = db.conn
+    db.conn = _Conn(real_conn, "INSERT INTO projection_runs (run_id, source_dataset_version, projection_schema_version, data_mode, status, output_dir, zip_name, zip_sha256, scope_count, record_count, started_at, finished_at, message, report_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", 1, "database is locked (시험)")
+    r = build_projection(db, home)
+    db.conn = real_conn
+    assert r.outcome == "failed" and any(f["code"] == "OperationalError" for f in r.findings)
+    assert (home / P.PROJECTIONS_DIR / P.LATEST_POINTER).read_bytes() == prev
+    assert not list((home / P.PROJECTIONS_DIR).glob("ds2-*")) and len(list((home / P.PROJECTIONS_DIR).glob("failed-*"))) == 1
+    assert projection_status(db, home)["published_version"] == 1 and (home / r1.output_dir / r1.zip_name).is_file()
+    # (b) 커밋이 실패: 포인터는 이미 바뀌었으므로 이전 내용으로 되돌린다. COMMIT 은 스냅샷 읽기(1) → 게시(2) 순
+    db.conn = _Conn(real_conn, "COMMIT", 2, "disk I/O error (시험)")
+    r = build_projection(db, home)
+    db.conn = real_conn
+    assert r.outcome == "failed" and any(f["code"] == "OperationalError" for f in r.findings)
+    assert (home / P.PROJECTIONS_DIR / P.LATEST_POINTER).read_bytes() == prev, "커밋 실패 뒤 포인터 복구"
+    assert not list((home / P.PROJECTIONS_DIR).glob("ds2-*")) and len(list((home / P.PROJECTIONS_DIR).glob("failed-*"))) == 2
+    st = projection_status(db, home)
+    assert st["published_version"] == 1 and st["pointer_version"] == 1 and st["stale"]
+    # 정상 재시도
+    r2 = build_projection(db, home)
+    assert r2.outcome == "published" and read_latest(home)["source_dataset_version"] == 2
+
+
+def test_status_verifies_pointer_and_files(db, home, tmp_path):
+    r = build_projection(db, home)
+    zip_path = home / r.output_dir / r.zip_name
+    zip_path.write_bytes(b"damaged")
+    st = projection_status(db, home)
+    assert st["stale"] and st["pointer_problem"] == "zip_hash_mismatch" and st["state"].startswith("손상")
+    with pytest.raises(ProjectionError) as e:
+        copy_latest(db, home, tmp_path)
+    assert e.value.code == "projection_damaged"
+    zip_path.unlink()
+    assert projection_status(db, home)["pointer_problem"] == "zip_missing"
+    (home / P.PROJECTIONS_DIR / P.LATEST_POINTER).unlink()
+    st = projection_status(db, home)
+    assert st["pointer_problem"] == "pointer_missing" and st["state"].startswith("없음") and st["published_version"] == 1, "기록만 남고 파일이 없으면 없음으로 표시"
+    assert db.status(home)["projection"]["state"].startswith("없음")
+    assert build_projection(db, home).outcome == "published" and projection_status(db, home)["state"] == "최신"
+
+
+def test_sqlite_errors_become_failed_results(db, home, capsys, monkeypatch):
+    real_conn = db.conn
+    db.conn = _Conn(real_conn, "BEGIN IMMEDIATE", 1, "database is locked (시험)")
+    r = build_projection(db, home)
+    db.conn = real_conn
+    assert r.outcome == "failed" and any(f["code"] == "OperationalError" and "locked" in f["message"] for f in r.findings)
+    assert read_latest(home) is None and runs(db)[-1][0] == "failed"
+    # CLI 는 SQLite 오류를 종료 코드 1 과 안내로 끝낸다 (역추적 없음)
+    monkeypatch.setenv("J5_DATA_HOME", str(home))
+    monkeypatch.setattr(cli, "build_projection", lambda *a, **k: (_ for _ in ()).throw(__import__("sqlite3").OperationalError("database is locked")))
+    assert cli.main(["db", "--db", str(db.path), "project"]) == 1
+    assert "SQLite 오류" in capsys.readouterr().err
 
 
 def test_cli_project_status_and_copy(home, tmp_path, capsys, monkeypatch):

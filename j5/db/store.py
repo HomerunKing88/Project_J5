@@ -152,7 +152,15 @@ class Db:
         else:
             self._depth = depth
             if depth == 0:
-                self.conn.execute("COMMIT")
+                try:
+                    self.conn.execute("COMMIT")
+                except sqlite3.Error:
+                    # COMMIT 이 실패(잠금·디스크)하면 트랜잭션이 열린 채 남을 수 있다. 되돌려서 미커밋 쓰기가 보이지 않게 한다.
+                    try:
+                        self.conn.execute("ROLLBACK")
+                    except sqlite3.Error:
+                        pass
+                    raise
             else:
                 self.conn.execute(f"RELEASE sp{depth}")
 
@@ -191,7 +199,8 @@ class Db:
     def data_mode(self) -> str:
         return self.meta("data_mode") or ""
 
-    def status(self) -> dict:
+    def status(self, data_home: Path | None = None) -> dict:
+        """정본 상태. data_home 을 주면 파생본 포인터·ZIP 파일까지 실제로 확인한다(없으면 '파일 미확인' 으로 표시)."""
         counts = {t: self.conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
                   for t in ("subjects", "assets", "source_documents", "records", "record_evidence", "attachments")}
         integrity = [r[0] for r in self.conn.execute("PRAGMA integrity_check")]
@@ -199,7 +208,7 @@ class Db:
         projection = None
         if self._has_table("projection_runs"):
             from j5.db.projection import projection_status  # 순환 import 방지
-            projection = projection_status(self, None)
+            projection = projection_status(self, data_home)
         return {
             "projection": projection,
             "path": str(self.path), "sqlite_version": sqlite3.sqlite_version,
