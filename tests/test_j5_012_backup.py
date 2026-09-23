@@ -325,3 +325,51 @@ def test_cli_backup_verify_restore_status_and_check(home, tmp_path, capsys, monk
     assert cli.main(["db", "backup-verify", str(tmp_path / "none")]) == cli.USAGE_ERROR
     monkeypatch.delenv("J5_DATA_HOME")
     assert cli.main(["db", "--db", str(home / "db" / "j5.sqlite3"), "backup"]) == cli.USAGE_ERROR
+
+
+def test_restore_of_older_backup_survives_newer_tool_migrations(db, home, tmp_path, monkeypatch):
+    """도구가 백업보다 새로우면(마이그레이션 추가) 복구 시 마이그레이션이 적용되고, 대조는 백업에 있던 데이터 테이블로 한다 (Codex P1)."""
+    from j5.db import schema as S
+    r = create_backup(db, home)
+    bdir = home / r.backup_dir
+    monkeypatch.setattr(S, "MIGRATIONS", S.MIGRATIONS + ((4, "test_future", "CREATE TABLE t_future (x INTEGER) STRICT;"),))
+    monkeypatch.setattr(S, "DB_SCHEMA_VERSION", 4)
+    assert verify_backup_dir(bdir)["manifest"]["db_schema_version"] == 3, "백업 파일 자체는 그대로 검증된다"
+    dest = tmp_path / "newer-tool"
+    rr = restore_backup(bdir, dest)
+    assert rr.outcome == "completed", rr.to_text()
+    assert rr.db_schema_version == 4 and rr.dataset_version == 2 and rr.counts["records"] == 3 and rr.counts["schema_migrations"] == 4 and rr.photos == 2
+    with Db.open(dest / "db" / "j5.sqlite3") as rdb:
+        assert rdb.schema_version() == 4 and rdb.status()["counts"]["records"] == 3 and check_photos(rdb, dest)["ok_all"]
+    # 백업 원본은 손대지 않았고(마이그레이션은 복구본에만), 도구가 백업보다 오래되면 복구를 거절한다
+    assert verify_backup_dir(bdir)["manifest"]["db_schema_version"] == 3
+    monkeypatch.setattr(S, "MIGRATIONS", S.MIGRATIONS[:2])
+    monkeypatch.setattr(S, "DB_SCHEMA_VERSION", 2)
+    rr = restore_backup(bdir, tmp_path / "older-tool")
+    assert rr.outcome == "failed" and any(f["code"] == "tool_too_old" for f in rr.findings)
+
+
+def test_unreadable_pointer_does_not_mask_backup_failure(db, home, capsys, monkeypatch):
+    """포인터가 손상된 상태에서 백업이 실패해도 결과 객체·종료 코드로 끝난다 (Codex P2)."""
+    create_backup(db, home)
+    (home / "backups" / "latest.json").write_bytes(b"{not json")
+    assert backup_status(db, home)["problem"].startswith("pointer_unreadable")
+    next((home / "photos").rglob("*.png")).unlink()
+    r = create_backup(db, home)
+    assert r.outcome == "failed" and r.findings[0]["code"] == "photos_incomplete" and "pointer_unreadable" in r.message
+    monkeypatch.setenv("J5_DATA_HOME", str(home))
+    assert cli.main(["db", "backup"]) == 1
+    out = capsys.readouterr()
+    assert "백업: 실패" in out.out and "Traceback" not in out.err
+
+
+def test_status_rejects_backup_of_another_canonical_db(db, home, tmp_path):
+    """같은 data_home 의 포인터가 다른 정본(study_id·data_mode)의 백업이면 버전이 같아도 '최신' 이 아니다 (Codex P2)."""
+    create_backup(db, home)
+    with Db.create(tmp_path / "other" / "j5.sqlite3", study_id="other-study", data_mode="synthetic") as other:
+        with other.transaction():
+            other.set_meta("dataset_version", "2")
+        st = backup_status(other, home)
+        assert st["problem"] == "identity_mismatch" and st["stale"] and st["state"].startswith("다른 정본의 백업")
+        assert other.status(home)["backup"]["stale"]
+    assert backup_status(db, home)["state"] == "최신 (정본 v2)"

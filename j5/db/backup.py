@@ -315,8 +315,13 @@ def create_backup(db: Db, data_home: Path, *, dest_root: Path | None = None) -> 
                 r.add("warn", "partial_kept", f"부분 산출물을 {_display_path(failed_dir, data_home)} 에 남겼다 (백업 아님, 자동 삭제하지 않음)")
             except OSError:
                 pass
-        prev = read_latest(data_home)
-        keep = f" 이전 백업 v{prev['dataset_version']}({prev['created_at']}) 과 포인터는 그대로다." if prev else " 완료된 백업이 없다."
+        prev, prev_problem = _safe_read_latest(data_home)
+        if prev_problem:
+            keep = f" 이전 포인터는 읽을 수 없다({prev_problem}). 상태 표시(j5 db status)로 확인한다."
+        elif prev:
+            keep = f" 이전 백업 v{prev.get('dataset_version')}({prev.get('created_at')}) 과 포인터는 그대로다."
+        else:
+            keep = " 완료된 백업이 없다."
         r.message = f"백업 실패 [{code}]: {msg}. 정본은 그대로다.{keep}"
         return r
     finally:
@@ -336,6 +341,17 @@ def read_latest(data_home: Path) -> dict | None:
     if not p.is_file():
         return None
     return json.loads(p.read_text(encoding="utf-8"))
+
+
+def _safe_read_latest(data_home: Path) -> tuple[dict | None, str | None]:
+    """(포인터, 문제 코드). 포인터가 없으면 (None, None), 읽을 수 없거나 형식이 아니면 (None, 코드)."""
+    try:
+        ptr = read_latest(data_home)
+    except (OSError, ValueError) as e:
+        return None, f"pointer_unreadable:{type(e).__name__}"
+    if ptr is not None and not isinstance(ptr, dict):
+        return None, "pointer_invalid:type"
+    return ptr, None
 
 
 def resolve_backup_dir(data_home: Path, pointer: dict) -> Path:
@@ -393,17 +409,21 @@ def backup_status(db: Db, data_home: Path | None) -> dict:
     if data_home is None:
         st["state"] = "파일 미확인 (data_home 없음)"
         return st
-    try:
-        pointer = read_latest(data_home)
-    except (OSError, ValueError) as e:
-        st["problem"] = f"pointer_unreadable:{type(e).__name__}"
-        st["state"] = f"손상 (백업 필요: {st['problem']})"
+    pointer, problem = _safe_read_latest(data_home)
+    if problem:
+        st["problem"] = problem
+        st["state"] = f"손상 (백업 필요: {problem})"
         return st
     if pointer is None:
         st["state"] = "없음 (백업 필요)"
         return st
     try:
         st["backup_version"], st["backup_at"], st["backup_dir"] = pointer["dataset_version"], pointer["created_at"], pointer["dir"]
+        # 포인터의 정체성(study_id·data_mode)이 열린 정본과 다르면 다른 정본의 백업이다. 버전이 같아도 '최신' 이라 하지 않는다.
+        if pointer["study_id"] != db.meta("study_id") or pointer["data_mode"] != db.data_mode:
+            st["problem"] = "identity_mismatch"
+            st["state"] = f"다른 정본의 백업 (백업 study {pointer['study_id']}/{pointer['data_mode']}, 정본 {db.meta('study_id')}/{db.data_mode}). 이 정본의 백업이 필요하다"
+            return st
         bdir = resolve_backup_dir(data_home, pointer)
         mpath = bdir / BACKUP_MANIFEST
         if not bdir.is_dir():
@@ -504,8 +524,8 @@ def restore_backup(backup_dir: Path, dest_home: Path) -> RestoreResult:
             staging.rmdir()
         except OSError:
             pass
-        # 5. 최종 확인
-        info = _verify_restored(dest_home, manifest)
+        # 5. 최종 확인 (스테이징에서 마이그레이션이 적용됐을 수 있으므로 파일 그대로의 대조는 3 에서 이미 했다)
+        info = _verify_restored(dest_home, manifest, check_copy=False)
         r.dataset_version, r.db_schema_version, r.counts, r.photos = manifest["dataset_version"], info["db_schema_version"], info["counts"], info["photos"]
         r.outcome = "completed"
         r.message = f"복구 완료: 기록 {info['counts'].get('records', 0)}건, 사진 {info['photos']}장 (해시·연결 확인), 정본 v{manifest['dataset_version']}"
@@ -527,17 +547,28 @@ def restore_backup(backup_dir: Path, dest_home: Path) -> RestoreResult:
                                                   "dataset_version": r.dataset_version, "counts": r.counts, "photos": r.photos, "message": r.message})
 
 
-def _verify_restored(home: Path, manifest: dict) -> dict:
-    """복구본을 정본으로 열어(외래키·마이그레이션) 행수·버전·사진 연결을 확인한다."""
+def _verify_restored(home: Path, manifest: dict, *, check_copy: bool = True) -> dict:
+    """복구본을 확인한다. 먼저 파일을 읽기 전용으로 열어 manifest 의 행수·meta 와 그대로 대조하고(마이그레이션 전 상태),
+    그 다음 정본으로 열어(외래키·마이그레이션 적용) 무결성·버전·사진 연결을 확인한다. 마이그레이션이 적용되면 schema_migrations 행과
+    새 테이블이 늘어날 수 있으므로 그 뒤의 대조는 manifest 에 있던 데이터 테이블만 한다(백업이 도구보다 오래돼도 복구된다)."""
+    if check_copy:
+        _check_db_file(home / DB_REL, expected_counts=manifest["counts"],
+                       expected_meta={"study_id": manifest["study_id"], "data_mode": manifest["data_mode"], "dataset_version": manifest["dataset_version"],
+                                      "db_schema_version": manifest["db_schema_version"]})
     with Db.open(home / DB_REL) as db:
         st = db.status()
         if not st["ok"]:
             raise BackupError("restored_integrity", f"integrity {st['integrity_check']}, fk {len(st['foreign_key_check'])}")
         if st["dataset_version"] != manifest["dataset_version"] or st["study_id"] != manifest["study_id"] or st["data_mode"] != manifest["data_mode"]:
             raise BackupError("restored_meta", "복구본의 버전·study_id·data_mode 가 manifest 와 다르다")
+        if st["db_schema_version"] < manifest["db_schema_version"]:
+            raise BackupError("restored_schema", f"복구본 db_schema {st['db_schema_version']} < manifest {manifest['db_schema_version']}")
         counts = _table_counts(db.conn)
         for k, v in manifest["counts"].items():
-            if counts.get(k) != v:
+            if k == "schema_migrations":
+                if counts.get(k, 0) < v:
+                    raise BackupError("restored_counts", f"{k}: 복구본 {counts.get(k)}, manifest {v}")
+            elif counts.get(k) != v:
                 raise BackupError("restored_counts", f"{k}: 복구본 {counts.get(k)}, manifest {v}")
         c = check_photos(db, home)
         if not c["ok_all"]:
