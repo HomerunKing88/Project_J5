@@ -54,7 +54,10 @@ class _Handler(BaseHTTPRequestHandler):
         if sc["kind"] == "api_error":
             data = xml_page([], 0, page, rows, code=sc.get("code", "30"), msg=sc.get("msg", "SERVICE_KEY_IS_NOT_REGISTERED_ERROR"))
         elif sc["kind"] == "garbage":
-            data = b"<html>not xml</html"
+            data = f"<html>gateway error for {self.path}</html".encode("utf-8")  # 요청 URL(키 포함)을 되비치는 응답
+        elif sc["kind"] == "no_total":
+            data = (f'<?xml version="1.0"?><response><header><resultCode>000</resultCode><resultMsg>OK</resultMsg></header><body><items>'
+                    + "".join("<item>" + "".join(f"<{k}>{v}</{k}>" for k, v in it.items()) + "</item>" for it in sc["items"]) + "</items><numOfRows>10</numOfRows><pageNo>1</pageNo><totalCount>n/a</totalCount></body></response>").encode("utf-8")
         elif sc["kind"] == "doctype":
             data = b'<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "b">]><response/>'
         elif sc["kind"] == "old_format":
@@ -166,8 +169,9 @@ def test_collect_paginates_and_classifies_months(server, home):
         "201503": {"kind": "garbage"},
         "201504": {"kind": "doctype"},
         "201505": {"kind": "short_pages", "items": [item(0)], "claimed_total": 9},
+        "201506": {"kind": "no_total", "items": [item(0), item(1)]},
     }
-    months = ["202608", "202109", "200603", "201501", "201502", "201503", "201504", "201505"]
+    months = ["202608", "202109", "200603", "201501", "201502", "201503", "201504", "201505", "201506"]
     run = collect_months(home, key=KEY, key_source="test", lawd_cd="11110", months=months, endpoint=server, num_rows=3, max_pages=10, sleep=lambda s: None)
     by = {m.deal_ymd: m for m in run.months}
     assert (by["202608"].outcome, by["202608"].items, by["202608"].total_count, len(by["202608"].pages)) == ("complete", 7, 7, 3)
@@ -178,7 +182,12 @@ def test_collect_paginates_and_classifies_months(server, home):
     assert by["201503"].outcome == "failed" and by["201503"].pages[0].outcome == "bad_response"
     assert by["201504"].outcome == "failed" and "DOCTYPE" in by["201504"].pages[0].error
     assert by["201505"].outcome == "partial" and "페이지 누락" in by["201505"].message and by["201505"].items == 1
+    assert by["201506"].outcome == "partial" and "totalCount" in by["201506"].message and by["201506"].items == 2, "totalCount 없으면 complete 로 인증하지 않는다"
     assert not run.ok
+    # 되비친 URL 이 든 오류 문구에도 키가 없다 (결과 객체·화면 출력·JSON)
+    assert KEY not in (by["201503"].pages[0].error or "") and "<redacted>" in by["201503"].pages[0].error
+    assert KEY not in rt.run_text(run) and KEY not in json.dumps(run.to_dict(), ensure_ascii=False)
+    assert len(run.run_id) == len("20260923-203413-abcdef") and run.run_id.count("-") == 2
     # 원본 파일·기록·요약·로그가 있고 어디에도 키가 없다
     raw = home / "raw" / "rt_nrg" / "11110"
     assert len(list((raw / "202608").glob("p*.xml"))) == 3 and (raw / "201502").is_dir() and not list((raw / "201502").glob("p*.xml"))
@@ -197,6 +206,15 @@ def test_collect_paginates_and_classifies_months(server, home):
     # 저장된 원본만으로 다시 요약 (네트워크 없음)
     rep2 = report_from_raw(home, "11110", ["202608", "209912"], run.run_id)
     assert rep2["months"][0]["items"] == 7 and rep2["months"][0]["outcome"] == "from_raw" and rep2["months"][1]["outcome"] == "no_raw"
+    # 같은 달을 다시 받으면 새 실행 ID 의 파일이 옆에 쌓이고(덮어쓰기 없음), 재요약은 기본으로 가장 최근 실행 하나만 센다
+    _Handler.scenarios = {"202608": {"kind": "pages", "items": [item(i) for i in range(5)]}}
+    run2 = collect_months(home, key=KEY, key_source="test", lawd_cd="11110", months=["202608"], endpoint=server, num_rows=3, sleep=lambda s: None)
+    assert run2.run_id != run.run_id and len(list((raw / "202608").glob("p*.xml"))) == 5
+    rep3 = report_from_raw(home, "11110", ["202608"])
+    assert rep3["months"][0]["items"] == 5 and rep3["months"][0]["run_id"] == run2.run_id and rep3["months"][0]["other_runs"] == [run.run_id], "두 실행을 합치지 않는다"
+    assert report_from_raw(home, "11110", ["202608"], run.run_id)["months"][0]["items"] == 7
+    assert rt.list_runs(home, "11110", "202608") == sorted([run.run_id, run2.run_id])
+    assert "다른 실행 1개는 제외" in rt.report_text(rep3)
 
 
 def test_network_error_retries_then_fails(home, monkeypatch):
@@ -213,6 +231,23 @@ def test_network_error_retries_then_fails(home, monkeypatch):
     assert m.outcome == "failed" and m.pages[0].outcome == "network_error" and m.pages[0].attempts == rt.RETRIES and len(attempts) == rt.RETRIES
     assert slept[:rt.RETRIES - 1] == [1, 2], "지수 대기"
     assert KEY not in (home / "logs" / "collect.log").read_text(encoding="utf-8")
+
+
+def test_run_ids_do_not_collide_and_raw_is_never_overwritten(home, monkeypatch):
+    ids = {rt._new_run_id() for _ in range(20)}
+    assert len(ids) == 20, "같은 초에도 실행 ID 가 다르다"
+    p = home / "x.xml"
+    rt._write_new(p, b"a")
+    with pytest.raises(CollectError) as e:
+        rt._write_new(p, b"b")
+    assert e.value.code == "raw_exists" and p.read_bytes() == b"a"
+    # 같은 실행 ID 로 두 번 쓰는 상황을 흉내내면 두 번째는 실패하고 첫 원본이 남는다
+    monkeypatch.setattr(rt, "_new_run_id", lambda: "20260923-000000-aaaaaa")
+    opener = lambda url: (200, xml_page([item(0)], 1, 1, 10))
+    collect_months(home, key=KEY, key_source="t", lawd_cd="11110", months=["202608"], endpoint="https://x/api", opener=opener, sleep=lambda s: None)
+    with pytest.raises(CollectError) as e:
+        collect_months(home, key=KEY, key_source="t", lawd_cd="11110", months=["202608"], endpoint="https://x/api", opener=opener, sleep=lambda s: None)
+    assert e.value.code == "raw_exists"
 
 
 def test_collect_input_validation(home):

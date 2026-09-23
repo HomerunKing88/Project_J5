@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import secrets
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -222,8 +223,7 @@ def collect_months(data_home: Path, *, key: str, key_source: str, lawd_cd: str, 
     check_lawd(lawd_cd)
     if not (1 <= num_rows <= 1000) or not (1 <= max_pages <= 500):
         raise CollectError("bad_paging", "numOfRows 는 1~1000, max_pages 는 1~500")
-    stamp = _now().replace("-", "").replace(":", "").replace("T", "-").rstrip("Z")
-    run = RunResult(run_id=stamp, provider=PROVIDER, endpoint=endpoint, started_at=_now(), lawd_cd=lawd_cd, key_source=key_source)
+    run = RunResult(run_id=_new_run_id(), provider=PROVIDER, endpoint=endpoint, started_at=_now(), lawd_cd=lawd_cd, key_source=key_source)
     log = data_home / "logs" / LOG_NAME
     log.parent.mkdir(parents=True, exist_ok=True)
     for deal_ymd in months:
@@ -241,15 +241,17 @@ def collect_months(data_home: Path, *, key: str, key_source: str, lawd_cd: str, 
                 _log(log, f"{run.run_id} {lawd_cd} {deal_ymd} p{page} {pr.outcome} {pr.error}", key)
                 break
             path = out_dir / f"p{page:03d}-{run.run_id}.xml"
-            path.write_bytes(data)
+            _write_new(path, data)
             pr.path = path.relative_to(data_home).as_posix()
             try:
                 parsed = parse_response(data)
             except CollectError as e:
-                pr.outcome, pr.error = "bad_response", e.message
+                # 응답 앞부분이 요청 URL 을 되비칠 수 있어 결과 객체에 넣기 전에 가린다 (기록·화면 출력 모두)
+                pr.outcome, pr.error = "bad_response", redact(e.message, key)
                 _log(log, f"{run.run_id} {lawd_cd} {deal_ymd} p{page} bad_response {e.code}", key)
                 break
-            pr.result_code, pr.result_msg = parsed["result_code"], parsed["result_msg"]
+            pr.result_code = redact(parsed["result_code"], key) if parsed["result_code"] else None
+            pr.result_msg = redact(parsed["result_msg"], key) if parsed["result_msg"] else None
             pr.total_count, pr.num_rows, pr.item_count = parsed["total_count"], parsed["num_rows"], len(parsed["items"])
             if pr.result_code not in OK_CODES:
                 pr.outcome, pr.error = "api_error", f"resultCode {pr.result_code}: {pr.result_msg}"
@@ -268,10 +270,13 @@ def collect_months(data_home: Path, *, key: str, key_source: str, lawd_cd: str, 
         if last is None or last.outcome in ("http_error", "network_error", "bad_response", "api_error"):
             mr.outcome = "failed"
             mr.message = f"실패: {last.outcome if last else '요청 없음'} ({last.error if last else ''})"
-        elif mr.total_count == 0 or (mr.total_count is None and mr.items == 0):
+        elif mr.total_count == 0:
             mr.outcome = "empty"
             mr.message = "정상 응답, 0건 (API 실패가 아님)"
-        elif mr.total_count is not None and mr.items < mr.total_count:
+        elif mr.total_count is None:
+            mr.outcome = "partial"
+            mr.message = f"totalCount 가 없거나 숫자가 아니라 완전성을 확인할 수 없다 ({mr.items}건 받음). 응답 형식을 확인한다"
+        elif mr.items < mr.total_count:
             mr.outcome = "partial"
             mr.message = f"페이지 누락: totalCount {mr.total_count} 중 {mr.items}건 (max_pages {max_pages} 또는 빈 페이지)"
         else:
@@ -279,13 +284,27 @@ def collect_months(data_home: Path, *, key: str, key_source: str, lawd_cd: str, 
             mr.message = f"{mr.items}건 ({len(mr.pages)}페이지)"
     run.finished_at = _now()
     run_path = data_home / RAW_DIR / lawd_cd / f"run-{run.run_id}.json"
-    run_path.write_text(redact(json.dumps(run.to_dict(), ensure_ascii=False, indent=2), key) + "\n", encoding="utf-8")
+    _write_new(run_path, (redact(json.dumps(run.to_dict(), ensure_ascii=False, indent=2), key) + "\n").encode("utf-8"))
     run.run_path = run_path.relative_to(data_home).as_posix()
     report = build_report(data_home, run)
     report_path = data_home / RAW_DIR / lawd_cd / f"report-{run.run_id}.json"
-    report_path.write_text(redact(json.dumps(report, ensure_ascii=False, indent=2), key) + "\n", encoding="utf-8")
+    _write_new(report_path, (redact(json.dumps(report, ensure_ascii=False, indent=2), key) + "\n").encode("utf-8"))
     run.report_path = report_path.relative_to(data_home).as_posix()
     return run
+
+
+def _new_run_id() -> str:
+    """UTC 초 단위 시각 + 무작위 6자리. 같은 초의 실행·동시 실행이 같은 이름을 갖지 않게 한다."""
+    return _now().replace("-", "").replace(":", "").replace("T", "-").rstrip("Z") + "-" + secrets.token_hex(3)
+
+
+def _write_new(path: Path, data: bytes) -> None:
+    """원본·기록은 덮어쓰지 않는다. 같은 이름이 있으면 실패한다 (배타적 생성)."""
+    try:
+        with open(path, "xb") as f:
+            f.write(data)
+    except FileExistsError:
+        raise CollectError("raw_exists", f"이미 있는 파일을 덮어쓰지 않는다: {path}") from None
 
 
 def _log(log: Path, line: str, key: str) -> None:
@@ -321,15 +340,39 @@ def summarize_items(items: list[dict]) -> dict:
     return {"items": n, "masked_rows": masked_rows, "masked_rate": round(masked_rows / n, 3) if n else 0.0, "fields": out_fields}
 
 
+RUN_SUFFIX_RE = re.compile(r"^p\d{3}-(\d{8}-\d{6}(?:-[0-9a-f]{6})?)\.xml$")
+
+
+def list_runs(data_home: Path, lawd_cd: str, deal_ymd: str) -> list[str]:
+    """그 달 폴더에 원본이 있는 실행 ID 목록 (오래된 것부터). 같은 초의 실행은 무작위 접미사가 아니라 파일 생성 시각으로 순서를 정한다."""
+    d = Path(data_home) / RAW_DIR / lawd_cd / deal_ymd
+    if not d.is_dir():
+        return []
+    first_mtime: dict[str, int] = {}
+    for p in d.glob("p*.xml"):
+        m = RUN_SUFFIX_RE.match(p.name)
+        if not m:
+            continue
+        ns = p.stat().st_mtime_ns
+        first_mtime[m.group(1)] = min(first_mtime.get(m.group(1), ns), ns)
+    return sorted(first_mtime, key=lambda rid: (rid[:15], first_mtime[rid]))
+
+
 def load_month_items(data_home: Path, lawd_cd: str, deal_ymd: str, run_id: str | None = None) -> tuple[list[dict], list[str]]:
-    """저장된 원본 XML 에서 항목을 다시 읽는다 (네트워크 없음). run_id 를 주면 그 실행의 파일만."""
+    """저장된 원본 XML 에서 항목을 다시 읽는다 (네트워크 없음). 한 실행의 파일만 읽는다: run_id 가 없으면 가장 최근 실행.
+    여러 실행을 합치면 같은 거래가 여러 번 세어지므로 합치지 않는다."""
     d = Path(data_home) / RAW_DIR / lawd_cd / deal_ymd
     items: list[dict] = []
     files: list[str] = []
     if not d.is_dir():
         return items, files
+    if run_id is None:
+        runs = list_runs(data_home, lawd_cd, deal_ymd)
+        if not runs:
+            return items, files
+        run_id = runs[-1]
     for p in sorted(d.glob("p*.xml")):
-        if run_id and not p.name.endswith(f"-{run_id}.xml"):
+        if not p.name.endswith(f"-{run_id}.xml"):
             continue
         try:
             parsed = parse_response(p.read_bytes())
@@ -351,13 +394,16 @@ def build_report(data_home: Path, run: RunResult) -> dict:
 
 
 def report_from_raw(data_home: Path, lawd_cd: str, months: list[str], run_id: str | None = None) -> dict:
-    """네트워크 없이 저장된 원본만으로 요약한다."""
+    """네트워크 없이 저장된 원본만으로 요약한다. 월마다 한 실행(지정한 실행 또는 가장 최근 실행)만 센다."""
     out = []
     for deal_ymd in months:
-        items, files = load_month_items(data_home, lawd_cd, deal_ymd, run_id)
-        out.append({"deal_ymd": deal_ymd, "outcome": "from_raw" if files else "no_raw", "total_count": None, "files": files, **summarize_items(items)})
+        runs = list_runs(data_home, lawd_cd, deal_ymd)
+        chosen = run_id if run_id is not None else (runs[-1] if runs else None)
+        items, files = load_month_items(data_home, lawd_cd, deal_ymd, chosen) if chosen else ([], [])
+        out.append({"deal_ymd": deal_ymd, "outcome": "from_raw" if files else "no_raw", "run_id": chosen if files else None, "other_runs": [r for r in runs if r != chosen],
+                    "total_count": None, "files": files, **summarize_items(items)})
     return {"run_id": run_id, "provider": PROVIDER, "endpoint": None, "lawd_cd": lawd_cd, "generated_at": _now(),
-            "note": "저장된 원본에서 다시 요약 (네트워크 없음)", "months": out}
+            "note": "저장된 원본에서 다시 요약 (네트워크 없음). 월마다 한 실행만 센다", "months": out}
 
 
 def run_text(run: RunResult) -> str:
@@ -375,7 +421,8 @@ def run_text(run: RunResult) -> str:
 def report_text(report: dict) -> str:
     lines = [f"실거래 표본 요약 시군구 {report['lawd_cd']} ({report.get('run_id') or '원본 재요약'})"]
     for m in report["months"]:
-        lines.append(f"  {m['deal_ymd'][:4]}-{m['deal_ymd'][4:]}: {m['outcome']} · 항목 {m['items']}건 (totalCount {m['total_count']}) · 마스킹 행 {m['masked_rows']} ({m['masked_rate']:.0%}) · 파일 {len(m['files'])}")
+        extra = f" · 실행 {m['run_id']}" + (f" (다른 실행 {len(m['other_runs'])}개는 제외)" if m.get("other_runs") else "") if m.get("run_id") else ""
+        lines.append(f"  {m['deal_ymd'][:4]}-{m['deal_ymd'][4:]}: {m['outcome']} · 항목 {m['items']}건 (totalCount {m['total_count']}) · 마스킹 행 {m['masked_rows']} ({m['masked_rate']:.0%}) · 파일 {len(m['files'])}{extra}")
         for k, f in m["fields"].items():
             dist = ""
             if "distribution" in f:

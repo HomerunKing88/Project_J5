@@ -23,7 +23,7 @@ from j5.db.survey import apply_input, compare, compare_text, load_input, overvie
 from j5.db.validate import ValidationError
 from j5.package.preserve import PreserveError, copy_package
 from j5.package.validate import inspect_package
-from j5.collect.config import ConfigError, config_permission_warning, load_config, service_key
+from j5.collect.config import ConfigError, config_permission_warning, load_config, redact, service_key
 from j5.collect.rt import DEFAULT_ENDPOINT, DEFAULT_MAX_PAGES, DEFAULT_NUM_ROWS, CollectError, check_lawd, collect_months, parse_months, report_from_raw, report_text, run_text
 from j5.parcels.convert import Clip, ConvertError, ConvertOptions, convert, convert_text, inspect_source, inspect_text, write_bundle
 from j5.schemas_loader import schema_errors
@@ -414,10 +414,8 @@ def _collect_main(args) -> int:
                 print(f"주의: {warn}", file=sys.stderr)
             print(f"수집 시작: 시군구 {lawd}, 계약월 {', '.join(months)}, 인증키 출처 {source}. 이 호출은 공공데이터포털 일일 트래픽을 쓴다.", file=sys.stderr)
             run = collect_months(home, key=key, key_source=source, lawd_cd=lawd, months=months, endpoint=args.endpoint, num_rows=args.num_rows, max_pages=args.max_pages)
-            if args.json:
-                print(json.dumps(run.to_dict(), ensure_ascii=False, indent=2))
-            else:
-                sys.stdout.write(run_text(run))
+            text_ = json.dumps(run.to_dict(), ensure_ascii=False, indent=2) + "\n" if args.json else run_text(run)
+            sys.stdout.write(redact(text_, key))  # 화면 출력도 한 번 더 가린다
             return 0 if run.ok else 1
     except ConfigError as e:
         print(f"설정 오류 [{e.code}]: {e.message}", file=sys.stderr)
