@@ -84,9 +84,23 @@ class Cdp {
   async waitFor(expression, ms = 8000) { const end = Date.now() + ms; while (Date.now() < end) { if (await this.eval(expression)) return true; await new Promise((r) => setTimeout(r, 100)); } throw new Error("timeout: " + expression); }
   async navigate(url) { await this.send("Page.navigate", { url }); await this.waitFor("document.readyState === 'complete'"); }
   async setFiles(selector, files) { const { root } = await this.send("DOM.getDocument"); const { nodeId } = await this.send("DOM.querySelector", { nodeId: root.nodeId, selector }); await this.send("DOM.setFileInputFiles", { nodeId, files }); }
+  /** 요소를 화면 가운데로 옮기고 위치가 두 번 연속 같을 때까지 기다린다. 앱의 smooth 스크롤(관측 화면 열기)이 진행 중이면 좌표가 움직여 클릭이 빗나간다. */
+  async stableRect(selector) {
+    const measure = () => this.eval(`(() => { const n = document.querySelector(${JSON.stringify(selector)}); if (!n) return null; const b = n.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; })()`);
+    await this.eval(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({ block: 'center', behavior: 'instant' }); 'ok'`);
+    let prev = await measure();
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 80));
+      const cur = await measure();
+      if (!cur) throw new Error(`요소 없음: ${selector}`);
+      if (prev && Math.abs(cur.x - prev.x) < 0.5 && Math.abs(cur.y - prev.y) < 0.5) return cur;
+      prev = cur;
+    }
+    throw new Error(`요소 위치가 안정되지 않음: ${selector}`);
+  }
   /** 실제 마우스 이벤트로 클릭한다 (다운로드에는 사용자 활성화가 필요하다). */
   async clickSelector(selector) {
-    await this.eval(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({ block: 'center' }); 'ok'`);
+    await this.stableRect(selector);
     const { root } = await this.send("DOM.getDocument");
     const { nodeId } = await this.send("DOM.querySelector", { nodeId: root.nodeId, selector });
     const { model } = await this.send("DOM.getBoxModel", { nodeId });
@@ -96,9 +110,9 @@ class Cdp {
     await this.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
     await this.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
   }
-  /** getBoundingClientRect 중심을 실제 마우스로 누른다 (SVG 자식은 DOM.getBoxModel 이 불확실하다). */
+  /** getBoundingClientRect 중심을 실제 마우스로 누른다 (SVG 자식은 DOM.getBoxModel 이 불확실하다). 위치가 안정된 뒤 누른다. */
   async clickRect(selector) {
-    const r = await this.eval(`(() => { const n = document.querySelector(${JSON.stringify(selector)}); n.scrollIntoView({ block: 'center' }); const b = n.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; })()`);
+    const r = await this.stableRect(selector);
     await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: r.x, y: r.y });
     await this.send("Input.dispatchMouseEvent", { type: "mousePressed", x: r.x, y: r.y, button: "left", clickCount: 1 });
     await this.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: r.x, y: r.y, button: "left", clickCount: 1 });
