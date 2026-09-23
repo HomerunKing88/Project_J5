@@ -434,16 +434,50 @@ def build_report(data_home: Path, run: RunResult) -> dict:
             "note": "표본 월 실측(R0). 원본 행은 raw/ 에 있고 이 요약은 필드 가용성·건수·마스킹만 담는다. 정규화·연결은 R3.", "months": months}
 
 
-def report_from_raw(data_home: Path, lawd_cd: str, months: list[str], run_id: str | None = None) -> dict:
-    """네트워크 없이 저장된 원본만으로 요약한다. 월마다 한 실행(지정한 실행 또는 가장 최근 실행)만 센다."""
+def field_distribution(items: list[dict], field: str) -> dict[str, int]:
+    """지정한 필드의 값 분포 (값 종류 상한 없이, 많은 순). 원본 행은 옮기지 않는다."""
+    counts: dict[str, int] = {}
+    for it in items:
+        v = it.get(field, "")
+        counts[v] = counts.get(v, 0) + 1
+    return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
+def _run_record_total(data_home: Path, lawd_cd: str, deal_ymd: str, run_id: str) -> tuple[int | None, str | None]:
+    """실행 기록 파일(run-<실행>.json)에서 그 달의 totalCount 와 수집 결과를 읽는다. 기록이 없거나 깨졌으면 (None, None)."""
+    p = Path(data_home) / RAW_DIR / lawd_cd / f"run-{run_id}.json"
+    try:
+        doc = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, None
+    months = doc.get("months") if isinstance(doc, dict) else None
+    if not isinstance(months, list):
+        return None, None
+    for m in months:
+        if isinstance(m, dict) and m.get("deal_ymd") == deal_ymd:
+            tc = m.get("total_count")
+            oc = m.get("outcome")
+            return (tc if isinstance(tc, int) and not isinstance(tc, bool) else None), (oc if isinstance(oc, str) else None)
+    return None, None
+
+
+def report_from_raw(data_home: Path, lawd_cd: str, months: list[str], run_id: str | None = None, dist_fields: tuple[str, ...] = ()) -> dict:
+    """네트워크 없이 저장된 원본만으로 요약한다. 월마다 한 실행(지정한 실행 또는 가장 최근 실행)만 센다.
+    totalCount 와 수집 결과는 그 실행의 기록 파일에서 가져온다(원본 XML 을 다시 세지 않는다). dist_fields 의 필드는 값 종류 수와 무관하게 전체 분포를 넣는다."""
     out = []
     for deal_ymd in months:
         runs = list_runs(data_home, lawd_cd, deal_ymd)
         chosen = run_id if run_id is not None else (runs[-1] if runs else None)
         items, files = load_month_items(data_home, lawd_cd, deal_ymd, chosen) if chosen else ([], [])
-        out.append({"deal_ymd": deal_ymd, "outcome": "from_raw" if files else "no_raw", "run_id": chosen if files else None, "other_runs": [r for r in runs if r != chosen],
-                    "total_count": None, "files": files, **summarize_items(items)})
-    return {"run_id": run_id, "provider": PROVIDER, "endpoint": None, "lawd_cd": lawd_cd, "generated_at": _now(),
+        # 실행 기록은 선택한 실행이 있으면 항상 읽는다: 정상 페이지가 없는 실행(API 오류 응답만 저장됨)도 `failed` 로 구분되어야 한다
+        total, collected = _run_record_total(data_home, lawd_cd, deal_ymd, chosen) if chosen else (None, None)
+        summary = summarize_items(items)
+        for f in dist_fields:
+            if f in summary["fields"]:
+                summary["fields"][f]["distribution"] = field_distribution(items, f)
+        out.append({"deal_ymd": deal_ymd, "outcome": "from_raw" if files else "no_raw", "collected_outcome": collected, "run_id": chosen if (files or collected) else None,
+                    "other_runs": [r for r in runs if r != chosen], "total_count": total, "files": files, **summary})
+    return {"run_id": run_id, "provider": PROVIDER, "endpoint": None, "lawd_cd": lawd_cd, "generated_at": _now(), "dist_fields": list(dist_fields),
             "note": "저장된 원본에서 다시 요약 (네트워크 없음). 월마다 한 실행만 센다", "months": out}
 
 
@@ -463,11 +497,16 @@ def report_text(report: dict) -> str:
     lines = [f"실거래 표본 요약 시군구 {report['lawd_cd']} ({report.get('run_id') or '원본 재요약'})"]
     for m in report["months"]:
         extra = f" · 실행 {m['run_id']}" + (f" (다른 실행 {len(m['other_runs'])}개는 제외)" if m.get("other_runs") else "") if m.get("run_id") else ""
+        if m.get("collected_outcome"):
+            extra += f" · 수집 결과 {m['collected_outcome']}"
+        full = set(report.get("dist_fields") or [])
         lines.append(f"  {m['deal_ymd'][:4]}-{m['deal_ymd'][4:]}: {m['outcome']} · 항목 {m['items']}건 (totalCount {m['total_count']}) · 마스킹 행 {m['masked_rows']} ({m['masked_rate']:.0%}) · 파일 {len(m['files'])}{extra}")
         for k, f in m["fields"].items():
             dist = ""
             if "distribution" in f:
-                top = list(f["distribution"].items())[:5]
+                top = list(f["distribution"].items())
+                if k not in full:
+                    top = top[:5]
                 dist = " · " + ", ".join(f"{v or '(빈값)'}:{c}" for v, c in top)
             lines.append(f"    {k}: 채움 {f['fill_rate']:.0%} · 마스킹 {f['masked']} · 값 종류 {f['distinct_seen']}{dist}")
     return "\n".join(lines) + "\n"

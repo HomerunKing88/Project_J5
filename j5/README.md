@@ -116,10 +116,11 @@ python -m j5 db [--db 경로] parcels-link <제안.json> [--json]
 
 ```text
 python -m j5 collect rt-sample --lawd-cd 11110 --months 2026-08,2021-09,2006-03 [--endpoint URL] [--num-rows 1000] [--max-pages 50] [--data-home] [--config] [--json]
-python -m j5 collect rt-report --lawd-cd 11110 --months 2026-08,2021-09,2006-03 [--run-id] [--json]
+python -m j5 collect rt-report --lawd-cd 11110 --months 2026-08,2021-09,2006-03 [--run-id] [--dist umdNm] [--json]
 ```
 
 - 인증키는 `J5_DATA_HOME/config.env` 의 `DATA_GO_KR_SERVICE_KEY=…`(권한 600) 또는 같은 이름의 환경변수에서만 읽는다. 로그·기록·요약·출력에 남기지 않는다. 저장소의 `.env`·예시 파일에는 값을 넣지 않는다.
 - `rt-sample` 은 상업·업무용 부동산 매매 실거래 API 를 시군구(5자리)·계약월(YYYYMM)·페이지 단위로 호출해 원본 응답을 `raw/rt_nrg/<시군구>/<YYYYMM>/` 에 그대로 두고, 요청 기록(`run-*.json`, 키 가림)과 요약(`report-*.json`: 필드 채움 비율·`*` 마스킹·값 분포)을 만든다. 월 결과는 `complete / empty(정상 0건) / partial(페이지 누락) / failed` 로 구분한다. 정본에는 쓰지 않는다(정규화·연결은 R3).
 - 기본 엔드포인트는 코드에 적힌 알려진 주소이며 공공데이터포털 API 상세 페이지의 주소와 대조한다. 호출은 포털 일일 트래픽을 쓴다.
+- `rt-report` 는 그 실행의 기록 파일에서 totalCount·수집 결과를 함께 보인다. `--dist FIELD` 를 주면 그 필드는 값 종류가 20개를 넘어도 전체 분포를 보인다(법정동별 건수 등).
 - 나에게 보낼 것은 `rt-report` 의 요약(또는 `report-*.json`)이다. 원본 행·인증키는 보내지 않는다.
