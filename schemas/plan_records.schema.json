@@ -54,7 +54,7 @@
       ]
     },
     "evidence": {
-      "description": "근거 문서 연결 (source_documents 에 먼저 있어야 한다)",
+      "description": "근거 문서 연결 (source_documents 에 먼저 있어야 한다). official_fact 규제 검토는 1건 이상 필수",
       "type": "array",
       "maxItems": 50,
       "items": {
@@ -143,6 +143,28 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "record_type": {
+            "const": "regulation_review"
+          },
+          "source_kind": {
+            "const": "official_fact"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "evidence"
+        ],
+        "properties": {
+          "evidence": {
+            "minItems": 1
+          }
+        }
+      }
     }
   ],
   "$defs": {
@@ -167,10 +189,16 @@
       "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
     },
     "regulation_review_input": {
-      "description": "규제 검토: 용도지역, 적용 용적률 F, 규제 버전(적용 법령·고시 시점), 종료일 확인, 면적 제약 목록. 개별 필지의 규제 적용은 법령·지구단위계획·전문가 검토로 확인한 값을 적는다(계산기가 판정하지 않음)",
+      "description": "규제 검토: 발행기관·고시번호·문서 단계·발표일·효력일·종료일(데이터 사전 §6), 용도지역, 적용 용적률 F, 규제 버전, 종료일 확인, 면적 제약 목록. 보도자료·심의결과를 현재 효력이 확인된 결정고시로 취급하지 않는다(document_stage 가 decision_notice 이고 effective_on 이 있을 때만 효력 확인). 개별 필지의 규제 적용은 법령·지구단위계획·전문가 검토로 확인한 값을 적는다(계산기가 판정하지 않음). 미확인(null) 항목이 하나라도 있으면 reason 필수",
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "issuing_agency",
+        "notice_number",
+        "document_stage",
+        "announced_on",
+        "effective_on",
+        "end_on",
         "zoning",
         "applied_far_pct",
         "regulation_version",
@@ -180,6 +208,70 @@
         "note"
       ],
       "properties": {
+        "issuing_agency": {
+          "description": "발행기관 (예: 서울특별시, 종로구)",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 200
+        },
+        "notice_number": {
+          "description": "고시·공고 번호",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 200
+        },
+        "document_stage": {
+          "description": "문서 단계. decision_notice(결정고시)·draft_notice(입안·열람공고)·review_result(심의결과)·press_release(보도자료)·other. 결정고시만 효력 확인의 근거가 된다",
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "decision_notice",
+            "draft_notice",
+            "review_result",
+            "press_release",
+            "other",
+            null
+          ]
+        },
+        "announced_on": {
+          "description": "발표일",
+          "oneOf": [
+            {
+              "$ref": "#/$defs/date"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "effective_on": {
+          "description": "효력일 (결정고시의 시행일). 없으면 효력 미확인",
+          "oneOf": [
+            {
+              "$ref": "#/$defs/date"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "end_on": {
+          "description": "종료일 (기한 있는 규제·지구단위계획 등). 없으면 null 과 end_date_confirmed 로 확인 여부를 적는다",
+          "oneOf": [
+            {
+              "$ref": "#/$defs/date"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "zoning": {
           "type": [
             "string",
@@ -272,6 +364,126 @@
         {
           "if": {
             "properties": {
+              "issuing_agency": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "notice_number": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "document_stage": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "announced_on": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "effective_on": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "zoning": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
               "applied_far_pct": {
                 "type": "null"
               }
@@ -293,6 +505,26 @@
           "if": {
             "properties": {
               "regulation_version": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "end_date_confirmed": {
                 "type": "null"
               }
             }

@@ -23,6 +23,19 @@ from j5.schemas_loader import schema_errors
 INPUT_SCHEMA = "plan_records.schema.json"
 PLAN_TYPES = ("regulation_review", "development_plan", "financing_plan")
 TYPE_LABEL = {"regulation_review": "규제 검토", "development_plan": "개발안", "financing_plan": "자금안"}
+STAGE_LABEL = {"decision_notice": "결정고시", "draft_notice": "입안·열람공고", "review_result": "심의결과", "press_release": "보도자료", "other": "기타", None: "단계 미확인"}
+SOURCE_LABEL = {"official_fact": "공식 자료", "broker_report": "중개사 전달", "personal_estimate": "개인 추정", "scenario_assumption": "시나리오 가정", "calculated_result": "계산 결과"}
+
+
+def regulation_in_force(p: dict) -> bool:
+    """현재 효력이 확인된 규제인지: 결정고시이고 효력일이 있을 때만. 보도자료·심의결과·입안공고는 효력으로 보지 않는다(데이터 사전 §6)."""
+    return p.get("document_stage") == "decision_notice" and p.get("effective_on") is not None
+
+
+def regulation_status(p: dict, source_kind: str) -> str:
+    if source_kind != "official_fact":
+        return f"가정 ({SOURCE_LABEL.get(source_kind, source_kind)})"
+    return "효력 확인" if regulation_in_force(p) else f"효력 미확인 ({STAGE_LABEL.get(p.get('document_stage'))}{', 효력일 없음' if p.get('effective_on') is None else ''})"
 
 
 def load_plan_input(path: Path) -> dict:
@@ -38,14 +51,22 @@ def load_plan_input(path: Path) -> dict:
     return doc
 
 
-def _compute_payload(doc: dict) -> dict:
-    """입력 payload 에 저장 시점의 계산 결과와 계산식 버전을 붙인다. 규제 검토는 그대로."""
+def _compute_payload(doc: dict, regulation: dict | None = None) -> dict:
+    """입력 payload 에 저장 시점의 계산 결과와 계산식 버전을 붙인다. 규제 검토는 그대로.
+    개발안이 전제한 규제 검토(regulation)가 효력 확인된 결정고시가 아니거나 공식 자료가 아니면 여유면적 결과를 확정하지 않는다."""
     p = dict(doc["payload"])
     rt = doc["record_type"]
     if rt == "development_plan":
         if p["far_input"] is not None:
             r = far_headroom(p["far_input"])
-            p["far_result"] = {"result": r["result"], "unknown": r["unknown"], "errors": r["errors"], "inputs": r["inputs"]}
+            unknown = list(r["unknown"])
+            if regulation is not None:
+                rp, rk = regulation["payload"], regulation["source_kind"]
+                if rk != "official_fact":
+                    unknown.append(f"전제한 규제 검토가 공식 자료가 아니라 {SOURCE_LABEL.get(rk, rk)}이다. 적용 용적률을 확정하지 않는다")
+                elif not regulation_in_force(rp):
+                    unknown.append(f"전제한 규제 검토가 효력 확인된 결정고시가 아니다 ({STAGE_LABEL.get(rp.get('document_stage'))}{', 효력일 없음' if rp.get('effective_on') is None else ''}). 적용 용적률을 확정하지 않는다")
+            p["far_result"] = {"result": r["result"] if not unknown else None, "unknown": unknown, "errors": r["errors"], "inputs": r["inputs"]}
         else:
             p["far_result"] = None
         p["calculation_version"] = CALCULATION_VERSION
@@ -78,15 +99,18 @@ def apply_plan_input(db: Db, doc: dict) -> dict:
         for ev in doc.get("evidence", []):
             if db.conn.execute("SELECT 1 FROM source_documents WHERE document_id = ?", (ev["document_id"],)).fetchone() is None:
                 raise ValidationError([f"근거 문서 {ev['document_id']} 가 정본에 없다 (source_documents 에 먼저 둔다)"])
+        regulation = None
         for key, want in (("regulation_review_id", "regulation_review"), ("development_plan_id", "development_plan")):
             ref = doc["payload"].get(key)
             if ref is not None:
-                row = db.conn.execute("SELECT subject_id, record_type FROM records WHERE record_id = ?", (ref,)).fetchone()
+                row = db.conn.execute("SELECT subject_id, record_type, source_kind, payload_json FROM records WHERE record_id = ?", (ref,)).fetchone()
                 if row is None or row["subject_id"] != doc["asset_id"] or row["record_type"] != want:
                     raise ValidationError([f"{key} {ref} 은 이 물건의 {TYPE_LABEL[want]} 기록이어야 한다"])
                 if db.conn.execute("SELECT 1 FROM records WHERE supersedes_id = ?", (ref,)).fetchone() is not None:
                     raise ValidationError([f"{key} {ref} 은 이미 수정된 기록이다. 최신 기록을 가리킨다"])
-        payload = _compute_payload(doc)
+                if want == "regulation_review":
+                    regulation = {"source_kind": row["source_kind"], "payload": json.loads(row["payload_json"])}
+        payload = _compute_payload(doc, regulation)
         rid = str(uuid.uuid4())
         rec = {"record_id": rid, "subject_id": doc["asset_id"], "subject_type": "asset", "record_type": rt, "source_kind": doc["source_kind"],
                "schema_version": RECORD_PAYLOAD_SCHEMAS[rt][2], "payload": payload, "observed_at": doc["observed_at"], "observed_at_precision": "date", "supersedes_id": sup}
@@ -104,13 +128,16 @@ def apply_plan_input(db: Db, doc: dict) -> dict:
         out["max_required_equity_krw"] = payload["cash_result"]["result_krw"]
         out["unknown"] = payload["equity_result"]["unknown"] + payload["cash_result"]["unknown"]
     else:
-        out["unknown"] = [k for k in ("applied_far_pct", "regulation_version") if payload.get(k) is None]
+        out["unknown"] = [k for k in ("issuing_agency", "notice_number", "document_stage", "effective_on", "zoning", "applied_far_pct", "regulation_version") if payload.get(k) is None]
+        out["regulation_status"] = regulation_status(payload, doc["source_kind"])
     return out
 
 
 def plan_add_text(r: dict) -> str:
     lines = [f"기록 추가: {TYPE_LABEL[r['record_type']]}({r['record_type']}) {r['record_id']} · 물건 {r['asset_id']}" + (f" (이전 기록 {r['supersedes_id']} 를 수정)" if r["supersedes_id"] else "")
              + f" · dataset_version {r['dataset_version']}"]
+    if r["record_type"] == "regulation_review":
+        lines.append(f"규제 상태: {r['regulation_status']}")
     if r["record_type"] == "development_plan":
         lines.append("여유면적: " + (f"검토 {r['far']['review_area_m2']:g}㎡ · 여유 {r['far']['headroom_m2']:g}㎡" if r["far"] else "미확정 (입력 없음 또는 미확인)"))
     elif r["record_type"] == "financing_plan":
@@ -149,8 +176,13 @@ def plan_overview_text(o: dict) -> str:
              + (f" · 수정된 옛 기록 {o['superseded']}건 제외" if o["superseded"] else "")]
     for it in o["regulation_reviews"]:
         p = it["payload"]
-        lines.append(f"[규제 검토] {it['record_id'][:8]} · 검토일 {it['observed_at']} · 용도지역 {p['zoning'] or '미확인'} · 적용 용적률 {p['applied_far_pct'] if p['applied_far_pct'] is not None else '미확인'}%"
+        official = it["source_kind"] == "official_fact"
+        lines.append(f"[규제 검토{'' if official else '·가정'}] {it['record_id'][:8]} · {regulation_status(p, it['source_kind'])} · 자료 {SOURCE_LABEL.get(it['source_kind'], it['source_kind'])} · 검토일 {it['observed_at']}"
+                     f" · {p.get('issuing_agency') or '기관 미확인'} {p.get('notice_number') or '고시번호 미확인'} · {STAGE_LABEL.get(p.get('document_stage'))} · 효력일 {p.get('effective_on') or '미확인'} · 종료일 {p.get('end_on') or '-'}"
+                     f" · 용도지역 {p['zoning'] or '미확인'} · 적용 용적률 {p['applied_far_pct'] if p['applied_far_pct'] is not None else '미확인'}%"
                      f" · 규제 버전 {p['regulation_version'] or '미확인'} · 종료일 확인 {p['end_date_confirmed']} · 제약 {len(p['constraints'])}건")
+        if not official:
+            lines.append("    주의: 공식 자료가 아닌 가정값이다. 결정고시 확인 전에는 적용 용적률로 쓰지 않는다")
     for it in o["development_plans"]:
         p = it["payload"]
         fr = p.get("far_result")

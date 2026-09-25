@@ -220,5 +220,6 @@ python -m j5 db [--db 경로] plans --asset <asset_id> [--json]
 ```
 
 - `plan-add` 는 규제 검토(`regulation_review`)·개발안(`development_plan`)·자금안(`financing_plan`) 기록을 불변 기록으로 넣는다(`schemas/plan_records.schema.json`, `kind: plan_record`, db_schema 12). 개발안·자금안은 저장 시점에 계산기(`calc far` / `calc equity` / `calc cash`)를 돌려 결과 스냅샷과 계산식 버전을 payload 에 붙인다. 미확인 입력이면 결과 null 과 미확인 목록으로 저장한다. 수정·재계산은 새 기록 + `supersedes_id` 다. 근거 문서는 `source_documents` 에 먼저 둔다.
-- `plans` 는 현재(수정되지 않은) 기록과 저장 시점 결과를 나란히 보인다. 후보를 고르지 않는다.
+- 규제 검토는 결정고시이고 효력일이 있을 때만 `효력 확인` 이며, 보도자료·심의결과나 가정값을 전제한 개발안은 여유면적을 확정하지 않는다(데이터 사전 §6). 공식 자료 규제 검토는 근거 문서가 필수다.
+- `plans` 는 현재(수정되지 않은) 기록과 저장 시점 결과를 나란히 보인다. 가정값 규제는 `[규제 검토·가정]` 으로 표시한다. 후보를 고르지 않는다.
 - db_schema 12 는 `records` 표를 다시 만든다(ADR-14). 실제 정본에는 백업을 먼저 만든 뒤 `j5 db status` 로 버전 12·외래키 켜짐·무결성을 확인한다.

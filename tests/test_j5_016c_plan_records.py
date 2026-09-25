@@ -52,11 +52,17 @@ def db(home):
 
 
 def regulation(on="2026-09-01", **over) -> dict:
-    doc = {"kind": "plan_record", "asset_id": A[0], "record_type": "regulation_review", "source_kind": "official_fact", "observed_at": on, "supersedes_id": None, "evidence": [],
-           "payload": {"zoning": "일반상업", "applied_far_pct": 600, "regulation_version": "가상 일반상업 600% (2026-01 가상 고시)", "end_date_confirmed": True,
+    doc = {"kind": "plan_record", "asset_id": A[0], "record_type": "regulation_review", "source_kind": "official_fact", "observed_at": on, "supersedes_id": None,
+           "evidence": [{"document_id": DOC, "verification_status": "verified", "locator": "가상 고시문 p.1"}],
+           "payload": {"issuing_agency": "가상시", "notice_number": "가상시 고시 제2026-1호", "document_stage": "decision_notice", "announced_on": "2026-01-10", "effective_on": "2026-01-10", "end_on": None,
+                       "zoning": "일반상업", "applied_far_pct": 600, "regulation_version": "가상 일반상업 600% (2026-01 가상 고시)", "end_date_confirmed": True,
                        "constraints": [{"kind": "건축선 후퇴", "area_m2": 40, "basis": "가상", "excluded_from_denominator": "false", "reviewed_on": on}], "basis": "가상 토지이용계획 확인", "note": None}}
     doc.update(over)
     return doc
+
+
+def regulation_payload(**over) -> dict:
+    return {**regulation()["payload"], **over}
 
 
 def development(on="2026-09-02", plan_kind="keep", far_input="far_gross", **over) -> dict:
@@ -124,7 +130,7 @@ def test_migration_12_rewrites_records_and_keeps_everything(tmp_path, home, monk
 
 def test_plan_add_computes_snapshots_and_chains(db):
     reg = apply_plan_input(db, regulation())
-    assert reg["record_type"] == "regulation_review" and reg["unknown"] == [] and reg["calculation_version"] is None
+    assert reg["record_type"] == "regulation_review" and reg["unknown"] == [] and reg["calculation_version"] is None and reg["regulation_status"] == "효력 확인"
     dev = apply_plan_input(db, development(**{"payload": {**development()["payload"], "regulation_review_id": reg["record_id"]}}))
     assert dev["far"] == {"review_area_m2": 600, "headroom_m2": 360, "utilization": 0.4} and dev["calculation_version"] == CALCULATION_VERSION and dev["unknown"] == []
     stored = json.loads(db.conn.execute("SELECT payload_json FROM records WHERE record_id = ?", (dev["record_id"],)).fetchone()[0])
@@ -149,10 +155,21 @@ def test_plan_add_computes_snapshots_and_chains(db):
     with pytest.raises(ValidationError) as e:
         apply_plan_input(db, development(**{"payload": {**development()["payload"], "regulation_review_id": reg["record_id"]}}))
     assert "이미 수정된 기록" in str(e.value)
+    # 보도자료·심의결과·가정값 규제를 전제한 개발안은 여유면적을 확정하지 않는다 (데이터 사전 §6)
+    press = apply_plan_input(db, regulation(on="2026-09-12", **{"payload": regulation_payload(document_stage="press_release", effective_on=None, notice_number=None, reason="보도자료만 확인")}))
+    assert press["regulation_status"].startswith("효력 미확인 (보도자료") and "effective_on" in press["unknown"]
+    dev_press = apply_plan_input(db, development(**{"payload": {**development()["payload"], "regulation_review_id": press["record_id"]}}))
+    assert dev_press["far"] is None and any("결정고시가 아니다" in u for u in dev_press["unknown"])
+    assumed = apply_plan_input(db, regulation(on="2026-09-13", source_kind="scenario_assumption", evidence=[]))
+    assert assumed["regulation_status"] == "가정 (시나리오 가정)"
+    dev_assumed = apply_plan_input(db, development(**{"payload": {**development()["payload"], "regulation_review_id": assumed["record_id"]}}))
+    assert dev_assumed["far"] is None and any("공식 자료가 아니라" in u for u in dev_assumed["unknown"])
     o = plan_overview(db, A[0])
-    assert [r["record_id"] for r in o["regulation_reviews"]] == [reg2["record_id"]] and len(o["development_plans"]) == 3 and len(o["financing_plans"]) == 2 and o["superseded"] == 1
+    assert [r["record_id"] for r in o["regulation_reviews"]] == [reg2["record_id"], press["record_id"], assumed["record_id"]] and len(o["development_plans"]) == 5 and len(o["financing_plans"]) == 2 and o["superseded"] == 1
     text = plan_overview_text(o)
-    assert "[규제 검토]" in text and "검토 600㎡ · 여유 360㎡" in text and "필요자기자본 1,700,000,000원 · 최대 필요자기자본 2,100,000,000원" in text and "미확인: regulation_version" in text
+    assert "[규제 검토] " in text and "효력 확인 · 자료 공식 자료" in text and "가상시 가상시 고시 제2026-1호 · 결정고시 · 효력일 2026-01-10" in text
+    assert "효력 미확인 (보도자료, 효력일 없음)" in text and "[규제 검토·가정]" in text and "공식 자료가 아닌 가정값이다" in text
+    assert "검토 600㎡ · 여유 360㎡" in text and "필요자기자본 1,700,000,000원 · 최대 필요자기자본 2,100,000,000원" in text and "미확인: regulation_version" in text
     assert "[개발안·철거신축]" in text and "여유면적 미확정" in text and "고르지 않는다" in text
     with pytest.raises(ValidationError):
         plan_overview(db, "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a99")
@@ -166,6 +183,12 @@ def test_plan_input_validation(db, tmp_path):
         ({**regulation(), "record_type": "target_price"}, "plan_records.schema"),
         ({**regulation(), "observed_at": "2026-02-30"}, "date"),
         (regulation(**{"payload": {**regulation()["payload"], "applied_far_pct": None}}), "plan_records.schema"),   # 미확인이면 reason 필수
+        (regulation(**{"payload": regulation_payload(zoning=None)}), "plan_records.schema"),
+        (regulation(**{"payload": regulation_payload(end_date_confirmed=None)}), "plan_records.schema"),
+        (regulation(**{"payload": regulation_payload(document_stage=None)}), "plan_records.schema"),
+        (regulation(**{"payload": regulation_payload(document_stage="notice")}), "plan_records.schema"),
+        (regulation(evidence=[]), "plan_records.schema"),   # 공식 자료 규제 검토는 근거 문서 필수
+        ({k: v for k, v in regulation().items() if k != "evidence"}, "plan_records.schema"),
         (development(**{"payload": {**development()["payload"], "far_result": {"result": None, "unknown": [], "errors": [], "inputs": {}}}}), "plan_records.schema"),  # 결과는 입력에 넣지 않는다
         (development(plan_kind="remodel", **{"payload": {k: v for k, v in development(plan_kind="remodel")["payload"].items() if k != "construction"}}), "plan_records.schema"),
         (financing(**{"payload": {**financing()["payload"], "equity_input": calc("cash_basic")}}), "plan_records.schema"),
@@ -187,6 +210,8 @@ def test_plan_input_validation(db, tmp_path):
             apply_plan_input(db, load_plan_input(write(tmp_path, doc, "p.json")))
         assert word in str(e.value), str(e.value)
     assert db.conn.execute("SELECT COUNT(*) FROM records WHERE record_type IN ('regulation_review', 'development_plan', 'financing_plan')").fetchone()[0] == 1, "거절된 입력은 남지 않는다"
+    # 가정값 규제 검토는 근거 문서 없이도 넣을 수 있다 (가정으로 표시된다)
+    assert apply_plan_input(db, load_plan_input(write(tmp_path, regulation(source_kind="personal_estimate", evidence=[]), "p.json")))["regulation_status"] == "가정 (개인 추정)"
     # 근거 문서 연결은 record_evidence 에 남는다
     r = apply_plan_input(db, regulation(on="2026-09-05", evidence=[{"document_id": DOC, "verification_status": "verified", "locator": "p.1"}]))
     assert db.conn.execute("SELECT verification_status FROM record_evidence WHERE record_id = ?", (r["record_id"],)).fetchone()[0] == "verified"
@@ -207,7 +232,7 @@ def test_cli_plan_add_and_plans(db, tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("J5_DATA_HOME", str(tmp_path / "home"))
     rc = cli.main(["db", "plan-add", str(write(tmp_path, regulation(), "r.json"))])
     out = capsys.readouterr().out
-    assert rc == 0 and "기록 추가: 규제 검토(regulation_review)" in out
+    assert rc == 0 and "기록 추가: 규제 검토(regulation_review)" in out and "규제 상태: 효력 확인" in out
     rc = cli.main(["db", "plan-add", str(write(tmp_path, development(plan_kind="remodel"), "d.json")), "--json"])
     j = json.loads(capsys.readouterr().out)
     assert rc == 0 and j["far"]["headroom_m2"] == 360 and j["calculation_version"] == CALCULATION_VERSION

@@ -42,7 +42,7 @@
 
 ## 파일 (plan_records 1.0.0, R5 J5-016C)
 
-- `plan_records.schema.json`: 규제 검토·개발안·자금안 기록 입력(`j5 db plan-add`, `kind: plan_record`)과 `records.record_type` `regulation_review`·`development_plan`·`financing_plan` 의 payload(`$defs/*_payload`). 입력 payload(`$defs/*_input`)에는 결과를 넣지 않고, 저장 payload 는 입력 + 저장 시점 계산 결과(`far_result` / `equity_result` / `cash_result`) + `calculation_version` 이다. 계산 입력은 `calc_inputs.schema.json` 의 정의를 상대 `$ref` 로 참조한다(`j5/schemas_loader.py` 의 registry 가 푼다).
+- `plan_records.schema.json`: 규제 검토·개발안·자금안 기록 입력(`j5 db plan-add`, `kind: plan_record`)과 `records.record_type` `regulation_review`·`development_plan`·`financing_plan` 의 payload(`$defs/*_payload`). 규제 검토는 발행기관·고시번호·문서 단계(결정고시/입안공고/심의결과/보도자료/기타)·발표일·효력일·종료일을 두며 미확인 항목이 있으면 사유, 공식 자료면 근거 문서 1건 이상이 필수다(데이터 사전 §6). 입력 payload(`$defs/*_input`)에는 결과를 넣지 않고, 저장 payload 는 입력 + 저장 시점 계산 결과(`far_result` / `equity_result` / `cash_result`) + `calculation_version` 이다. 계산 입력은 `calc_inputs.schema.json` 의 정의를 상대 `$ref` 로 참조한다(`j5/schemas_loader.py` 의 registry 가 푼다).
 
 ## 파일 (calc_inputs, R5 J5-016A)
 
