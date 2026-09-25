@@ -151,3 +151,16 @@ python -m j5 db [--db 경로] rt-link 후보.csv [--json]
 - CSV 의 결정 열 `decision`(candidate / pending_evidence / confirmed / withdrawn)·`asset_id`·`decision_scope`·`basis_kind`(jibun_exact / jibun_prefix / manual / document)·`reviewed_on`·`note` 를 스프레드시트에서 채워 저장한 뒤 `rt-link` 로 반영한다. 결정 열이 빈 행은 건너뛴다. 한 행이라도 오류면 전체 거절.
 - 거래당 유효한 연결은 하나다. 다른 물건으로 바꾸면 이전 연결을 철회(대체)하고 새 연결을 만들며, 상태 변화는 `review_decisions` 에 불변 이력으로 남는다. 앞자리 범위(`jibun_prefix`)만으로 `confirmed` 로 두지 않고, 취소 확정 거래는 확정하지 않는다.
 - 릴리스 계획 §4 의 결정대로 연결 검토 화면 대신 이 CSV·수동 확인으로 운영한다.
+
+## 범위 분류·취소/정정 점검·파생본 거래 목록 (R3, J5-014B-3)
+
+```text
+python -m j5 db [--db 경로] rt-zones show | apply <규칙.json>
+python -m j5 collect rt-recheck --lawd-cd 11110 --recent 6 | --failed [--from 2006-01 --to 2026-09] [--endpoint URL] [--data-home] [--config] [--json]
+python -m j5 db [--db 경로] rt-changes --lawd-cd 11110 --since-run <실행ID> [--zone core] [--json]
+```
+
+- `rt-zones apply` 는 법정동 목록으로 핵심(core)·비교(comparison) 범위를 정한 규칙(`schemas/zone_rules.schema.json`)을 새 버전으로 넣고 모든 거래를 다시 분류한다(db_schema 8, `transactions.zone`). 규칙 밖 법정동은 outside 다. `rt-load` 는 현재 규칙으로 새 거래를 분류한다. 지번 단위 경계는 두지 않는다.
+- `rt-recheck` 는 취소·정정 점검용 재수집이다. `--recent N` 은 이번 달 포함 최근 N개월, `--failed` 는 실행 기록상 complete/empty 가 아닌 달을 다시 받는다. 반영은 `rt-load`, 변경은 `rt-changes` 로 본다(새 거래·취소로 바뀜·응답에서 사라짐). 사라짐은 취소 확정이 아니다.
+- `project` 의 파생본에 `transactions.json`(핵심·비교 범위의 취소 확정 아닌 거래, 확정 연결의 `asset_id`)이 들어간다. 범위 규칙이 없으면 파일이 없다. 폰 화면 표시는 이후 조회 작업이다.
+- 운영 주기(데이터 사전 §7.1): 월 1회 `rt-recheck --recent 6` → `rt-load` → `rt-changes`, 분기 `rt-recheck --failed`, 연 1회 전 기간 `rt-fetch --refresh`.

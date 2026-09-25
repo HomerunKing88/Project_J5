@@ -12,7 +12,7 @@
 
 ## 파일 (projection_schema 1.0.0, R1b J5-011)
 
-- `view_manifest.schema.json`: 조회 파생본 `.j5view.zip`의 `manifest.json`. `source_dataset_version`·`projection_schema_version`·`generated_at`·`scope_ids`·`data_mode`(데이터 사전 §4)와 파일 목록(`assets.seed.json`·`assets.geojson`·`records.jsonl`·선택 `parcels.geojson`(J5-013B-2, `counts.parcels`)·선택 `photos/`)의 바이트·해시.
+- `view_manifest.schema.json`: 조회 파생본 `.j5view.zip`의 `manifest.json`. `source_dataset_version`·`projection_schema_version`·`generated_at`·`scope_ids`·`data_mode`(데이터 사전 §4)와 파일 목록(`assets.seed.json`·`assets.geojson`·`records.jsonl`·선택 `parcels.geojson`(J5-013B-2, `counts.parcels`)·선택 `transactions.json`(J5-014B-3, `counts.transactions`)·선택 `photos/`)의 바이트·해시.
 
 ## 파일 (backup_schema 1.0.0, R1b J5-012)
 
@@ -26,5 +26,10 @@
 
 - `parcels_bundle.schema.json`: 필지 경계·지번 번들 `.j5parcels.json`(`j5 parcels convert` 출력, 폰 지도 입력). GeoJSON FeatureCollection 에 `j5parcels`·`data_mode(synthetic|real)`·`source`(자료명·파일·해시·좌표계·인코딩·도형 기준일·이용허락)·`clip`·`count`·`bbox`·`warnings` 를 더한 것. 필지 속성은 `pnu`(19자리)·`label`·`emd_code`·`emd_name`·`mountain`·`bon`·`bu`·`jimok`·`jibun_raw`·`jibun_mismatch`·`area_m2_geom`(도형면적, 공부면적 아님. 지리좌표 원본이면 null)·`area_missing_reason`·`bbox`. 상한 8,000 필지(ADR-13). 파생본(`j5 db project` 의 `parcels.geojson`)은 같은 형식에 필지마다 `geometry_version`·정본 연결 물건 `asset_ids` 를 더한다 (J5-013B-2).
 - `asset_components_input.schema.json`: 물건↔필지 구성 연결 입력(`j5 db parcels-link`), `parcels-suggest` 의 출력 형식. `asset_id`·`pnu`·적용 기간·근거(`manual | location_point`)·비고. PNU 는 정본 parcels 에 먼저 있어야 한다.
+
+## 파일 (zone_rules, R3 J5-014B-3)
+
+- `zone_rules.schema.json`: 핵심·비교 범위 규칙 입력(`j5 db rt-zones apply`). `name`·`core`(법정동 이름 목록, 1개 이상)·`comparison`(비워도 됨)·`note`. 같은 법정동은 한 범위에만. 반영하면 새 규칙 버전이 되고 모든 거래를 다시 분류한다.
+- 파생본 `transactions.json`(j5transactions 1.0.0, `j5 db project`): 핵심·비교 범위의 취소 확정 아닌 거래 목록. `view_manifest.schema.json` 의 파일 목록·`counts.transactions` 로 검증한다. 별도 스키마 파일 없이 검증기(`verify_projection_dir`)가 건수·버전·범위·연결 물건을 대조한다.
 
 이벤트 해시는 파일에 있는 행의 UTF-8 바이트를 그대로 sha256 한 값이다. 재직렬화하지 않는다. 검증은 jsonschema(고정 버전, `requirements-dev.txt`) Draft 2020-12로 한다. 스키마와 데이터 사전이 충돌하면 PR을 완료하지 않는다.

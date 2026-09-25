@@ -30,7 +30,8 @@
         "records": { "type": "integer", "minimum": 0 },
         "attachments": { "type": "integer", "minimum": 0 },
         "photos": { "type": "integer", "minimum": 0 },
-        "parcels": { "description": "parcels.geojson 의 필지 수 (J5-013B-2). 없으면 0 또는 생략", "type": "integer", "minimum": 0 }
+        "parcels": { "description": "parcels.geojson 의 필지 수 (J5-013B-2). 없으면 0 또는 생략", "type": "integer", "minimum": 0 },
+        "transactions": { "description": "transactions.json 의 거래 수 (J5-014B-3, 핵심·비교 범위·취소 확정 제외). 없으면 0 또는 생략", "type": "integer", "minimum": 0 }
       }
     },
     "files": {
@@ -42,7 +43,7 @@
         "additionalProperties": false,
         "required": ["path", "bytes", "sha256"],
         "properties": {
-          "path": { "type": "string", "pattern": "^(assets\\.seed\\.json|assets\\.geojson|records\\.jsonl|parcels\\.geojson|photos/[0-9a-f]{64}\\.(jpg|png|webp))$" },
+          "path": { "type": "string", "pattern": "^(assets\\.seed\\.json|assets\\.geojson|records\\.jsonl|parcels\\.geojson|transactions\\.json|photos/[0-9a-f]{64}\\.(jpg|png|webp))$" },
           "bytes": { "type": "integer", "minimum": 0 },
           "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
         }

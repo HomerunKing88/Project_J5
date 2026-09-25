@@ -79,7 +79,7 @@ def tid_of(db, r: dict) -> str:
 
 def test_schema_7_and_jibun_matching(db):
     st = db.status()
-    assert st["db_schema_version"] == S.DB_SCHEMA_VERSION == 7 and st["counts"]["transaction_links"] == 0 and st["counts"]["review_decisions"] == 0
+    assert st["db_schema_version"] == S.DB_SCHEMA_VERSION >= 7 and st["counts"]["transaction_links"] == 0 and st["counts"]["review_decisions"] == 0
     assert parse_jibun("160") == {"mountain": False, "bon": 160, "bu": 0, "masked": False}
     assert parse_jibun("160-3")["bu"] == 3 and parse_jibun("산12-1") == {"mountain": True, "bon": 12, "bu": 1, "masked": False}
     assert parse_jibun("1**") == {"mountain": False, "masked": True, "bon_prefix": "1", "bon_digits": 3, "bu_prefix": "0", "bu_digits": None}

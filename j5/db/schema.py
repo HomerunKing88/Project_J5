@@ -577,6 +577,24 @@ CREATE TRIGGER review_decisions_no_delete BEFORE DELETE ON review_decisions BEGI
 END;
 """
 
+ZONES = ("core", "comparison", "outside", "unclassified")
+
+# J5-014B-3 범위 분류 (데이터 사전 §7.1: 핵심/비교 범위 밖 행은 원본에 남기되 모바일·분석집계에 자동 포함하지 않는다).
+# - zone_rules: 법정동 이름 목록으로 핵심(core)·비교(comparison) 범위를 정한 규칙의 버전. 새 버전을 반영하면 모든 거래를 다시 분류한다.
+# - transactions.zone: 현재 규칙으로 분류한 결과. 규칙이 없으면 unclassified.
+MIGRATION_0008 = f"""
+CREATE TABLE zone_rules (
+  version     INTEGER NOT NULL PRIMARY KEY CHECK (version >= 1),
+  name        TEXT NOT NULL CHECK (length(name) > 0),
+  rules_json  TEXT NOT NULL CHECK (json_valid(rules_json) AND json_type(rules_json) = 'object'),
+  note        TEXT,
+  recorded_at TEXT NOT NULL CHECK (recorded_at GLOB '{UTC_GLOB}')
+) STRICT;
+ALTER TABLE transactions ADD COLUMN zone TEXT NOT NULL DEFAULT 'unclassified' CHECK (zone {_in(ZONES)});
+ALTER TABLE transactions ADD COLUMN zone_rule_version INTEGER REFERENCES zone_rules (version);
+CREATE INDEX transactions_by_zone ON transactions (zone, lawd_cd, deal_ymd);
+"""
+
 # (버전, 이름, SQL). 새 릴리스의 테이블은 새 항목으로 추가하고 기존 항목은 고치지 않는다.
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "r1b_minimum", MIGRATION_0001),
@@ -586,6 +604,7 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (5, "r2_parcels", MIGRATION_0005),
     (6, "r3_transactions", MIGRATION_0006),
     (7, "r3_links", MIGRATION_0007),
+    (8, "r3_zones", MIGRATION_0008),
 )
 DB_SCHEMA_VERSION = MIGRATIONS[-1][0]
 MIN_SQLITE_VERSION = (3, 38, 0)  # STRICT 테이블(3.37)과 내장 json_valid/json_type(3.38)

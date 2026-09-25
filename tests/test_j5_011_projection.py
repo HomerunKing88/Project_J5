@@ -46,7 +46,7 @@ def runs(db) -> list[tuple]:
 def test_publish_full_projection_and_pointer(db, home):
     r = build_projection(db, home)
     assert r.outcome == "published", r.to_text()
-    assert r.source_dataset_version == 1 and r.counts == {"assets": 5, "located": 4, "records": 0, "attachments": 0, "photos": 0, "parcels": 0}
+    assert r.source_dataset_version == 1 and r.counts == {"assets": 5, "located": 4, "records": 0, "attachments": 0, "photos": 0, "parcels": 0, "transactions": 0}
     out = home / r.output_dir
     manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["format"] == "j5view" and manifest["source_dataset_version"] == 1 and manifest["study_id"] == STUDY and manifest["data_mode"] == "synthetic"
@@ -81,7 +81,7 @@ def test_publish_full_projection_and_pointer(db, home):
 def test_records_and_photos_after_import(db, home):
     assert import_package(db, PACKAGES / "valid", home).outcome == "applied"
     r = build_projection(db, home, photos=True)
-    assert r.outcome == "published" and r.counts == {"assets": 5, "located": 4, "records": 3, "attachments": 3, "photos": 2, "parcels": 0}
+    assert r.outcome == "published" and r.counts == {"assets": 5, "located": 4, "records": 3, "attachments": 3, "photos": 2, "parcels": 0, "transactions": 0}
     out = home / r.output_dir
     rows = [json.loads(l) for l in (out / "records.jsonl").read_bytes().split(b"\n") if l]
     assert [x["record_id"] for x in rows] == sorted((x["record_id"] for x in rows), key=lambda i: [y["record_id"] for y in rows].index(i))

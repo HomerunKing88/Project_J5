@@ -260,7 +260,9 @@ def load_run(db: Db, data_home: Path, lawd_cd: str, run_id: str) -> RunLoadResul
                 raise DbError("raw_count_mismatch", f"원본 {p['path']} 의 항목 수 {len(parsed['items'])} 가 기록 {p.get('item_count')} 과 다르다")
             pages_data[(m["deal_ymd"], p["page_no"])] = parsed["items"]
     now = db.now()
+    from j5.db.zones import classify, current_rules  # 순환 import 방지
     with db.transaction():
+        rules = current_rules(db)
         doc_id = str(uuid.uuid4())
         db.add_source_document({"document_id": doc_id, "document_kind": "official_api", "title": f"{doc['provider']} 실행 {run_id} (시군구 {lawd_cd})",
                                 "location": doc["_run_path"], "sha256": None, "source_published_at": None, "collected_at": doc["finished_at"],
@@ -318,13 +320,15 @@ def load_run(db: Db, data_home: Path, lawd_cd: str, run_id: str) -> RunLoadResul
                         "INSERT INTO transactions (transaction_id, provider, lawd_cd, deal_ymd, identity_hash, ordinal, deal_date, amount_krw, building_area_m2, plottage_area_m2,"
                         " build_year, missing_reasons_json, emd_name, jibun_raw, jibun_masked, jibun_prefix, building_kind, building_type_raw, building_use_raw, land_use_raw,"
                         " floor_raw, share_deal, cancel_status, cancel_date, dealing_gbn_raw, agent_sgg_raw, buyer_kind_raw, seller_kind_raw, scope, scope_basis, link_status,"
-                        " first_seen_run_id, last_seen_run_id, missing_since_run_id, first_observation_id, latest_observation_id, content_hash, data_mode, recorded_at, updated_at)"
+                        " first_seen_run_id, last_seen_run_id, missing_since_run_id, first_observation_id, latest_observation_id, content_hash, data_mode, recorded_at, updated_at,"
+                        " zone, zone_rule_version)"
                         " VALUES (:transaction_id, :provider, :lawd_cd, :deal_ymd, :identity_hash, :ordinal, :deal_date, :amount_krw, :building_area_m2, :plottage_area_m2,"
                         " :build_year, :missing_reasons_json, :emd_name, :jibun_raw, :jibun_masked, :jibun_prefix, :building_kind, :building_type_raw, :building_use_raw, :land_use_raw,"
                         " :floor_raw, :share_deal, :cancel_status, :cancel_date, :dealing_gbn_raw, :agent_sgg_raw, :buyer_kind_raw, :seller_kind_raw, :scope, :scope_basis, 'unlinked',"
-                        " :run_id, :run_id, :missing_since, :obs_id, :obs_id, :content_hash, :data_mode, :now, :now)",
+                        " :run_id, :run_id, :missing_since, :obs_id, :obs_id, :content_hash, :data_mode, :now, :now, :zone, :zone_rule_version)",
                         {**norm, "transaction_id": tid, "provider": doc["provider"], "lawd_cd": lawd_cd, "deal_ymd": deal_ymd, "identity_hash": ih, "ordinal": ordinal,
-                         "run_id": run_id, "obs_id": obs_id, "content_hash": ch, "data_mode": db.data_mode, "now": now, "missing_since": missing_since})
+                         "run_id": run_id, "obs_id": obs_id, "content_hash": ch, "data_mode": db.data_mode, "now": now, "missing_since": missing_since,
+                         "zone": classify(rules, norm["emd_name"]), "zone_rule_version": rules["version"] if rules else None})
                     r.transactions_new += 1
                     if missing_since:
                         r.transactions_missing += 1
@@ -420,21 +424,24 @@ def coverage(db: Db, lawd_cd: str, months: list[str]) -> dict:
         t = db.conn.execute(
             "SELECT COUNT(*) AS rows_all, SUM(cancel_status = 'cancelled') AS cancelled,"
             " SUM(cancel_status <> 'cancelled') AS active, SUM(cancel_status <> 'cancelled' AND missing_since_run_id IS NOT NULL) AS missing,"
-            " SUM(cancel_status <> 'cancelled' AND link_status = 'confirmed') AS linked, SUM(cancel_status <> 'cancelled' AND jibun_masked) AS masked"
+            " SUM(cancel_status <> 'cancelled' AND link_status = 'confirmed') AS linked, SUM(cancel_status <> 'cancelled' AND jibun_masked) AS masked,"
+            " SUM(cancel_status <> 'cancelled' AND zone = 'core') AS core, SUM(cancel_status <> 'cancelled' AND zone = 'comparison') AS comparison"
             " FROM transactions WHERE lawd_cd = ? AND deal_ymd = ?", (lawd_cd, ym)).fetchone()
         out.append({"deal_ymd": ym, "collection": best or "none", "runs": len(runs), "latest_run_id": runs[-1]["run_id"] if runs else None,
                     "transactions": t["active"] or 0, "rows_all": t["rows_all"] or 0, "cancelled": t["cancelled"] or 0, "missing": t["missing"] or 0,
-                    "linked": t["linked"] or 0, "masked": t["masked"] or 0})
+                    "linked": t["linked"] or 0, "masked": t["masked"] or 0, "core": t["core"] or 0, "comparison": t["comparison"] or 0})
     complete = [m["deal_ymd"] for m in out if m["collection"] in ("complete", "empty")]
     return {"lawd_cd": lawd_cd, "months": out, "complete_months": len(complete), "gap_months": [m["deal_ymd"] for m in out if m["collection"] not in ("complete", "empty")],
-            "transactions": sum(m["transactions"] for m in out), "cancelled": sum(m["cancelled"] for m in out), "linked": sum(m["linked"] for m in out)}
+            "transactions": sum(m["transactions"] for m in out), "cancelled": sum(m["cancelled"] for m in out), "linked": sum(m["linked"] for m in out),
+            "core": sum(m["core"] for m in out), "comparison": sum(m["comparison"] for m in out)}
 
 
 def coverage_text(c: dict) -> str:
     lines = [f"거래 수집 현황 시군구 {c['lawd_cd']}: 완전 수집 {c['complete_months']}/{len(c['months'])}개월 · 거래 {c['transactions']}건 (취소 확정 {c['cancelled']}건 제외)"
-             f" · 물건 연결 확정 {c['linked']}건 (수집 완료와 연결 완료는 별개)"]
+             f" · 핵심 {c['core']}, 비교 {c['comparison']} · 물건 연결 확정 {c['linked']}건 (수집 완료와 연결 완료는 별개)"]
     for m in c["months"]:
-        lines.append(f"  {m['deal_ymd'][:4]}-{m['deal_ymd'][4:]}: {m['collection']} · 실행 {m['runs']}회 · 거래 {m['transactions']} (취소 {m['cancelled']} 별도, 사라짐 {m['missing']}, 지번 마스킹 {m['masked']}, 연결 {m['linked']})")
+        lines.append(f"  {m['deal_ymd'][:4]}-{m['deal_ymd'][4:]}: {m['collection']} · 실행 {m['runs']}회 · 거래 {m['transactions']} (핵심 {m['core']}, 비교 {m['comparison']}, 취소 {m['cancelled']} 별도,"
+                     f" 사라짐 {m['missing']}, 지번 마스킹 {m['masked']}, 연결 {m['linked']})")
     if c["gap_months"]:
         lines.append("미완 월: " + ", ".join(f"{g[:4]}-{g[4:]}" for g in c["gap_months"]) + " (rt-fetch 로 다시 받는다)")
     return "\n".join(lines) + "\n"
