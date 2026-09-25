@@ -1,0 +1,688 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://j5.local/schemas/plan_records.schema.json",
+  "title": "규제 검토·개발안·자금안 기록 입력 (j5 db plan-add) 과 payload 정의 (records.record_type regulation_review / development_plan / financing_plan)",
+  "description": "데이터 사전 §2·§9·§10, 릴리스 계획 §8 R5. 기록은 불변이며 수정은 새 기록 + supersedes_id 다. 검토일(observed_at)은 날짜 정밀도만 쓴다. 개발안·자금안의 계산 입력은 calc_inputs.schema.json 의 정의를 그대로 품고, 결과(far_result / equity_result / cash_result)와 계산식 버전은 저장소가 그 시점에 계산해 붙인다(입력 파일에는 넣지 않는다). 미확인 입력이 있으면 결과는 null 과 미확인 목록으로 남는다.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "asset_id",
+    "record_type",
+    "source_kind",
+    "observed_at",
+    "payload"
+  ],
+  "properties": {
+    "kind": {
+      "const": "plan_record"
+    },
+    "asset_id": {
+      "$ref": "#/$defs/uuid"
+    },
+    "record_type": {
+      "type": "string",
+      "enum": [
+        "regulation_review",
+        "development_plan",
+        "financing_plan"
+      ]
+    },
+    "source_kind": {
+      "type": "string",
+      "enum": [
+        "official_fact",
+        "broker_report",
+        "personal_estimate",
+        "scenario_assumption",
+        "calculated_result"
+      ]
+    },
+    "observed_at": {
+      "description": "검토일·판단일 (YYYY-MM-DD)",
+      "$ref": "#/$defs/date"
+    },
+    "supersedes_id": {
+      "description": "수정하는 이전 기록 ID. 같은 물건·같은 종류여야 한다",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "evidence": {
+      "description": "근거 문서 연결 (source_documents 에 먼저 있어야 한다)",
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "document_id"
+        ],
+        "properties": {
+          "document_id": {
+            "$ref": "#/$defs/uuid"
+          },
+          "field_path": {
+            "type": "string",
+            "pattern": "^\\$(\\..+)?$",
+            "default": "$"
+          },
+          "locator": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 500
+          },
+          "verification_status": {
+            "type": "string",
+            "enum": [
+              "unverified",
+              "verified",
+              "disputed"
+            ]
+          }
+        }
+      }
+    },
+    "payload": {
+      "description": "입력 payload (결과 없이). 종류별 정의는 allOf 로 고른다",
+      "type": "object"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "record_type": {
+            "const": "regulation_review"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/regulation_review_input"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "record_type": {
+            "const": "development_plan"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/development_plan_input"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "record_type": {
+            "const": "financing_plan"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/financing_plan_input"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "date": {
+      "type": "string",
+      "format": "date",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "note": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 4000
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "regulation_review_input": {
+      "description": "규제 검토: 용도지역, 적용 용적률 F, 규제 버전(적용 법령·고시 시점), 종료일 확인, 면적 제약 목록. 개별 필지의 규제 적용은 법령·지구단위계획·전문가 검토로 확인한 값을 적는다(계산기가 판정하지 않음)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "zoning",
+        "applied_far_pct",
+        "regulation_version",
+        "end_date_confirmed",
+        "constraints",
+        "basis",
+        "note"
+      ],
+      "properties": {
+        "zoning": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 100
+        },
+        "applied_far_pct": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "regulation_version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 300
+        },
+        "end_date_confirmed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "constraints": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "excluded_from_denominator"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "area_m2": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "basis": {
+                "$ref": "#/$defs/note"
+              },
+              "excluded_from_denominator": {
+                "type": "string",
+                "enum": [
+                  "true",
+                  "false",
+                  "unknown"
+                ]
+              },
+              "reviewed_on": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/date"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "basis": {
+          "description": "검토 근거 (법령·고시·전문가 검토 등)",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "reason": {
+          "description": "미확인 항목이 있을 때의 사유",
+          "$ref": "#/$defs/note"
+        },
+        "note": {
+          "$ref": "#/$defs/note"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "applied_far_pct": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "regulation_version": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "regulation_review_payload": {
+      "$ref": "#/$defs/regulation_review_input"
+    },
+    "development_plan_base": {
+      "description": "개발안 공통 정의: 종류, 이름, 여유면적 계산 입력(calc far, 없으면 null 과 사유), 공사기간·공실, 공동매입 항목, 건축사 검토, 전제",
+      "type": "object",
+      "required": [
+        "plan_kind",
+        "label",
+        "far_input",
+        "assumptions",
+        "note"
+      ],
+      "properties": {
+        "plan_kind": {
+          "type": "string",
+          "enum": [
+            "keep",
+            "remodel",
+            "rebuild",
+            "joint_purchase"
+          ]
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "far_input": {
+          "oneOf": [
+            {
+              "$ref": "calc_inputs.schema.json#/$defs/far"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "far_reason": {
+          "description": "far_input 이 null 일 때의 사유",
+          "$ref": "#/$defs/note"
+        },
+        "construction": {
+          "$ref": "calc_inputs.schema.json#/$defs/plans/properties/plans/items/properties/construction"
+        },
+        "joint": {
+          "$ref": "calc_inputs.schema.json#/$defs/plans/properties/plans/items/properties/joint"
+        },
+        "architect_review": {
+          "$ref": "calc_inputs.schema.json#/$defs/plans/properties/plans/items/properties/architect_review"
+        },
+        "assumptions": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "regulation_review_id": {
+          "description": "이 개발안이 전제한 규제 검토 기록",
+          "oneOf": [
+            {
+              "$ref": "#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "note": {
+          "$ref": "#/$defs/note"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "far_input": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "far_reason"
+            ],
+            "properties": {
+              "far_reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "plan_kind": {
+                "enum": [
+                  "remodel",
+                  "rebuild"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "construction"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "plan_kind": {
+                "const": "joint_purchase"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "joint"
+            ]
+          }
+        }
+      ]
+    },
+    "development_plan_input": {
+      "description": "입력 payload (결과 없이)",
+      "allOf": [
+        {
+          "$ref": "#/$defs/development_plan_base"
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "development_plan_payload": {
+      "description": "저장된 개발안 = 입력 + 저장 시점의 여유면적 계산 결과 스냅샷 + 계산식 버전",
+      "allOf": [
+        {
+          "$ref": "#/$defs/development_plan_base"
+        }
+      ],
+      "type": "object",
+      "required": [
+        "far_result",
+        "calculation_version"
+      ],
+      "properties": {
+        "far_result": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/far_result"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "calculation_version": {
+          "$ref": "#/$defs/version"
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "far_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result",
+        "unknown",
+        "errors",
+        "inputs"
+      ],
+      "properties": {
+        "result": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "review_area_m2",
+                "headroom_m2",
+                "utilization"
+              ],
+              "properties": {
+                "review_area_m2": {
+                  "type": "number"
+                },
+                "headroom_m2": {
+                  "type": "number"
+                },
+                "utilization": {
+                  "type": "number"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unknown": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "inputs": {
+          "type": "object"
+        }
+      }
+    },
+    "financing_plan_base": {
+      "description": "자금안 공통 정의: 대응하는 개발안 기록(선택), 시나리오, 필요자기자본 입력(calc equity), 현금흐름 입력(calc cash), 감정가",
+      "type": "object",
+      "required": [
+        "scenario",
+        "equity_input",
+        "cash_input",
+        "note"
+      ],
+      "properties": {
+        "development_plan_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scenario": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "equity_input": {
+          "$ref": "calc_inputs.schema.json#/$defs/equity"
+        },
+        "cash_input": {
+          "$ref": "calc_inputs.schema.json#/$defs/cash"
+        },
+        "appraisal": {
+          "$ref": "calc_inputs.schema.json#/$defs/krw"
+        },
+        "note": {
+          "$ref": "#/$defs/note"
+        }
+      }
+    },
+    "financing_plan_input": {
+      "description": "입력 payload (결과 없이)",
+      "allOf": [
+        {
+          "$ref": "#/$defs/financing_plan_base"
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "financing_plan_payload": {
+      "description": "저장된 자금안 = 입력 + 저장 시점의 필요자기자본·최대 현금 계산 결과 스냅샷 + 계산식 버전",
+      "allOf": [
+        {
+          "$ref": "#/$defs/financing_plan_base"
+        }
+      ],
+      "type": "object",
+      "required": [
+        "equity_result",
+        "cash_result",
+        "calculation_version"
+      ],
+      "properties": {
+        "equity_result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "result_krw",
+            "known_sum_krw",
+            "components_krw",
+            "deposit_return_obligation_krw",
+            "unknown"
+          ],
+          "properties": {
+            "result_krw": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "known_sum_krw": {
+              "type": "integer"
+            },
+            "components_krw": {
+              "type": "object"
+            },
+            "deposit_return_obligation_krw": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "remaining_cash_now_krw": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "unknown": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "cash_result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "result_krw",
+            "known_sum_krw",
+            "min_cumulative_krw",
+            "min_at",
+            "periods",
+            "unknown"
+          ],
+          "properties": {
+            "result_krw": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "known_sum_krw": {
+              "type": "integer"
+            },
+            "min_cumulative_krw": {
+              "type": "integer"
+            },
+            "min_at": {
+              "type": [
+                "integer",
+                "string"
+              ]
+            },
+            "periods": {
+              "type": "integer"
+            },
+            "unknown": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "calculation_version": {
+          "$ref": "#/$defs/version"
+        }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

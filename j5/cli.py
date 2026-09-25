@@ -31,6 +31,7 @@ from j5.db.zones import apply_rules, changes_since, changes_text, current_rules,
 from j5.db.judgment import apply_record_input, asof, asof_text, load_record_input
 from j5.db.photos import export_series, photo_series, photo_tags, series_text
 from j5.db.recheck import apply_recheck_input, load_recheck_input, recheck_add_text, recheck_status, recheck_text
+from j5.db.plans import apply_plan_input, load_plan_input, plan_add_text, plan_overview, plan_overview_text
 from j5.calc.inputs import calc_text, load_calc_input, run_calc
 from j5.calc.plans import plans_csv
 from j5.parcels.convert import Clip, ConvertError, ConvertOptions, convert, convert_text, inspect_source, inspect_text, write_bundle
@@ -157,6 +158,12 @@ def _build_parser() -> argparse.ArgumentParser:
     rca = dsub.add_parser("recheck-add", help="재확인 기록을 넣는다 (schemas/judgment_recheck.schema.json, kind: recheck, 불변). 조건 대조·반대 증거를 남기고 그 시점의 신호 요약을 저장한다. 판단 자체는 바꾸지 않는다")
     rca.add_argument("file", type=Path, help="입력 JSON (kind: recheck)")
     rca.add_argument("--json", action="store_true")
+    pa_ = dsub.add_parser("plan-add", help="규제 검토·개발안·자금안 기록을 넣는다 (schemas/plan_records.schema.json, kind: plan_record, 불변). 개발안·자금안은 저장 시점에 계산기(far/equity/cash)를 돌려 결과 스냅샷과 계산식 버전을 붙인다. 수정은 supersedes_id 로 새 기록")
+    pa_.add_argument("file", type=Path, help="입력 JSON (kind: plan_record)")
+    pa_.add_argument("--json", action="store_true")
+    pl = dsub.add_parser("plans", help="물건의 현재 규제 검토·개발안·자금안 기록과 저장 시점 계산 결과를 나란히 보인다 (고르지 않음)")
+    pl.add_argument("--asset", required=True, help="asset_id")
+    pl.add_argument("--json", action="store_true")
     rg = dsub.add_parser("rt-changes", help="어떤 실행 이후의 변경: 새 거래·취소로 바뀜·응답에서 사라짐 (취소·정정 점검 결과 읽기)")
     rg.add_argument("--lawd-cd", required=True)
     rg.add_argument("--since-run", required=True, help="기준 실행 ID (이 실행 뒤의 실행들을 본다)")
@@ -443,6 +450,17 @@ def _db_main(args) -> int:
                 known = args.at if args.as_recorded and not args.known_by else args.known_by
                 a = asof(db, args.asset, args.at, known_by=known)
                 sys.stdout.write(json.dumps(a, ensure_ascii=False, indent=2) + "\n" if args.json else asof_text(a))
+                return 0
+            if args.db_command == "plan-add":
+                if not args.file.is_file():
+                    print(f"입력 파일이 없음: {args.file}", file=sys.stderr)
+                    return USAGE_ERROR
+                r = apply_plan_input(db, load_plan_input(args.file))
+                sys.stdout.write(json.dumps(r, ensure_ascii=False, indent=2) + "\n" if args.json else plan_add_text(r))
+                return 0
+            if args.db_command == "plans":
+                o = plan_overview(db, args.asset)
+                sys.stdout.write(json.dumps(o, ensure_ascii=False, indent=2) + "\n" if args.json else plan_overview_text(o))
                 return 0
             if args.db_command == "recheck":
                 st_ = recheck_status(db, args.asset)

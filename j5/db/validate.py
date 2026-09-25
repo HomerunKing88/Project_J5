@@ -12,7 +12,7 @@ from datetime import date, datetime, timezone
 from jsonschema import Draft202012Validator, FormatChecker
 
 from j5.db.schema import DATA_MODES, PRECISIONS, RECORD_TYPES, SOURCE_KINDS, SUBJECT_TYPES
-from j5.schemas_loader import SCHEMAS_DIR
+from j5.schemas_loader import SCHEMAS_DIR, schema_registry
 
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -25,12 +25,18 @@ RECORD_TYPE_SUBJECTS: dict[str, frozenset[str]] = {
     "field_observation": frozenset({"asset"}),
     "target_price": frozenset({"asset"}),          # R4 J5-015A: 목표 매수가 (데이터 사전 §8)
     "investment_judgment": frozenset({"asset"}),   # R4 J5-015A: 투자판단 10항목 (초안 허용)
+    "regulation_review": frozenset({"asset"}),     # R5 J5-016C: 규제 검토(용도지역·적용 용적률·규제 버전·제약) (데이터 사전 §9)
+    "development_plan": frozenset({"asset"}),      # R5 J5-016C: 개발안(현상 유지·리모델링·철거신축·공동매입)과 여유면적 계산 스냅샷
+    "financing_plan": frozenset({"asset"}),        # R5 J5-016C: 자금안(필요자기자본·최대 현금 계산 스냅샷) (데이터 사전 §10)
 }
 # 기록 종류별 payload 스키마 (schemas/ 의 $defs 참조) 와 payload 스키마 버전
 RECORD_PAYLOAD_SCHEMAS: dict[str, tuple[str, str, str]] = {
     "field_observation": ("observation_event.schema.json", "field_observation_payload", "1.0.0"),
     "target_price": ("judgment_records.schema.json", "target_price_payload", "1.0.0"),
     "investment_judgment": ("judgment_records.schema.json", "investment_judgment_payload", "1.0.0"),
+    "regulation_review": ("plan_records.schema.json", "regulation_review_payload", "1.0.0"),
+    "development_plan": ("plan_records.schema.json", "development_plan_payload", "1.0.0"),
+    "financing_plan": ("plan_records.schema.json", "financing_plan_payload", "1.0.0"),
 }
 assert set(RECORD_TYPE_SUBJECTS) == set(RECORD_TYPES) == set(RECORD_PAYLOAD_SCHEMAS)
 
@@ -100,9 +106,10 @@ def payload_validator(record_type: str) -> Draft202012Validator:
     if v is None:
         file, definition, _ = RECORD_PAYLOAD_SCHEMAS[record_type]
         root = json.loads((SCHEMAS_DIR / file).read_text(encoding="utf-8"))
-        schema = {"$ref": f"#/$defs/{definition}", "$defs": root["$defs"]}
+        # $id 를 유지해 다른 스키마 파일로의 상대 $ref(예: calc_inputs.schema.json#/$defs/far)가 registry 에서 풀리게 한다
+        schema = {"$id": root["$id"], "$ref": f"#/$defs/{definition}", "$defs": root["$defs"]}
         Draft202012Validator.check_schema(schema)
-        v = _payload_validators[record_type] = Draft202012Validator(schema, format_checker=FormatChecker())
+        v = _payload_validators[record_type] = Draft202012Validator(schema, format_checker=FormatChecker(), registry=schema_registry())
     return v
 
 

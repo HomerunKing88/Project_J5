@@ -211,3 +211,14 @@ python -m j5 calc plans <입력.json> [--csv 경로] [--json]
 - `cash`: 시점별 CF_t 누적 최저로 max(0, −최저) + 별도 예비현금. 소유자 자기자본 투입은 유입에 넣지 않는다.
 - `plans`(J5-016B): 현상 유지·리모델링·철거신축·공동매입 후보마다 `equity`·`cash` 입력을 품고 필요자기자본·최대 필요자기자본을 한 표로 낸다. 고르지 않는다. 공사기간 공실·부가세·비용 중복·승계 보증금 반환·감정가 차이·공동매입 항목·건축사 검토를 경고로 점검한다. `--csv` 는 후보별 현금표(덮어쓰지 않음).
 - 종료 코드 0 계산 완료, 1 미확정(미확인 입력·오류, 알려진 항목만 표시), 3 입력 거절. 결과에 계산식 버전(1.0.0)을 남긴다. 여유면적·필요자기자본은 검토 보조값이며 신축 가능 여부·저평가·대출 승인을 뜻하지 않는다.
+
+## 규제 검토·개발안·자금안 기록 (R5, J5-016C)
+
+```text
+python -m j5 db [--db 경로] plan-add <입력.json> [--json]
+python -m j5 db [--db 경로] plans --asset <asset_id> [--json]
+```
+
+- `plan-add` 는 규제 검토(`regulation_review`)·개발안(`development_plan`)·자금안(`financing_plan`) 기록을 불변 기록으로 넣는다(`schemas/plan_records.schema.json`, `kind: plan_record`, db_schema 12). 개발안·자금안은 저장 시점에 계산기(`calc far` / `calc equity` / `calc cash`)를 돌려 결과 스냅샷과 계산식 버전을 payload 에 붙인다. 미확인 입력이면 결과 null 과 미확인 목록으로 저장한다. 수정·재계산은 새 기록 + `supersedes_id` 다. 근거 문서는 `source_documents` 에 먼저 둔다.
+- `plans` 는 현재(수정되지 않은) 기록과 저장 시점 결과를 나란히 보인다. 후보를 고르지 않는다.
+- db_schema 12 는 `records` 표를 다시 만든다(ADR-14). 실제 정본에는 백업을 먼저 만든 뒤 `j5 db status` 로 버전 12·외래키 켜짐·무결성을 확인한다.

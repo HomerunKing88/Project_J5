@@ -20,7 +20,9 @@ TRACKING_STATUSES = ("unreviewed", "background", "watch", "detailed_review", "pu
 RESOLUTION_STATUSES = ("confirmed", "pending")
 DATA_MODES = ("synthetic", "private_real")
 RECORD_TYPES_V1 = ("field_observation",)  # 마이그레이션 1 의 표 정의에 고정된 목록. 기존 마이그레이션 문구는 바꾸지 않는다
-RECORD_TYPES = ("field_observation", "target_price", "investment_judgment")  # 현재 허용 목록: R1b 임장 관측, R4(J5-015A) 목표 매수가·투자판단 (데이터 사전 §2·§8). 표는 마이그레이션 9 에서 재작성
+RECORD_TYPES_V9 = ("field_observation", "target_price", "investment_judgment")  # 마이그레이션 9 의 표 정의에 고정된 목록 (J5-015A)
+# 현재 허용 목록: R1b 임장 관측, R4(J5-015A) 목표 매수가·투자판단, R5(J5-016C) 규제 검토·개발안·자금안 (데이터 사전 §2·§8·§9·§10). 표는 마이그레이션 12 에서 재작성
+RECORD_TYPES = ("field_observation", "target_price", "investment_judgment", "regulation_review", "development_plan", "financing_plan")
 SOURCE_KINDS = ("official_fact", "field_observation", "broker_report", "asking_price", "personal_estimate", "scenario_assumption", "calculated_result")
 DOCUMENT_KINDS = ("field_package", "official_api", "official_file", "broker_report", "manual_entry")
 VERIFICATION_STATUSES = ("unverified", "verified", "disputed")
@@ -600,7 +602,9 @@ CREATE INDEX transactions_by_zone ON transactions (zone, lawd_cd, deal_ymd);
 # records.record_type 의 CHECK 는 표 정의에 박혀 있어 넓히려면 표를 다시 만들어야 한다. 아래는 SQLite 권장 절차(외래키 검사를 끈 채 새 표 생성 → 복사 → 옛 표 삭제 → 이름 바꾸기 →
 # 인덱스·트리거 재생성 → foreign_key_check)이며 store 가 FK_OFF_MIGRATIONS 에 따라 외래키를 끄고 한 트랜잭션으로 실행한 뒤 검사가 비어야 커밋한다 (ADR-14).
 # 새 표의 자기 참조(supersedes_id)는 이름 바꾸기 뒤의 이름 'records' 를 가리키게 적는다(외래키가 꺼져 있으면 RENAME 이 참조 문구를 고치지 않는다).
-MIGRATION_0009 = f"""
+def _records_rewrite(types) -> str:
+    """records 표 재작성 SQL (SQLite 권장 절차). 마이그레이션 9·12 가 허용 목록만 달리해 같은 문구를 쓴다. 외래키를 끈 채 실행한다(FK_OFF_MIGRATIONS, ADR-14)."""
+    return f"""
 DROP TRIGGER records_no_update;
 DROP TRIGGER records_no_delete;
 DROP INDEX records_by_subject;
@@ -609,7 +613,7 @@ CREATE TABLE records_new (
   record_id             TEXT NOT NULL PRIMARY KEY CHECK (record_id GLOB '{UUID_GLOB}'),
   subject_id            TEXT NOT NULL,
   subject_type          TEXT NOT NULL CHECK (subject_type {_in(SUBJECT_TYPES)}),
-  record_type           TEXT NOT NULL CHECK (record_type {_in(RECORD_TYPES)}),
+  record_type           TEXT NOT NULL CHECK (record_type {_in(types)}),
   source_kind           TEXT NOT NULL CHECK (source_kind {_in(SOURCE_KINDS)}),
   schema_version        TEXT NOT NULL CHECK (schema_version GLOB '[0-9]*.[0-9]*.[0-9]*'),
   payload_json          TEXT NOT NULL CHECK (json_valid(payload_json) AND json_type(payload_json) = 'object'),
@@ -639,6 +643,9 @@ BEGIN SELECT RAISE(ABORT, 'records 는 불변이다. 정정은 새 기록(supers
 CREATE TRIGGER records_no_delete BEFORE DELETE ON records
 BEGIN SELECT RAISE(ABORT, 'records 는 삭제하지 않는다. 개인정보 오입력은 별도 절차로 처리한다'); END;
 """
+
+
+MIGRATION_0009 = _records_rewrite(RECORD_TYPES_V9)
 
 # J5-015B 사진 연차 비교 (데이터 사전 §6 "반복 촬영은 viewpoint_id·방향·이전 사진 참조를 선택 입력", 릴리스 계획 §8 R4).
 # attachments 에 촬영 지점·방향·이전 사진 참조 열을 더하고, 이미 반영된 첨부는 수입 대장(import_events)의 고정 행 바이트에서 소급해 채운다.
@@ -682,6 +689,10 @@ CREATE TRIGGER judgment_rechecks_no_delete BEFORE DELETE ON judgment_rechecks BE
 END;
 """
 
+# J5-016C 규제 검토·개발안·자금안 기록 종류 (데이터 사전 §2 "임장·건물·필지·규제·권리·매물 사건·목표 매수가·투자판단·개발안·자금안·매입 준비 검토를 구분", §9~§10, 릴리스 계획 §8 R5).
+# records.record_type 허용 목록을 넓히는 표 재작성. 절차는 마이그레이션 9 와 같다(ADR-14). payload 계약은 schemas/plan_records.schema.json.
+MIGRATION_0012 = _records_rewrite(RECORD_TYPES)
+
 # (버전, 이름, SQL). 새 릴리스의 테이블은 새 항목으로 추가하고 기존 항목은 고치지 않는다.
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "r1b_minimum", MIGRATION_0001),
@@ -695,8 +706,9 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (9, "r4_record_types", MIGRATION_0009),
     (10, "r4_photo_series", MIGRATION_0010),
     (11, "r4_rechecks", MIGRATION_0011),
+    (12, "r5_plan_records", MIGRATION_0012),
 )
 # 표 재작성이 필요한 마이그레이션: 외래키 검사를 끈 채 한 트랜잭션으로 실행하고 foreign_key_check 가 비어야 커밋한다 (store._migrate).
-FK_OFF_MIGRATIONS = frozenset({9})
+FK_OFF_MIGRATIONS = frozenset({9, 12})
 DB_SCHEMA_VERSION = MIGRATIONS[-1][0]
 MIN_SQLITE_VERSION = (3, 38, 0)  # STRICT 테이블(3.37)과 내장 json_valid/json_type(3.38)
