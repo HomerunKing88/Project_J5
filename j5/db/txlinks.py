@@ -192,8 +192,22 @@ def apply_decisions(db: Db, rows: list[dict]) -> LinkApplyResult:
     r = LinkApplyResult(rows=len(rows))
     decided = [row for row in rows if row.get("decision")]
     r.decided = len(decided)
-    errs: list[str] = []
     today = db.now()[:10]
+    now = db.now()
+    # 계획(유효 연결·거래 상태 읽기)과 반영을 같은 쓰기 트랜잭션(BEGIN IMMEDIATE) 안에서 한다: 다른 rt-link 가 사이에 끼어들어 오래된 계획을 쓰지 못한다
+    with db.transaction():
+        plan = _plan(db, decided, today)
+        _apply_plan(db, plan, r, now)
+        if r.inserted or r.updated or r.withdrawn:
+            r.outcome = "applied"
+            r.dataset_version = db.bump_dataset_version()
+        else:
+            r.dataset_version = int(db.meta("dataset_version") or 0)
+    return r
+
+
+def _plan(db: Db, decided: list[dict], today: str) -> list[dict]:
+    errs: list[str] = []
     plan = []
     seen_tx: set[str] = set()
     for row in decided:
@@ -216,6 +230,7 @@ def apply_decisions(db: Db, rows: list[dict]) -> LinkApplyResult:
         asset_id = row.get("asset_id", "")
         scope = row.get("decision_scope", "") or None
         basis_kind = row.get("basis_kind", "") or "manual"
+        explicit_reviewed_on = bool(row.get("reviewed_on", ""))
         reviewed_on = row.get("reviewed_on", "") or today
         note = row.get("note", "") or None
         if scope is not None and scope not in S.TRANSACTION_SCOPES:
@@ -224,7 +239,7 @@ def apply_decisions(db: Db, rows: list[dict]) -> LinkApplyResult:
             errs.append(f"{ln}행: basis_kind 는 {'/'.join(S.LINK_BASIS_KINDS)} 중 하나 ({basis_kind!r})")
         if parse_date(reviewed_on) is None:
             errs.append(f"{ln}행: reviewed_on 은 YYYY-MM-DD ({reviewed_on!r})")
-        active = db.conn.execute("SELECT link_id, asset_id, status, scope, basis_kind, basis_note FROM transaction_links WHERE transaction_id = ? AND status <> 'withdrawn'", (tid,)).fetchone()
+        active = db.conn.execute("SELECT link_id, asset_id, status, scope, basis_kind, basis_note, reviewed_on FROM transaction_links WHERE transaction_id = ? AND status <> 'withdrawn'", (tid,)).fetchone()
         if decision == "withdrawn":
             if active is None:
                 errs.append(f"{ln}행: 철회할 유효한 연결이 없다")
@@ -239,53 +254,50 @@ def apply_decisions(db: Db, rows: list[dict]) -> LinkApplyResult:
                 errs.append(f"{ln}행: 앞자리 범위(jibun_prefix)만으로 confirmed 로 두지 않는다. 근거를 확보해 manual/document 로 하거나 pending_evidence 로 둔다")
             if decision == "confirmed" and tx["cancel_status"] == "cancelled":
                 errs.append(f"{ln}행: 취소 확정 거래는 연결을 확정하지 않는다")
-        plan.append({"line": ln, "tid": tid, "decision": decision, "asset_id": asset_id, "scope": scope, "basis_kind": basis_kind, "reviewed_on": reviewed_on, "note": note,
-                     "active": dict(active) if active else None, "tx_scope": tx["scope"]})
+        plan.append({"line": ln, "tid": tid, "decision": decision, "asset_id": asset_id, "scope": scope, "basis_kind": basis_kind, "reviewed_on": reviewed_on,
+                     "explicit_reviewed_on": explicit_reviewed_on, "note": note, "active": dict(active) if active else None, "tx_scope": tx["scope"]})
     if errs:
         raise ValidationError(errs[:20])
-    now = db.now()
-    with db.transaction():
-        for p in plan:
-            active = p["active"]
-            scope = p["scope"] or (active["scope"] if active else p["tx_scope"])
-            if p["decision"] == "withdrawn":
-                _set_status(db, active["link_id"], "withdrawn", scope, p, now, withdrawn_on=p["reviewed_on"], reason=p["note"] or "철회")
-                r.withdrawn += 1
+    return plan
+
+
+def _apply_plan(db: Db, plan: list[dict], r: LinkApplyResult, now: str) -> None:
+    for p in plan:
+        active = p["active"]
+        scope = p["scope"] or (active["scope"] if active else p["tx_scope"])
+        if p["decision"] == "withdrawn":
+            _set_status(db, active["link_id"], "withdrawn", scope, p, now, withdrawn_on=p["reviewed_on"], reason=p["note"] or "철회")
+            r.withdrawn += 1
+            r.link_ids.append(active["link_id"])
+            _sync_transaction(db, p["tid"], now, scope=None)
+            continue
+        if active is not None and active["asset_id"] == p["asset_id"]:
+            same = (active["status"] == p["decision"] and active["scope"] == scope and active["basis_kind"] == p["basis_kind"] and (active["basis_note"] or None) == p["note"]
+                    and (not p["explicit_reviewed_on"] or active["reviewed_on"] == p["reviewed_on"]))
+            if same:
+                r.unchanged += 1
                 r.link_ids.append(active["link_id"])
-                _sync_transaction(db, p["tid"], now, scope=None)
                 continue
-            if active is not None and active["asset_id"] == p["asset_id"]:
-                same = active["status"] == p["decision"] and active["scope"] == scope and active["basis_kind"] == p["basis_kind"] and (active["basis_note"] or None) == p["note"]
-                if same:
-                    r.unchanged += 1
-                    r.link_ids.append(active["link_id"])
-                    continue
-                _set_status(db, active["link_id"], p["decision"], scope, p, now)
-                r.updated += 1
-                r.link_ids.append(active["link_id"])
-                _sync_transaction(db, p["tid"], now, scope=p["scope"])
-                continue
-            new_id = str(uuid.uuid4())
-            if active is not None:
-                # 거래당 유효 연결은 하나(부분 UNIQUE)이므로 먼저 철회하고 새 연결을 넣은 뒤 대체 관계를 적는다
-                _set_status(db, active["link_id"], "withdrawn", active["scope"], p, now, withdrawn_on=p["reviewed_on"], reason=f"다른 물건으로 대체 ({p['asset_id']})")
-                r.superseded += 1
-            db.conn.execute(
-                "INSERT INTO transaction_links (link_id, transaction_id, asset_id, scope, status, basis_kind, basis_note, evidence_document_id, reviewed_on, withdrawn_on,"
-                " withdrawn_reason, superseded_by, recorded_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL, NULL, ?, ?)",
-                (new_id, p["tid"], p["asset_id"], scope, p["decision"], p["basis_kind"], p["note"], p["reviewed_on"], now, now))
-            if active is not None:
-                db.conn.execute("UPDATE transaction_links SET superseded_by = ? WHERE link_id = ?", (new_id, active["link_id"]))
-            _record_decision(db, new_id, p["decision"], scope, p["asset_id"], p["reviewed_on"], p["note"], now)
-            r.inserted += 1
-            r.link_ids.append(new_id)
+            _set_status(db, active["link_id"], p["decision"], scope, p, now)
+            r.updated += 1
+            r.link_ids.append(active["link_id"])
             _sync_transaction(db, p["tid"], now, scope=p["scope"])
-        if r.inserted or r.updated or r.withdrawn:
-            r.outcome = "applied"
-            r.dataset_version = db.bump_dataset_version()
-        else:
-            r.dataset_version = int(db.meta("dataset_version") or 0)
-    return r
+            continue
+        new_id = str(uuid.uuid4())
+        if active is not None:
+            # 거래당 유효 연결은 하나(부분 UNIQUE)이므로 먼저 철회하고 새 연결을 넣은 뒤 대체 관계를 적는다
+            _set_status(db, active["link_id"], "withdrawn", active["scope"], p, now, withdrawn_on=p["reviewed_on"], reason=f"다른 물건으로 대체 ({p['asset_id']})")
+            r.superseded += 1
+        db.conn.execute(
+            "INSERT INTO transaction_links (link_id, transaction_id, asset_id, scope, status, basis_kind, basis_note, evidence_document_id, reviewed_on, withdrawn_on,"
+            " withdrawn_reason, superseded_by, recorded_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL, NULL, ?, ?)",
+            (new_id, p["tid"], p["asset_id"], scope, p["decision"], p["basis_kind"], p["note"], p["reviewed_on"], now, now))
+        if active is not None:
+            db.conn.execute("UPDATE transaction_links SET superseded_by = ? WHERE link_id = ?", (new_id, active["link_id"]))
+        _record_decision(db, new_id, p["decision"], scope, p["asset_id"], p["reviewed_on"], p["note"], now)
+        r.inserted += 1
+        r.link_ids.append(new_id)
+        _sync_transaction(db, p["tid"], now, scope=p["scope"])
 
 
 def _set_status(db: Db, link_id: str, status: str, scope: str, p: dict, now: str, *, withdrawn_on: str | None = None, reason: str | None = None) -> None:

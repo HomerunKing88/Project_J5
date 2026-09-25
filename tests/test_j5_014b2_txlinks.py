@@ -139,8 +139,13 @@ def test_apply_decisions_confirm_withdraw_supersede_and_history(db, home, server
     assert coverage(db, "11110", ["202608"])["linked"] == 1
     assert candidates(db, "11110", ["202608"], unlinked_only=True)[0]["transaction_id"] == t9
     assert {r["transaction_id"]: r["linked_asset_id"] for r in candidates(db, "11110", ["202608"])}[t1] == A[0]
-    # 같은 결정 다시 → 변화 없음
+    # 같은 결정 다시 → 변화 없음 (검토일을 비우면 멱등). 검토일을 명시해 바꾸면 갱신이고 결정 이력에 남는다 (Codex P2)
     assert apply_decisions(db, rows).outcome == "unchanged"
+    r_same = apply_decisions(db, [{"_line": 2, "transaction_id": t1, "decision": "confirmed", "asset_id": A[0], "basis_kind": "jibun_exact", "reviewed_on": "2026-09-25", "note": "지번 일치"}])
+    assert r_same.outcome == "unchanged"
+    r_date = apply_decisions(db, [{"_line": 2, "transaction_id": t1, "decision": "confirmed", "asset_id": A[0], "basis_kind": "jibun_exact", "reviewed_on": "2026-10-01", "note": "지번 일치"}])
+    assert r_date.updated == 1 and db.conn.execute("SELECT reviewed_on FROM transaction_links WHERE transaction_id = ? AND status <> 'withdrawn'", (t1,)).fetchone()[0] == "2026-10-01"
+    assert [h["decided_on"] for h in link_history(db, t1)] == ["2026-09-25", "2026-10-01"]
     # 앞자리 범위만으로 confirmed 는 거절, 취소 거래 확정 거절, 없는 물건·거래, 잘못된 값, 철회할 연결 없음, 같은 거래 두 번: 전체 거절이라 정본 무변화
     ver = db.status()["dataset_version"]
     bad_cases = [
@@ -176,8 +181,8 @@ def test_apply_decisions_confirm_withdraw_supersede_and_history(db, home, server
         apply_decisions(db, [{"_line": 2, "transaction_id": t1, "decision": "withdrawn", "asset_id": A[0]}])  # 유효한 연결이 없다
     # 검토 결정 이력: 확정 → 철회(대체) / 확정 → 철회, 이전 결정 연결, 불변
     hist = link_history(db, t1)
-    assert [h["decision"] for h in hist] == ["confirmed", "withdrawn", "confirmed", "withdrawn"] and hist[1]["previous_decision_id"] == hist[0]["decision_id"]
-    assert hist[2]["previous_decision_id"] is None and hist[3]["previous_decision_id"] == hist[2]["decision_id"] and hist[3]["rationale"] == "매매 아님"
+    assert [h["decision"] for h in hist] == ["confirmed", "confirmed", "withdrawn", "confirmed", "withdrawn"] and hist[2]["previous_decision_id"] == hist[1]["decision_id"]
+    assert hist[3]["previous_decision_id"] is None and hist[4]["previous_decision_id"] == hist[3]["decision_id"] and hist[4]["rationale"] == "매매 아님"
     with pytest.raises(sqlite3.IntegrityError):
         with db.transaction():
             db.conn.execute("DELETE FROM review_decisions")
@@ -187,9 +192,31 @@ def test_apply_decisions_confirm_withdraw_supersede_and_history(db, home, server
     assert coverage(db, "11110", ["202608"])["linked"] == 1
     # 백업·복구에 새 테이블 포함
     b = create_backup(db, home)
-    assert b.outcome == "completed" and b.counts["transaction_links"] == 3 and b.counts["review_decisions"] == 6
+    assert b.outcome == "completed" and b.counts["transaction_links"] == 3 and b.counts["review_decisions"] == 7
     rr = restore_backup(home / b.backup_dir, home / "restored")
-    assert rr.outcome == "completed" and rr.counts["review_decisions"] == 6
+    assert rr.outcome == "completed" and rr.counts["review_decisions"] == 7
+
+
+def test_apply_plans_inside_write_transaction(db, home, server):
+    """계획(유효 연결 읽기)이 BEGIN IMMEDIATE 뒤에 이뤄진다: 같은 연결의 쓰기 트랜잭션 안에서 부르면 중첩(SAVEPOINT)으로 들어가고,
+    오류 행이 있으면 바깥 트랜잭션의 이전 쓰기는 남고 이 단위의 쓰기만 되돌아간다 (Codex P2)."""
+    load_month(db, home, server, [row(0, jibun="1"), row(4, jibun="9")])
+    t1, t9 = tid_of(db, row(0, jibun="1")), tid_of(db, row(4, jibun="9"))
+    calls = []
+    orig = db.transaction
+
+    def spy():
+        calls.append(db._depth)
+        return orig()
+    db.transaction = spy  # type: ignore[assignment]
+    apply_decisions(db, [{"_line": 2, "transaction_id": t1, "decision": "confirmed", "asset_id": A[0], "basis_kind": "manual"}])
+    assert calls and calls[0] == 0, "반영은 바깥 쓰기 트랜잭션을 연다"
+    with db.transaction():
+        db.conn.execute("UPDATE transactions SET floor_raw = 'x' WHERE transaction_id = ?", (t9,))
+        with pytest.raises(ValidationError):
+            apply_decisions(db, [{"_line": 2, "transaction_id": t9, "decision": "withdrawn"}])
+    assert db.conn.execute("SELECT floor_raw FROM transactions WHERE transaction_id = ?", (t9,)).fetchone()[0] == "x"
+    assert db.conn.execute("SELECT COUNT(*) FROM transaction_links WHERE transaction_id = ?", (t9,)).fetchone()[0] == 0
 
 
 def test_cli_candidates_and_link_roundtrip(db, home, server, capsys, monkeypatch):
