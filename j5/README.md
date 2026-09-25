@@ -164,3 +164,14 @@ python -m j5 db [--db 경로] rt-changes --lawd-cd 11110 --since-run <실행ID> 
 - `rt-recheck` 는 취소·정정 점검용 재수집이다. `--recent N` 은 이번 달 포함 최근 N개월, `--failed` 는 실행 기록상 complete/empty 가 아닌 달을 다시 받는다. 반영은 `rt-load`, 변경은 `rt-changes` 로 본다(새 거래·취소로 바뀜·응답에서 사라짐). 사라짐은 취소 확정이 아니다.
 - `project` 의 파생본에 `transactions.json`(핵심·비교 범위의 취소 확정 아닌 거래, 확정 연결의 `asset_id`)이 들어간다. 범위 규칙이 없으면 파일이 없다. 폰 화면 표시는 이후 조회 작업이다.
 - 운영 주기(데이터 사전 §7.1): 월 1회 `rt-recheck --recent 6` → `rt-load` → `rt-changes`, 분기 `rt-recheck --failed`, 연 1회 전 기간 `rt-fetch --refresh`.
+
+## 목표 매수가·투자판단 기록과 당시 기록 기준 조회 (R4, J5-015A)
+
+```text
+python -m j5 db [--db 경로] record-add <입력.json> [--json]
+python -m j5 db [--db 경로] asof --asset <asset_id> --at YYYY-MM-DD [--known-by YYYY-MM-DD | --as-recorded] [--json]
+```
+
+- `record-add` 는 목표 매수가(`target_price`)·투자판단(`investment_judgment`, 10항목·초안 허용) 기록을 불변 기록으로 넣는다(`schemas/judgment_records.schema.json`, db_schema 9). 수정·승인·철회는 새 기록 + `supersedes_id` 다. 판단일은 `observed_at`(날짜), 정본 반영 시각은 저장소가 부여한다. 근거 문서는 `source_documents` 에 먼저 둔다.
+- `asof` 는 물건의 시점 T 상태를 재구성한다. 기본은 관측 기준(현재 보유 근거 전부). `--known-by K`(또는 `--as-recorded`, K=T)는 정본 기록일이 K 이하인 기록·필지 연결·거래 연결의 검토 결정·거래·취소 표시만으로 만든다. 나중에 넣은 정정·연결 철회·소급 수집한 과거 거래는 당시 보기에 들어가지 않는다. 마지막 확인일과 "현재 경계 위의 과거 속성"(도형 기준일이 T 뒤) 을 표시한다.
+- db_schema 9 는 `records` 표를 다시 만든다(ADR-14). 실제 정본에는 백업을 먼저 만든 뒤 `j5 db status` 로 버전 9·외래키 켜짐·무결성을 확인한다.

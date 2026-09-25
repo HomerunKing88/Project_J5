@@ -71,7 +71,7 @@ def rules_file(tmp_path, doc=RULES) -> Path:
 
 def test_schema_8_migrates_existing_db_and_rules_validation(db, home, tmp_path):
     st = db.status()
-    assert st["db_schema_version"] == S.DB_SCHEMA_VERSION == 8 and st["counts"]["zone_rules"] == 0
+    assert st["db_schema_version"] == S.DB_SCHEMA_VERSION >= 8 and st["counts"]["zone_rules"] == 0
     cols = {r[1] for r in db.conn.execute("PRAGMA table_info(transactions)")}
     assert {"zone", "zone_rule_version"} <= cols
     # 기존 정본(버전 7까지만 적용된 것처럼)을 열면 마이그레이션이 붙는다

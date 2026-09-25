@@ -28,6 +28,7 @@ from j5.collect.rt import DEFAULT_ENDPOINT, DEFAULT_MAX_PAGES, DEFAULT_NUM_ROWS,
 from j5.db.transactions import coverage, coverage_text, load_run, unloaded_run_ids
 from j5.db.txlinks import apply_decisions, candidates, candidates_csv, candidates_text, read_decisions_csv
 from j5.db.zones import apply_rules, changes_since, changes_text, current_rules, load_rules, rules_text, zone_counts
+from j5.db.judgment import apply_record_input, asof, asof_text, load_record_input
 from j5.parcels.convert import Clip, ConvertError, ConvertOptions, convert, convert_text, inspect_source, inspect_text, write_bundle
 from j5.schemas_loader import schema_errors
 
@@ -131,6 +132,15 @@ def _build_parser() -> argparse.ArgumentParser:
     rz.add_argument("action", choices=["show", "apply"])
     rz.add_argument("file", type=Path, nargs="?", help="apply 때 규칙 파일")
     rz.add_argument("--json", action="store_true")
+    ra = dsub.add_parser("record-add", help="목표 매수가·투자판단 기록을 넣는다 (schemas/judgment_records.schema.json, 불변 기록, 수정은 supersedes_id 로 새 기록)")
+    ra.add_argument("file", type=Path, help="입력 JSON (kind: record)")
+    ra.add_argument("--json", action="store_true")
+    ao = dsub.add_parser("asof", help="물건의 시점 T 상태를 재구성한다. --known-by K 를 주면 정본 기록일이 K 이하인 근거·검토결정만 쓴다(당시 기록 기준). --as-recorded 는 K=T")
+    ao.add_argument("--asset", required=True, help="asset_id")
+    ao.add_argument("--at", required=True, help="시점 T (YYYY-MM-DD)")
+    ao.add_argument("--known-by", help="당시 기록 기준일 K (YYYY-MM-DD)")
+    ao.add_argument("--as-recorded", action="store_true", help="K=T 로 당시 기록 기준 보기")
+    ao.add_argument("--json", action="store_true")
     rg = dsub.add_parser("rt-changes", help="어떤 실행 이후의 변경: 새 거래·취소로 바뀜·응답에서 사라짐 (취소·정정 점검 결과 읽기)")
     rg.add_argument("--lawd-cd", required=True)
     rg.add_argument("--since-run", required=True, help="기준 실행 ID (이 실행 뒤의 실행들을 본다)")
@@ -394,6 +404,18 @@ def _db_main(args) -> int:
                 rules = current_rules(db)
                 counts = zone_counts(db)
                 sys.stdout.write(json.dumps({"rules": rules, "counts": counts}, ensure_ascii=False, indent=2) + "\n" if args.json else rules_text(rules, counts))
+                return 0
+            if args.db_command == "record-add":
+                if not args.file.is_file():
+                    print(f"입력 파일이 없음: {args.file}", file=sys.stderr)
+                    return USAGE_ERROR
+                r = apply_record_input(db, load_record_input(args.file))
+                sys.stdout.write(json.dumps(r.to_dict(), ensure_ascii=False, indent=2) + "\n" if args.json else r.to_text())
+                return 0
+            if args.db_command == "asof":
+                known = args.at if args.as_recorded and not args.known_by else args.known_by
+                a = asof(db, args.asset, args.at, known_by=known)
+                sys.stdout.write(json.dumps(a, ensure_ascii=False, indent=2) + "\n" if args.json else asof_text(a))
                 return 0
             if args.db_command == "rt-changes":
                 lawd = check_lawd(args.lawd_cd)

@@ -19,7 +19,8 @@ SUBJECT_TYPES = ("asset", "parcel", "building", "survey_unit")
 TRACKING_STATUSES = ("unreviewed", "background", "watch", "detailed_review", "purchase_ready", "hold", "excluded", "archived")
 RESOLUTION_STATUSES = ("confirmed", "pending")
 DATA_MODES = ("synthetic", "private_real")
-RECORD_TYPES = ("field_observation",)  # R1b. 다른 종류는 해당 릴리스에서 추가한다 (데이터 사전 §2)
+RECORD_TYPES_V1 = ("field_observation",)  # 마이그레이션 1 의 표 정의에 고정된 목록. 기존 마이그레이션 문구는 바꾸지 않는다
+RECORD_TYPES = ("field_observation", "target_price", "investment_judgment")  # 현재 허용 목록: R1b 임장 관측, R4(J5-015A) 목표 매수가·투자판단 (데이터 사전 §2·§8). 표는 마이그레이션 9 에서 재작성
 SOURCE_KINDS = ("official_fact", "field_observation", "broker_report", "asking_price", "personal_estimate", "scenario_assumption", "calculated_result")
 DOCUMENT_KINDS = ("field_package", "official_api", "official_file", "broker_report", "manual_entry")
 VERIFICATION_STATUSES = ("unverified", "verified", "disputed")
@@ -86,7 +87,7 @@ CREATE TABLE records (
   record_id             TEXT NOT NULL PRIMARY KEY CHECK (record_id GLOB '{UUID_GLOB}'),
   subject_id            TEXT NOT NULL,
   subject_type          TEXT NOT NULL CHECK (subject_type {_in(SUBJECT_TYPES)}),
-  record_type           TEXT NOT NULL CHECK (record_type {_in(RECORD_TYPES)}),
+  record_type           TEXT NOT NULL CHECK (record_type {_in(RECORD_TYPES_V1)}),
   source_kind           TEXT NOT NULL CHECK (source_kind {_in(SOURCE_KINDS)}),
   schema_version        TEXT NOT NULL CHECK (schema_version GLOB '[0-9]*.[0-9]*.[0-9]*'),
   payload_json          TEXT NOT NULL CHECK (json_valid(payload_json) AND json_type(payload_json) = 'object'),
@@ -595,6 +596,50 @@ ALTER TABLE transactions ADD COLUMN zone_rule_version INTEGER REFERENCES zone_ru
 CREATE INDEX transactions_by_zone ON transactions (zone, lawd_cd, deal_ymd);
 """
 
+# J5-015A 기록 종류 추가 (데이터 사전 §2 "records 는 종류별 전체 스냅샷", §8 목표 매수가·투자판단).
+# records.record_type 의 CHECK 는 표 정의에 박혀 있어 넓히려면 표를 다시 만들어야 한다. 아래는 SQLite 권장 절차(외래키 검사를 끈 채 새 표 생성 → 복사 → 옛 표 삭제 → 이름 바꾸기 →
+# 인덱스·트리거 재생성 → foreign_key_check)이며 store 가 FK_OFF_MIGRATIONS 에 따라 외래키를 끄고 한 트랜잭션으로 실행한 뒤 검사가 비어야 커밋한다 (ADR-14).
+# 새 표의 자기 참조(supersedes_id)는 이름 바꾸기 뒤의 이름 'records' 를 가리키게 적는다(외래키가 꺼져 있으면 RENAME 이 참조 문구를 고치지 않는다).
+MIGRATION_0009 = f"""
+DROP TRIGGER records_no_update;
+DROP TRIGGER records_no_delete;
+DROP INDEX records_by_subject;
+DROP INDEX records_by_supersedes;
+CREATE TABLE records_new (
+  record_id             TEXT NOT NULL PRIMARY KEY CHECK (record_id GLOB '{UUID_GLOB}'),
+  subject_id            TEXT NOT NULL,
+  subject_type          TEXT NOT NULL CHECK (subject_type {_in(SUBJECT_TYPES)}),
+  record_type           TEXT NOT NULL CHECK (record_type {_in(RECORD_TYPES)}),
+  source_kind           TEXT NOT NULL CHECK (source_kind {_in(SOURCE_KINDS)}),
+  schema_version        TEXT NOT NULL CHECK (schema_version GLOB '[0-9]*.[0-9]*.[0-9]*'),
+  payload_json          TEXT NOT NULL CHECK (json_valid(payload_json) AND json_type(payload_json) = 'object'),
+  observed_at           TEXT NOT NULL,
+  observed_at_precision TEXT NOT NULL CHECK (observed_at_precision {_in(PRECISIONS)}),
+  device_created_at     TEXT,
+  source_published_at   TEXT,
+  collected_at          TEXT,
+  recorded_at           TEXT NOT NULL CHECK (recorded_at GLOB '{UTC_GLOB}'),
+  effective_from        TEXT,
+  effective_to          TEXT,
+  supersedes_id         TEXT REFERENCES records (record_id),
+  CHECK (supersedes_id IS NULL OR supersedes_id <> record_id),
+  CHECK ((observed_at_precision = 'date') = (observed_at GLOB '{DATE_GLOB}')),
+  FOREIGN KEY (subject_id, subject_type) REFERENCES subjects (subject_id, subject_type)
+) STRICT;
+INSERT INTO records_new (record_id, subject_id, subject_type, record_type, source_kind, schema_version, payload_json, observed_at, observed_at_precision,
+                         device_created_at, source_published_at, collected_at, recorded_at, effective_from, effective_to, supersedes_id)
+  SELECT record_id, subject_id, subject_type, record_type, source_kind, schema_version, payload_json, observed_at, observed_at_precision,
+         device_created_at, source_published_at, collected_at, recorded_at, effective_from, effective_to, supersedes_id FROM records;
+DROP TABLE records;
+ALTER TABLE records_new RENAME TO records;
+CREATE INDEX records_by_subject ON records (subject_id, record_type, observed_at);
+CREATE INDEX records_by_supersedes ON records (supersedes_id);
+CREATE TRIGGER records_no_update BEFORE UPDATE ON records
+BEGIN SELECT RAISE(ABORT, 'records 는 불변이다. 정정은 새 기록(supersedes_id)으로 추가한다'); END;
+CREATE TRIGGER records_no_delete BEFORE DELETE ON records
+BEGIN SELECT RAISE(ABORT, 'records 는 삭제하지 않는다. 개인정보 오입력은 별도 절차로 처리한다'); END;
+"""
+
 # (버전, 이름, SQL). 새 릴리스의 테이블은 새 항목으로 추가하고 기존 항목은 고치지 않는다.
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "r1b_minimum", MIGRATION_0001),
@@ -605,6 +650,9 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (6, "r3_transactions", MIGRATION_0006),
     (7, "r3_links", MIGRATION_0007),
     (8, "r3_zones", MIGRATION_0008),
+    (9, "r4_record_types", MIGRATION_0009),
 )
+# 표 재작성이 필요한 마이그레이션: 외래키 검사를 끈 채 한 트랜잭션으로 실행하고 foreign_key_check 가 비어야 커밋한다 (store._migrate).
+FK_OFF_MIGRATIONS = frozenset({9})
 DB_SCHEMA_VERSION = MIGRATIONS[-1][0]
 MIN_SQLITE_VERSION = (3, 38, 0)  # STRICT 테이블(3.37)과 내장 json_valid/json_type(3.38)
