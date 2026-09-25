@@ -338,6 +338,7 @@ def _import_open(db: Db, src, path: Path, data_home: Path, limits: Limits, resul
                         "attachment_id": str(uuid.uuid5(_NS, f"attachment:{ev['event_id']}:{ref['sha256']}")),
                         "rel_path": photo_rel_path(ref["sha256"], ref["path"].rsplit(".", 1)[-1]), "sha256": ref["sha256"], "mime": ref["mime"],
                         "bytes": ref["bytes"], "tags": list(ref["tags"]), "taken_at": ref.get("taken_at"),  # 촬영 시각은 폰이 기록한 값을 그대로 보존
+                        "viewpoint_id": ref.get("viewpoint_id"), "heading_deg": ref.get("heading_deg"), "previous_photo_sha256": ref.get("previous_photo_sha256"),  # 연차 비교 (J5-015B)
                     } for ref in ev["attachment_refs"]]
                     db.insert_record(rec, evidence=[{"document_id": doc_id, "locator": f"{OBSERVATIONS}#event_id={ev['event_id']}"}], attachments=atts)
                     if ev.get("route_version_id") or ev.get("frame_version_id"):

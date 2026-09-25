@@ -7,7 +7,7 @@
 ## 파일 (package_schema 1.0.0)
 
 - `assets_seed.schema.json`: R1a 임시 정본 `assets.seed.json`. 위치점 또는 주소 중 하나 이상 필수, `notes`는 null 허용·생략 불가.
-- `observation_event.schema.json`: `observations.jsonl` 한 행. R1은 `field_observation`만 허용한다. 선택 필드도 `null`로 명시한다. 변화 확인 시 사진 또는 설명 하나를 요구한다.
+- `observation_event.schema.json`: `observations.jsonl` 한 행. R1은 `field_observation`만 허용한다. 선택 필드도 `null`로 명시한다. 변화 확인 시 사진 또는 설명 하나를 요구한다. 첨부의 `viewpoint_id`·`heading_deg`·`previous_photo_sha256` 은 반복 촬영(연차 비교, J5-015B)용 선택 키이며 값이 있을 때만 넣는다(`null` 로 명시하지 않는다).
 - `package_manifest.schema.json`: `manifest.json`. 경로는 `observations.jsonl`과 `photos/<sha256>.<jpg|png|webp>`만 허용한다.
 
 ## 파일 (projection_schema 1.0.0, R1b J5-011)

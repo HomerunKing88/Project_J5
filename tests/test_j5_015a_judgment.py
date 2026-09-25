@@ -105,7 +105,7 @@ def test_records_table_rebuild_keeps_data_and_constraints(tmp_path, home, monkey
     d2 = Db.open(path)
     try:
         st = d2.status()
-        assert st["ok"] and st["db_schema_version"] == 9 and st["foreign_keys"] == 1
+        assert st["ok"] and st["db_schema_version"] == S.DB_SCHEMA_VERSION and st["foreign_keys"] == 1
         assert {t: d2.conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in TABLES} == before
         assert [dict(r) for r in d2.conn.execute("SELECT * FROM records ORDER BY record_id")] == recs_before
         names = {r[0] for r in d2.conn.execute("SELECT name FROM sqlite_master WHERE tbl_name = 'records'")}
@@ -141,7 +141,7 @@ def test_fk_off_migration_rolls_back_and_restores_fk_on_failure(home, monkeypatc
     monkeypatch.undo()
     d3 = Db.open(path)
     try:
-        assert d3.schema_version() == 9 and d3.status()["ok"] and d3.status()["foreign_keys"] == 1, "실패한 시도는 되돌려지고 정상 마이그레이션이 다시 붙는다"
+        assert d3.schema_version() == S.DB_SCHEMA_VERSION and d3.status()["ok"] and d3.status()["foreign_keys"] == 1, "실패한 시도는 되돌려지고 정상 마이그레이션이 다시 붙는다"
     finally:
         d3.close()
 

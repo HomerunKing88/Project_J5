@@ -107,7 +107,7 @@ def _read_snapshot(db: Db, *, generated_at: str) -> dict:
         assets = db.list_assets()
         records = [dict(r) for r in db.conn.execute("SELECT * FROM records ORDER BY observed_at, record_id")]
         atts: dict[str, list[dict]] = {}
-        for r in db.conn.execute("SELECT record_id, sha256, mime, bytes, tags_json, taken_at, rel_path FROM attachments ORDER BY record_id, sha256"):
+        for r in db.conn.execute("SELECT record_id, sha256, mime, bytes, tags_json, taken_at, rel_path, viewpoint_id, heading_deg, previous_photo_sha256 FROM attachments ORDER BY record_id, sha256"):
             atts.setdefault(r["record_id"], []).append(dict(r))
         parcels = parcels_bundle_from_db(db, generated_at=generated_at, source_dataset_version=version) if db._has_table("parcels") else None
         from j5.db.zones import transactions_for_projection  # 순환 import 방지
@@ -167,6 +167,9 @@ def _generate(snapshot: dict, out: Path, *, photos: bool, data_home: Path, run_i
             n_atts += 1
             ext = at["rel_path"].rsplit(".", 1)[-1]
             entry = {"sha256": at["sha256"], "mime": at["mime"], "bytes": at["bytes"], "tags": json.loads(at["tags_json"]), "taken_at": at["taken_at"]}
+            for k in ("viewpoint_id", "heading_deg", "previous_photo_sha256"):  # 연차 비교 필드는 있을 때만 (없는 파생본 행은 그대로)
+                if at[k] is not None:
+                    entry[k] = at[k]
             if photos:
                 pkg_path = f"photos/{at['sha256']}.{ext}"
                 entry["path"] = pkg_path

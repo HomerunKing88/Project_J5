@@ -640,6 +640,22 @@ CREATE TRIGGER records_no_delete BEFORE DELETE ON records
 BEGIN SELECT RAISE(ABORT, 'records 는 삭제하지 않는다. 개인정보 오입력은 별도 절차로 처리한다'); END;
 """
 
+# J5-015B 사진 연차 비교 (데이터 사전 §6 "반복 촬영은 viewpoint_id·방향·이전 사진 참조를 선택 입력", 릴리스 계획 §8 R4).
+# attachments 에 촬영 지점·방향·이전 사진 참조 열을 더하고, 이미 반영된 첨부는 수입 대장(import_events)의 고정 행 바이트에서 소급해 채운다.
+MIGRATION_0010 = f"""
+ALTER TABLE attachments ADD COLUMN viewpoint_id TEXT CHECK (viewpoint_id IS NULL OR length(viewpoint_id) > 0);
+ALTER TABLE attachments ADD COLUMN heading_deg REAL CHECK (heading_deg IS NULL OR (heading_deg >= 0 AND heading_deg < 360));
+ALTER TABLE attachments ADD COLUMN previous_photo_sha256 TEXT CHECK (previous_photo_sha256 IS NULL OR previous_photo_sha256 GLOB '{SHA256_GLOB}');
+UPDATE attachments SET
+  viewpoint_id = (SELECT json_extract(ref.value, '$.viewpoint_id') FROM import_events ie, json_each(CAST(ie.line AS TEXT), '$.attachment_refs') AS ref
+                  WHERE ie.outcome = 'inserted' AND ie.record_id = attachments.record_id AND json_extract(ref.value, '$.sha256') = attachments.sha256 LIMIT 1),
+  heading_deg = (SELECT json_extract(ref.value, '$.heading_deg') FROM import_events ie, json_each(CAST(ie.line AS TEXT), '$.attachment_refs') AS ref
+                 WHERE ie.outcome = 'inserted' AND ie.record_id = attachments.record_id AND json_extract(ref.value, '$.sha256') = attachments.sha256 LIMIT 1),
+  previous_photo_sha256 = (SELECT json_extract(ref.value, '$.previous_photo_sha256') FROM import_events ie, json_each(CAST(ie.line AS TEXT), '$.attachment_refs') AS ref
+                           WHERE ie.outcome = 'inserted' AND ie.record_id = attachments.record_id AND json_extract(ref.value, '$.sha256') = attachments.sha256 LIMIT 1);
+CREATE INDEX attachments_by_viewpoint ON attachments (viewpoint_id);
+"""
+
 # (버전, 이름, SQL). 새 릴리스의 테이블은 새 항목으로 추가하고 기존 항목은 고치지 않는다.
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "r1b_minimum", MIGRATION_0001),
@@ -651,6 +667,7 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (7, "r3_links", MIGRATION_0007),
     (8, "r3_zones", MIGRATION_0008),
     (9, "r4_record_types", MIGRATION_0009),
+    (10, "r4_photo_series", MIGRATION_0010),
 )
 # 표 재작성이 필요한 마이그레이션: 외래키 검사를 끈 채 한 트랜잭션으로 실행하고 foreign_key_check 가 비어야 커밋한다 (store._migrate).
 FK_OFF_MIGRATIONS = frozenset({9})

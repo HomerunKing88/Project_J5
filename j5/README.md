@@ -175,3 +175,13 @@ python -m j5 db [--db 경로] asof --asset <asset_id> --at YYYY-MM-DD [--known-b
 - `record-add` 는 목표 매수가(`target_price`)·투자판단(`investment_judgment`, 10항목·초안 허용) 기록을 불변 기록으로 넣는다(`schemas/judgment_records.schema.json`, db_schema 9). 수정·승인·철회는 새 기록 + `supersedes_id` 다. 판단일은 `observed_at`(날짜), 정본 반영 시각은 저장소가 부여한다. 근거 문서는 `source_documents` 에 먼저 둔다.
 - `asof` 는 물건의 시점 T 상태를 재구성한다. 기본은 관측 기준(현재 보유 근거 전부). `--known-by K`(또는 `--as-recorded`, K=T)는 정본 기록일이 K 이하인 기록·필지 연결·거래 연결의 검토 결정·거래·취소 표시만으로 만든다. 나중에 넣은 정정·연결 철회·소급 수집한 과거 거래는 당시 보기에 들어가지 않는다. 마지막 확인일과 "현재 경계 위의 과거 속성"(도형 기준일이 T 뒤) 을 표시한다.
 - db_schema 9 는 `records` 표를 다시 만든다(ADR-14). 실제 정본에는 백업을 먼저 만든 뒤 `j5 db status` 로 버전 9·외래키 켜짐·무결성을 확인한다.
+
+## 사진 연차 비교 (R4, J5-015B)
+
+```text
+python -m j5 db [--db 경로] photo-series --asset <asset_id> [--tag front|ground_floor|lease_ad|construction|road|parking|adjacency] [--export] [--data-home 경로] [--json]
+```
+
+- 물건의 사진(정본 `attachments`, db_schema 10)을 촬영 지점(`viewpoint_id`) → 이전 사진 사슬(`previous_photo_sha256`) → 태그 조합 순으로 묶고, 묶음마다 연도별 첫 사진·인접 연도 비교 쌍·빠진 해를 보인다. 관측하지 않은 해는 비워 두고 보간하지 않는다. 정정된 관측의 사진은 `정정됨` 으로 표시한다.
+- `--export` 는 `J5_DATA_HOME/exports/private/photo_series/<물건>-<id 앞 8자>/<묶음>/<날짜>-<sha 앞 8자>.<ext>` 로 사진을 해시 검증하며 복사하고 `index.json` 을 쓴다. 이미 있는 파일은 같은 내용이면 건너뛰고 다른 내용이면 덮어쓰지 않고 문제로 보고한다(종료 코드 1). 내보낸 사진은 실데이터이며 저장소·공개 배포에 넣지 않는다.
+- 폰 앱이 사진마다 촬영 지점·방향·이전 사진을 선택 입력한다(J5-006 이벤트 바이트는 그대로). db_schema 10 은 이미 반영된 첨부를 수입 대장의 행 바이트에서 소급해 채운다.

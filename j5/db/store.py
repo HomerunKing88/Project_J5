@@ -392,12 +392,30 @@ class Db:
         taken = att.get("taken_at")
         if taken is not None and parse_date(taken) is None and parse_datetime(taken) is None:
             errs.append("attachment.taken_at: 날짜 또는 시간대 있는 시각 또는 null")
+        vp = att.get("viewpoint_id")
+        if vp is not None and (not isinstance(vp, str) or not vp.strip() or len(vp) > 100):
+            errs.append("attachment.viewpoint_id: 1~100자 문자열 또는 null")
+        hd = att.get("heading_deg")
+        if hd is not None and (isinstance(hd, bool) or not isinstance(hd, (int, float)) or not (0 <= float(hd) < 360)):
+            errs.append("attachment.heading_deg: 0 이상 360 미만 또는 null")
+        prev = att.get("previous_photo_sha256")
+        if prev is not None and (not is_sha256(prev) or prev == att.get("sha256")):
+            errs.append("attachment.previous_photo_sha256: 다른 사진의 sha256 또는 null")
+        # 촬영 지점·방향·이전 사진 열은 db_schema 10 부터다. 열이 없는 정본(마이그레이션 시험)에는 값이 없을 때만 넣는다
+        series_cols = ("viewpoint_id", "heading_deg", "previous_photo_sha256")
+        has_series = set(series_cols) <= self._columns("attachments")
+        if not has_series and any(att.get(c) is not None for c in series_cols):
+            errs.append("attachment.viewpoint_id/heading_deg/previous_photo_sha256 는 db_schema 10 이상에서만 저장한다")
         if errs:
             raise ValidationError(errs)
+        cols = ["attachment_id", "record_id", "rel_path", "sha256", "mime", "bytes", "taken_at", "tags_json", "original_ref", "recorded_at"] + (list(series_cols) if has_series else [])
         self.conn.execute(
-            "INSERT INTO attachments (attachment_id, record_id, rel_path, sha256, mime, bytes, taken_at, tags_json, original_ref, recorded_at)"
-            " VALUES (:attachment_id, :record_id, :rel_path, :sha256, :mime, :bytes, :taken_at, :tags_json, :original_ref, :recorded_at)",
-            {"taken_at": None, "original_ref": None, **att, "record_id": record_id, "tags_json": json.dumps(tags, ensure_ascii=False), "recorded_at": self.now()})
+            f"INSERT INTO attachments ({', '.join(cols)}) VALUES ({', '.join(':' + c for c in cols)})",
+            {"taken_at": None, "original_ref": None, "viewpoint_id": None, "heading_deg": None, "previous_photo_sha256": None, **att, "record_id": record_id,
+             "tags_json": json.dumps(tags, ensure_ascii=False), "recorded_at": self.now()})
+
+    def _columns(self, table: str) -> set[str]:
+        return {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
 
     # ---- 조회 ----
     def get_record(self, record_id: str) -> dict | None:

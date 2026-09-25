@@ -9,6 +9,7 @@ export const PHOTO_TAGS = ["front", "ground_floor", "lease_ad", "construction", 
 export const PHOTO_TAG_LABEL = { front: "전면", ground_floor: "1층", lease_ad: "임대 광고", construction: "공사", road: "도로", parking: "주차", adjacency: "인접 관계" };
 export const PHOTO_LIMIT = 20_000_000;
 export const NOTE_MAX = 2000;
+export const VIEWPOINT_MAX = 100;
 
 const DT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -41,6 +42,10 @@ export function buildEvent({ eventId, assetId, observedAt, precision, deviceCrea
     attachment_refs: attachments.map((a) => {
       const ref = { sha256: a.sha256, path: `photos/${a.sha256}.${a.ext}`, mime: EXT_MIME[a.ext], bytes: a.bytes, tags: [...a.tags] };
       if (a.taken_at) ref.taken_at = a.taken_at;
+      // 반복 촬영(연차 비교)용 선택 입력: 촬영 지점·방향·이전 사진 (데이터 사전 §6). 없으면 키를 넣지 않아 기존 이벤트 바이트가 바뀌지 않는다
+      if (a.viewpoint_id) ref.viewpoint_id = a.viewpoint_id;
+      if (a.heading_deg !== null && a.heading_deg !== undefined && a.heading_deg !== "") ref.heading_deg = Number(a.heading_deg);
+      if (a.previous_photo_sha256) ref.previous_photo_sha256 = a.previous_photo_sha256;
       return ref;
     }),
   };
@@ -74,6 +79,9 @@ export function validateEvent(ev) {
       if (EXT_MIME[extOf(r.path)] !== r.mime) errs.push("attachment mime");
       if (!Number.isInteger(r.bytes) || r.bytes < 1 || r.bytes > PHOTO_LIMIT) errs.push("attachment bytes");
       if (!Array.isArray(r.tags) || r.tags.some((t) => !PHOTO_TAGS.includes(t)) || new Set(r.tags).size !== r.tags.length) errs.push("attachment tags");
+      if ("viewpoint_id" in r && (typeof r.viewpoint_id !== "string" || !/\S/.test(r.viewpoint_id) || r.viewpoint_id.length > VIEWPOINT_MAX)) errs.push("attachment viewpoint_id");
+      if ("heading_deg" in r && (typeof r.heading_deg !== "number" || !Number.isFinite(r.heading_deg) || r.heading_deg < 0 || r.heading_deg >= 360)) errs.push("attachment heading_deg");
+      if ("previous_photo_sha256" in r && (!SHA_RE.test(r.previous_photo_sha256) || r.previous_photo_sha256 === r.sha256)) errs.push("attachment previous_photo_sha256");
       const key = canonicalize(r);
       if (seen.has(key)) errs.push("attachment 중복");
       seen.add(key);

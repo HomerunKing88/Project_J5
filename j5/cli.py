@@ -29,6 +29,7 @@ from j5.db.transactions import coverage, coverage_text, load_run, unloaded_run_i
 from j5.db.txlinks import apply_decisions, candidates, candidates_csv, candidates_text, read_decisions_csv
 from j5.db.zones import apply_rules, changes_since, changes_text, current_rules, load_rules, rules_text, zone_counts
 from j5.db.judgment import apply_record_input, asof, asof_text, load_record_input
+from j5.db.photos import export_series, photo_series, photo_tags, series_text
 from j5.parcels.convert import Clip, ConvertError, ConvertOptions, convert, convert_text, inspect_source, inspect_text, write_bundle
 from j5.schemas_loader import schema_errors
 
@@ -141,6 +142,12 @@ def _build_parser() -> argparse.ArgumentParser:
     ao.add_argument("--known-by", help="당시 기록 기준일 K (YYYY-MM-DD)")
     ao.add_argument("--as-recorded", action="store_true", help="K=T 로 당시 기록 기준 보기")
     ao.add_argument("--json", action="store_true")
+    ps = dsub.add_parser("photo-series", help="물건의 사진을 촬영 지점(viewpoint_id) → 이전 사진 사슬 → 태그 순으로 시계열 묶음을 만들고 연차 비교 쌍을 낸다. --export 는 묶음별 폴더로 해시 검증 복사(exports/private/photo_series, 덮어쓰지 않음)")
+    ps.add_argument("--asset", required=True, help="asset_id")
+    ps.add_argument("--tag", help="이 태그가 붙은 사진만 (front, ground_floor, lease_ad, construction, road, parking, adjacency)")
+    ps.add_argument("--export", action="store_true", help="묶음별 폴더로 사진을 복사하고 index.json 을 쓴다 (실데이터 홈 안, 저장소에 넣지 않는다)")
+    ps.add_argument("--data-home", type=Path, help="사진이 있는 실데이터 홈. 생략 시 J5_DATA_HOME")
+    ps.add_argument("--json", action="store_true")
     rg = dsub.add_parser("rt-changes", help="어떤 실행 이후의 변경: 새 거래·취소로 바뀜·응답에서 사라짐 (취소·정정 점검 결과 읽기)")
     rg.add_argument("--lawd-cd", required=True)
     rg.add_argument("--since-run", required=True, help="기준 실행 ID (이 실행 뒤의 실행들을 본다)")
@@ -416,6 +423,26 @@ def _db_main(args) -> int:
                 known = args.at if args.as_recorded and not args.known_by else args.known_by
                 a = asof(db, args.asset, args.at, known_by=known)
                 sys.stdout.write(json.dumps(a, ensure_ascii=False, indent=2) + "\n" if args.json else asof_text(a))
+                return 0
+            if args.db_command == "photo-series":
+                if args.tag is not None and args.tag not in photo_tags():
+                    print(f"알 수 없는 사진 태그 {args.tag!r}. 허용: {', '.join(photo_tags())}", file=sys.stderr)
+                    return USAGE_ERROR
+                if args.export:
+                    home = _data_home(args)
+                    if home is None:
+                        return USAGE_ERROR
+                    r = export_series(db, home, args.asset, tag=args.tag)
+                    if args.json:
+                        sys.stdout.write(json.dumps(r, ensure_ascii=False, indent=2) + "\n")
+                    else:
+                        print(f"사진 시계열 내보내기 → {r['dest']}: 묶음 {r['groups']}개, 사진 {r['photos']}장, 복사 {r['copied']}, 건너뜀(같은 내용) {r['skipped']}, 문제 {len(r['problems'])}")
+                        for pmsg in r["problems"]:
+                            print(f"  [문제] {pmsg}")
+                        print("내보낸 사진은 실데이터다. 저장소·공개 배포에 넣지 않는다. 내보내기 성공은 백업 완료가 아니다")
+                    return 0 if not r["problems"] else 1
+                s = photo_series(db, args.asset, tag=args.tag)
+                sys.stdout.write(json.dumps(s, ensure_ascii=False, indent=2) + "\n" if args.json else series_text(s))
                 return 0
             if args.db_command == "rt-changes":
                 lawd = check_lawd(args.lawd_cd)

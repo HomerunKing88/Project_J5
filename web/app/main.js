@@ -4,7 +4,7 @@ import { sniffImage, SUPPORTED } from "./sniff.js";
 import { sha256Hex } from "./hash.js";
 import { uuid4, isUuid } from "./uuid.js";
 import { isoWithOffset, fromDatetimeLocal, toDatetimeLocal, localDate } from "./time.js";
-import { buildEvent, validateEvent, lineBytes, PHOTO_TAGS, PHOTO_TAG_LABEL, CHANGE_STATUS_LABEL, PHOTO_LIMIT } from "./event.js";
+import { buildEvent, validateEvent, lineBytes, PHOTO_TAGS, PHOTO_TAG_LABEL, CHANGE_STATUS_LABEL, PHOTO_LIMIT, VIEWPOINT_MAX } from "./event.js";
 import { validateSeed } from "./seed.js";
 import { validateParcels, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea } from "./parcels.js";
 import { selectRecords, planBatches, buildPackage, hasRemainingBatches, studyIdError } from "./export.js";
@@ -12,7 +12,7 @@ import { selectRecords, planBatches, buildPackage, hasRemainingBatches, studyIdE
 
 export const APP_VERSION = "0.1.0";
 const $ = (id) => document.getElementById(id);
-const state = { store: null, assets: [], target: null, photos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, seedLoadedAt: null };
+const state = { store: null, assets: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, seedLoadedAt: null };
 
 function text(el, value, cls) {
   el.textContent = value;
@@ -234,6 +234,8 @@ function mapNote(c) {
 function startObservation(asset) {
   state.target = asset;
   state.photos = [];
+  state.prevPhotos = [];
+  loadPrevPhotos(asset.asset_id);
   mapCall((m) => m.select(asset.asset_id));
   $("target-label").textContent = asset.label;
   $("change-status").value = "";
@@ -252,7 +254,7 @@ async function addPhotos(input) {
   for (const file of files) {
     const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
     const ext = sniffImage(head);
-    const item = { name: file.name, bytes: file.size, ext, tags: new Set(), error: null, blob: null, sha256: null };
+    const item = { name: file.name, bytes: file.size, ext, tags: new Set(), error: null, blob: null, sha256: null, viewpoint_id: "", heading_deg: "", previous_photo_sha256: "" };
     if (ext === "heic") item.error = "HEIC 는 미지원. 사진 앱에서 JPEG 로 변환해 다시 선택 (이 사진은 저장하지 않음)";
     else if (!SUPPORTED.has(ext)) item.error = "JPEG/PNG/WebP 가 아님";
     else if (file.size > PHOTO_LIMIT) item.error = `20MB 초과 (${file.size} 바이트)`;
@@ -281,10 +283,48 @@ function renderPhotos() {
         tags.append(el("label", {}, box2, ` ${PHOTO_TAG_LABEL[t]}`));
       }
       box.append(tags);
+      // 반복 촬영(연차 비교)용 선택 입력. 이전 사진은 이 기기에 저장된 같은 물건의 사진 중에서 고른다
+      const series = el("div", { class: "series" });
+      const vp = el("input", { class: "viewpoint", type: "text", maxlength: String(VIEWPOINT_MAX), placeholder: "예: 전면-남측", value: p.viewpoint_id });
+      vp.addEventListener("input", () => { p.viewpoint_id = vp.value.trim(); });
+      const hd = el("input", { class: "heading", type: "number", min: "0", max: "359", step: "1", inputmode: "numeric", value: p.heading_deg });
+      hd.addEventListener("input", () => { p.heading_deg = hd.value === "" ? "" : Number(hd.value); });
+      const prev = el("select", { class: "previous" });
+      prev.append(el("option", { value: "", text: state.prevPhotos.length ? "없음" : "없음 (이 기기에 이 물건의 이전 사진 없음)" }));
+      for (const q of state.prevPhotos) {
+        if (q.sha256 === p.sha256) continue;
+        prev.append(el("option", { value: q.sha256, text: q.label, selected: q.sha256 === p.previous_photo_sha256 }));
+      }
+      prev.addEventListener("change", () => {
+        p.previous_photo_sha256 = prev.value;
+        const q = state.prevPhotos.find((x) => x.sha256 === prev.value);
+        if (q?.viewpoint_id && !p.viewpoint_id) { p.viewpoint_id = q.viewpoint_id; vp.value = q.viewpoint_id; }
+      });
+      series.append(el("label", { text: "촬영 지점 (선택) " }, vp), el("label", { text: "방향 ° (선택) " }, hd), el("label", { text: "이전 사진 (선택) " }, prev));
+      box.append(series);
     }
     box.append(el("button", { text: "제거", onclick: () => { state.photos.splice(idx, 1); renderPhotos(); } }));
     return box;
   }));
+}
+
+/** 이 기기에 저장된 같은 물건의 사진 목록 (연차 비교의 '이전 사진' 후보). 오래된 것부터. */
+async function loadPrevPhotos(assetId) {
+  try {
+    const recs = (await state.store.listEvents()).filter((r) => r.asset_id === assetId);
+    const out = [];
+    for (const r of recs) {
+      for (const ref of r.event?.attachment_refs ?? []) {
+        const when = (ref.taken_at ?? r.event.observed_at ?? "").slice(0, 10);
+        const tags = (ref.tags ?? []).map((k) => PHOTO_TAG_LABEL[k] ?? k).join("·") || "태그 없음";
+        out.push({ sha256: ref.sha256, viewpoint_id: ref.viewpoint_id ?? "", when, label: `${when} ${tags}${ref.viewpoint_id ? " · " + ref.viewpoint_id : ""} · ${ref.sha256.slice(0, 8)}` });
+      }
+    }
+    out.sort((a, b) => (a.when < b.when ? -1 : a.when > b.when ? 1 : 0));
+    if (state.target?.asset_id === assetId) { state.prevPhotos = out; if (state.photos.length) renderPhotos(); }
+  } catch (e) {
+    state.prevPhotos = [];
+  }
 }
 
 async function saveObservation() {
@@ -325,7 +365,8 @@ async function doSaveObservation() {
   const ev = buildEvent({
     eventId: uuid4(), assetId: state.target.asset_id, observedAt, precision: dateOnly ? "date" : "datetime",
     deviceCreatedAt: isoWithOffset(), routeVersionId: routeVersionId || null, changeStatus: status, note: note.trim() ? note : null,
-    attachments: [...uniq.values()].map((p) => ({ sha256: p.sha256, ext: p.ext, bytes: p.bytes, tags: [...p.tags] })),
+    attachments: [...uniq.values()].map((p) => ({ sha256: p.sha256, ext: p.ext, bytes: p.bytes, tags: [...p.tags], viewpoint_id: p.viewpoint_id || "",
+                                                  heading_deg: p.heading_deg === "" ? null : p.heading_deg, previous_photo_sha256: p.previous_photo_sha256 || "" })),
   });
   const errs = validateEvent(ev);
   if (errs.length) return text($("observe-note"), "저장 불가: " + errs.join(", "), "bad");

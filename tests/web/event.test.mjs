@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { canonicalize, lineBytes, buildEvent, validateEvent, PHOTO_TAGS, CHANGE_STATUS } from "../../web/app/event.js";
+import { canonicalize, lineBytes, buildEvent, validateEvent, PHOTO_TAGS, CHANGE_STATUS, VIEWPOINT_MAX } from "../../web/app/event.js";
 import { uuid4, isUuid } from "../../web/app/uuid.js";
 import { isoWithOffset, fromDatetimeLocal, localDate } from "../../web/app/time.js";
 
@@ -69,6 +69,41 @@ test("validateEvent 거절 규칙", () => {
   }
   assert.deepEqual(CHANGE_STATUS, ["change_observed", "no_change", "hard_to_confirm"]);
   assert.equal(PHOTO_TAGS.length, 7);
+});
+
+test("촬영 지점·방향·이전 사진 (J5-015B): 값이 있을 때만 키를 넣고, 없으면 기존 바이트가 그대로다", () => {
+  const args = () => ({
+    eventId: "9d7a5d4b-9c46-4a4b-8d1a-0f3f8e6a2b11", assetId: "3f7a0c02-1a1e-4a33-9c5c-7d2f0a6b1e02", observedAt: "2026-09-25", precision: "date",
+    deviceCreatedAt: "2026-09-25T10:00:00+09:00", changeStatus: "no_change", note: null,
+    attachments: [{ sha256: "a".repeat(64), ext: "png", bytes: 10, tags: ["front"], viewpoint_id: "", heading_deg: "", previous_photo_sha256: "" }],
+  });
+  const plain = buildEvent(args());
+  assert.deepEqual(Object.keys(plain.attachment_refs[0]).sort(), ["bytes", "mime", "path", "sha256", "tags"], "빈 값은 키 자체를 넣지 않는다");
+  const legacy = buildEvent({ ...args(), attachments: [{ sha256: "a".repeat(64), ext: "png", bytes: 10, tags: ["front"] }] });
+  assert.deepEqual(lineBytes(plain), lineBytes(legacy), "선택 필드가 없으면 J5-006 이벤트 바이트와 같다");
+  const withSeries = buildEvent({ ...args(), attachments: [{ sha256: "a".repeat(64), ext: "png", bytes: 10, tags: ["front"], viewpoint_id: "전면-남측", heading_deg: 180, previous_photo_sha256: "b".repeat(64) }] });
+  const ref = withSeries.attachment_refs[0];
+  assert.equal(ref.viewpoint_id, "전면-남측");
+  assert.equal(ref.heading_deg, 180);
+  assert.equal(ref.previous_photo_sha256, "b".repeat(64));
+  assert.deepEqual(validateEvent(withSeries), []);
+  assert.equal(buildEvent({ ...args(), attachments: [{ sha256: "a".repeat(64), ext: "png", bytes: 10, tags: [], heading_deg: 0 }] }).attachment_refs[0].heading_deg, 0, "방향 0° 는 값이다");
+  const cases = [
+    [(r) => { r.viewpoint_id = "   "; }, "viewpoint_id"],
+    [(r) => { r.viewpoint_id = "x".repeat(VIEWPOINT_MAX + 1); }, "viewpoint_id"],
+    [(r) => { r.viewpoint_id = 3; }, "viewpoint_id"],
+    [(r) => { r.heading_deg = 360; }, "heading_deg"],
+    [(r) => { r.heading_deg = -1; }, "heading_deg"],
+    [(r) => { r.heading_deg = "180"; }, "heading_deg"],
+    [(r) => { r.previous_photo_sha256 = "a".repeat(64); }, "previous_photo_sha256"],
+    [(r) => { r.previous_photo_sha256 = "zz"; }, "previous_photo_sha256"],
+  ];
+  for (const [mutate, expect] of cases) {
+    const e = buildEvent(args());
+    mutate(e.attachment_refs[0]);
+    const errs = validateEvent(e);
+    assert.ok(errs.some((m) => m.includes(expect)), `${expect}: ${errs}`);
+  }
 });
 
 test("uuid4 형식", () => {
