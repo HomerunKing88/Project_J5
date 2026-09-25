@@ -1,0 +1,465 @@
+{
+  "kind": "plans",
+  "asset_label": "가상 물건 1",
+  "composition_as_of": "2026-09-01",
+  "plans": [
+    {
+      "plan_id": "keep",
+      "plan_kind": "keep",
+      "label": "현상 유지 임대",
+      "equity": {
+        "kind": "equity",
+        "asset_label": "가상 물건 1",
+        "scenario": "가상 현상 유지",
+        "price": {
+          "price_input_basis": "gross_contract",
+          "price_input_krw": 4000000000,
+          "deposit_already_deducted_krw": null,
+          "prepaid_krw": null,
+          "vat_included": false,
+          "settlement_basis": "가상 계약서 총액"
+        },
+        "loan": {
+          "amount_krw": 2400000000,
+          "kind": "scenario",
+          "ltv_assumption_pct": 60,
+          "collateral_basis": "purchase_price_assumption",
+          "deposit_netted_in_limit": false
+        },
+        "assumed_tenant_deposits": {
+          "amount_krw": 100000000,
+          "basis": "가상 임대차 승계 보증금"
+        },
+        "costs": {
+          "acquisition_tax": {
+            "amount_krw": 184000000,
+            "basis": "가상 취득세 4.6%"
+          },
+          "transaction_costs": {
+            "amount_krw": 16000000,
+            "basis": "가상 중개·실사",
+            "vat_included": true
+          },
+          "prepaid_taxes": {
+            "amount_krw": 0,
+            "basis": "가상: 별도 선지급 세액 없음"
+          },
+          "initial_repairs": {
+            "amount_krw": 0,
+            "basis": "가상: 초기 수선 없음"
+          },
+          "reserve_cash": {
+            "amount_krw": 0,
+            "basis": "가상: 예비현금은 사업기간 계산에서"
+          }
+        },
+        "note": "데이터 사전 §10.1 가상 검증: P 40억, L 24억, D 1억, 기타 2억 → 17억"
+      },
+      "cash": {
+        "kind": "cash",
+        "asset_label": "가상 물건 1",
+        "scenario": "가상 현상 유지",
+        "period_unit": "month",
+        "flows": [
+          {
+            "t": 0,
+            "amount_krw": -1700000000,
+            "kind": "purchase",
+            "note": "가상 매입 필요자기자본"
+          },
+          {
+            "t": 1,
+            "amount_krw": 200000000,
+            "kind": "rent",
+            "note": "가상 임대"
+          },
+          {
+            "t": 1,
+            "amount_krw": -100000000,
+            "kind": "deposit_return",
+            "note": "가상 승계 보증금 반환"
+          },
+          {
+            "t": 2,
+            "amount_krw": 200000000,
+            "kind": "rent",
+            "note": "가상 임대"
+          }
+        ],
+        "reserve_cash_krw": 100000000,
+        "reserve_in_flows": false
+      },
+      "appraisal": {
+        "amount_krw": 3600000000,
+        "basis": "가상 감정가 (매입가 40억보다 낮음)"
+      },
+      "assumptions": [
+        "임대 유지"
+      ]
+    },
+    {
+      "plan_id": "remodel",
+      "plan_kind": "remodel",
+      "label": "리모델링 후 임대",
+      "equity": {
+        "kind": "equity",
+        "asset_label": "가상 물건 1",
+        "scenario": "가상 리모델링",
+        "price": {
+          "price_input_basis": "gross_contract",
+          "price_input_krw": 4000000000,
+          "deposit_already_deducted_krw": null,
+          "prepaid_krw": null,
+          "vat_included": false,
+          "settlement_basis": "가상 계약서 총액"
+        },
+        "loan": {
+          "amount_krw": 2400000000,
+          "kind": "scenario",
+          "ltv_assumption_pct": 60,
+          "collateral_basis": "purchase_price_assumption",
+          "deposit_netted_in_limit": false
+        },
+        "assumed_tenant_deposits": {
+          "amount_krw": 100000000,
+          "basis": "가상 임대차 승계 보증금"
+        },
+        "costs": {
+          "acquisition_tax": {
+            "amount_krw": 184000000,
+            "basis": "가상 취득세 4.6%"
+          },
+          "transaction_costs": {
+            "amount_krw": 16000000,
+            "basis": "가상 중개·실사",
+            "vat_included": true
+          },
+          "prepaid_taxes": {
+            "amount_krw": 0,
+            "basis": "가상: 별도 선지급 세액 없음"
+          },
+          "initial_repairs": {
+            "amount_krw": 0,
+            "basis": "가상: 초기 수선 없음"
+          },
+          "reserve_cash": {
+            "amount_krw": 0,
+            "basis": "가상: 예비현금은 사업기간 계산에서"
+          }
+        },
+        "note": "데이터 사전 §10.1 가상 검증: P 40억, L 24억, D 1억, 기타 2억 → 17억"
+      },
+      "cash": {
+        "kind": "cash",
+        "asset_label": "가상 물건 1",
+        "scenario": "가상 리모델링",
+        "period_unit": "month",
+        "flows": [
+          {
+            "t": 0,
+            "amount_krw": -1700000000,
+            "kind": "purchase",
+            "note": "가상 매입"
+          },
+          {
+            "t": 0,
+            "amount_krw": -100000000,
+            "kind": "deposit_return",
+            "note": "가상 승계 보증금 반환 (명도)"
+          },
+          {
+            "t": 1,
+            "amount_krw": -300000000,
+            "kind": "construction",
+            "note": "가상 리모델링 공사"
+          },
+          {
+            "t": 1,
+            "amount_krw": 0,
+            "kind": "vacancy",
+            "note": "가상 공사 중 공실 (임대 0)"
+          },
+          {
+            "t": 2,
+            "amount_krw": -300000000,
+            "kind": "construction",
+            "note": "가상 공사 2차"
+          },
+          {
+            "t": 2,
+            "amount_krw": 0,
+            "kind": "vacancy",
+            "note": "가상 공사 중 공실"
+          },
+          {
+            "t": 3,
+            "amount_krw": 300000000,
+            "kind": "rent",
+            "note": "가상 임대 (리모델링 후)"
+          }
+        ],
+        "reserve_cash_krw": 100000000,
+        "reserve_in_flows": false
+      },
+      "construction": {
+        "months": 2,
+        "vacancy_months": 2,
+        "basis": "가상 공정"
+      },
+      "architect_review": {
+        "reviewed": true,
+        "document_id": null,
+        "reviewed_on": "2026-09-01",
+        "note": "가상 검토안"
+      },
+      "assumptions": [
+        "공사 2개월, 공사 중 임대 0"
+      ]
+    },
+    {
+      "plan_id": "rebuild",
+      "plan_kind": "rebuild",
+      "label": "철거 후 신축",
+      "equity": {
+        "kind": "equity",
+        "asset_label": "가상 물건 1",
+        "scenario": "가상 철거신축",
+        "price": {
+          "price_input_basis": "gross_contract",
+          "price_input_krw": 4000000000,
+          "deposit_already_deducted_krw": null,
+          "prepaid_krw": null,
+          "vat_included": false,
+          "settlement_basis": "가상 계약서 총액"
+        },
+        "loan": {
+          "amount_krw": 2400000000,
+          "kind": "scenario",
+          "ltv_assumption_pct": 60,
+          "collateral_basis": "purchase_price_assumption",
+          "deposit_netted_in_limit": false
+        },
+        "assumed_tenant_deposits": {
+          "amount_krw": 100000000,
+          "basis": "가상 임대차 승계 보증금"
+        },
+        "costs": {
+          "acquisition_tax": {
+            "amount_krw": 184000000,
+            "basis": "가상 취득세 4.6%"
+          },
+          "transaction_costs": {
+            "amount_krw": 16000000,
+            "basis": "가상 중개·실사",
+            "vat_included": true
+          },
+          "prepaid_taxes": {
+            "amount_krw": 0,
+            "basis": "가상: 별도 선지급 세액 없음"
+          },
+          "initial_repairs": {
+            "amount_krw": 0,
+            "basis": "가상: 초기 수선 없음"
+          },
+          "reserve_cash": {
+            "amount_krw": 0,
+            "basis": "가상: 예비현금은 사업기간 계산에서"
+          }
+        },
+        "note": "데이터 사전 §10.1 가상 검증: P 40억, L 24억, D 1억, 기타 2억 → 17억"
+      },
+      "cash": {
+        "kind": "cash",
+        "asset_label": "가상 물건 1",
+        "scenario": "가상 철거신축",
+        "period_unit": "month",
+        "flows": [
+          {
+            "t": 0,
+            "amount_krw": -1700000000,
+            "kind": "purchase",
+            "note": "가상 매입"
+          },
+          {
+            "t": 0,
+            "amount_krw": -100000000,
+            "kind": "deposit_return",
+            "note": "가상 승계 보증금 반환"
+          },
+          {
+            "t": 1,
+            "amount_krw": -200000000,
+            "kind": "design",
+            "note": "가상 설계"
+          },
+          {
+            "t": 1,
+            "amount_krw": 0,
+            "kind": "vacancy",
+            "note": "가상 설계 중 공실 (명도 완료)"
+          },
+          {
+            "t": 2,
+            "amount_krw": -1000000000,
+            "kind": "construction",
+            "note": "가상 철거·신축 1차"
+          },
+          {
+            "t": 2,
+            "amount_krw": 0,
+            "kind": "vacancy",
+            "note": "가상 공사 중 공실"
+          },
+          {
+            "t": 3,
+            "amount_krw": -1000000000,
+            "kind": "construction",
+            "note": "가상 신축 2차"
+          },
+          {
+            "t": 3,
+            "amount_krw": 800000000,
+            "kind": "additional_loan",
+            "note": "가상 추가 대출"
+          },
+          {
+            "t": 4,
+            "amount_krw": 500000000,
+            "kind": "rent",
+            "note": "가상 임대 (신축 후)"
+          },
+          {
+            "t": 3,
+            "amount_krw": 0,
+            "kind": "vacancy",
+            "note": "가상 공사 중 공실"
+          }
+        ],
+        "reserve_cash_krw": 100000000,
+        "reserve_in_flows": false
+      },
+      "construction": {
+        "months": 3,
+        "vacancy_months": 3,
+        "basis": "가상 공정"
+      },
+      "architect_review": {
+        "reviewed": false,
+        "note": "가상: 검토 전"
+      },
+      "assumptions": [
+        "설계 1개월, 공사 2개월 가정"
+      ]
+    },
+    {
+      "plan_id": "joint",
+      "plan_kind": "joint_purchase",
+      "label": "인접 필지 공동매입",
+      "equity": {
+        "kind": "equity",
+        "asset_label": "가상 물건 1",
+        "scenario": "가상 공동매입: 인접 필지 추가 12억",
+        "price": {
+          "price_input_basis": "gross_contract",
+          "price_input_krw": 5200000000,
+          "deposit_already_deducted_krw": null,
+          "prepaid_krw": null,
+          "vat_included": false,
+          "settlement_basis": "가상 계약서 총액"
+        },
+        "loan": {
+          "amount_krw": 3100000000,
+          "kind": "scenario",
+          "ltv_assumption_pct": 60,
+          "collateral_basis": "purchase_price_assumption",
+          "deposit_netted_in_limit": false
+        },
+        "assumed_tenant_deposits": {
+          "amount_krw": 100000000,
+          "basis": "가상 임대차 승계 보증금"
+        },
+        "costs": {
+          "acquisition_tax": {
+            "amount_krw": 239200000,
+            "basis": "가상 취득세 4.6%"
+          },
+          "transaction_costs": {
+            "amount_krw": 16000000,
+            "basis": "가상 중개·실사",
+            "vat_included": true
+          },
+          "prepaid_taxes": {
+            "amount_krw": 0,
+            "basis": "가상: 별도 선지급 세액 없음"
+          },
+          "initial_repairs": {
+            "amount_krw": 0,
+            "basis": "가상: 초기 수선 없음"
+          },
+          "reserve_cash": {
+            "amount_krw": 0,
+            "basis": "가상: 예비현금은 사업기간 계산에서"
+          }
+        },
+        "note": "데이터 사전 §10.1 가상 검증: P 40억, L 24억, D 1억, 기타 2억 → 17억"
+      },
+      "cash": {
+        "kind": "cash",
+        "asset_label": "가상 물건 1",
+        "scenario": "가상 공동매입",
+        "period_unit": "month",
+        "flows": [
+          {
+            "t": 0,
+            "amount_krw": -1700000000,
+            "kind": "purchase",
+            "note": "가상 1차 매입"
+          },
+          {
+            "t": 3,
+            "amount_krw": -500000000,
+            "kind": "purchase",
+            "note": "가상 인접 필지 2차 매입 자기자본"
+          },
+          {
+            "t": 1,
+            "amount_krw": 200000000,
+            "kind": "rent",
+            "note": "가상 임대"
+          },
+          {
+            "t": 1,
+            "amount_krw": -100000000,
+            "kind": "deposit_return",
+            "note": "가상 승계 보증금 반환"
+          },
+          {
+            "t": 4,
+            "amount_krw": 300000000,
+            "kind": "rent",
+            "note": "가상 임대 (합필 후)"
+          }
+        ],
+        "reserve_cash_krw": 100000000,
+        "reserve_in_flows": false
+      },
+      "joint": {
+        "extra_price": {
+          "amount_krw": 1200000000,
+          "basis": "가상 인접 필지 호가"
+        },
+        "included_in_price": true,
+        "acquisition_order": [
+          "본 필지",
+          "인접 필지"
+        ],
+        "period_months": 3,
+        "partial_fallback": "본 필지만 확보 시 현상 유지 임대"
+      },
+      "assumptions": [
+        "인접 필지 12억을 가격 52억과 t=3 매입 흐름에 포함"
+      ]
+    }
+  ],
+  "note": "가상 비교 예제. 후보를 고르지 않는다"
+}

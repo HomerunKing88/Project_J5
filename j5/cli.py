@@ -32,6 +32,7 @@ from j5.db.judgment import apply_record_input, asof, asof_text, load_record_inpu
 from j5.db.photos import export_series, photo_series, photo_tags, series_text
 from j5.db.recheck import apply_recheck_input, load_recheck_input, recheck_add_text, recheck_status, recheck_text
 from j5.calc.inputs import calc_text, load_calc_input, run_calc
+from j5.calc.plans import plans_csv
 from j5.parcels.convert import Clip, ConvertError, ConvertOptions, convert, convert_text, inspect_source, inspect_text, write_bundle
 from j5.schemas_loader import schema_errors
 
@@ -195,10 +196,13 @@ def _build_parser() -> argparse.ArgumentParser:
     casub = ca.add_subparsers(dest="calc_command")
     for name, help_ in (("far", "용적률 기준 여유면적 = A×F/100 − C (A 법정 산정 대지면적, F 적용 용적률, C 용적률 산정용 연면적). 미확인 입력이면 결과 없음"),
                         ("equity", "매입 전체 필요자기자본 = P − L − D + T + B + V + R + E (P 보증금 차감 전 계약 총액). 잔금만으로 총액을 복원하지 않는다"),
-                        ("cash", "사업기간 최대 필요자기자본 = max(0, −min 누적 CF) + 별도 예비현금")):
+                        ("cash", "사업기간 최대 필요자기자본 = max(0, −min 누적 CF) + 별도 예비현금"),
+                        ("plans", "개발안 비교: 현상 유지·리모델링·철거신축·공동매입 후보별 필요자기자본·최대 현금을 한 표로 (고르지 않음). --csv 로 후보별 현금표 저장")):
         cx = casub.add_parser(name, help=help_)
         cx.add_argument("file", type=Path, help="입력 JSON (kind: %s)" % name)
         cx.add_argument("--json", action="store_true")
+        if name == "plans":
+            cx.add_argument("--csv", type=Path, help="후보별 현금표 CSV 출력 경로 (덮어쓰지 않음)")
     co = sub.add_parser("collect", help="공식 API 수집 (J5-014). 인증키는 J5_DATA_HOME/config.env 의 DATA_GO_KR_SERVICE_KEY 에서만 읽는다")
     csub = co.add_subparsers(dest="collect_command", required=True)
     cs = csub.add_parser("rt-sample", help="상업·업무용 실거래 API 를 시군구·계약월 단위로 호출해 원본 응답과 요약을 남긴다 (R0 표본 월 실측). 정본에 쓰지 않는다")
@@ -736,6 +740,17 @@ def _calc_main(args) -> int:
         for m in e.errors:
             print(f"  {m}", file=sys.stderr)
         return USAGE_ERROR
+    if getattr(args, "csv", None) is not None:
+        try:
+            with open(args.csv, "x", encoding="utf-8", newline="") as f:
+                f.write(plans_csv(r))
+        except FileExistsError:
+            print(f"이미 있는 파일을 덮어쓰지 않는다: {args.csv}", file=sys.stderr)
+            return USAGE_ERROR
     sys.stdout.write(json.dumps(r, ensure_ascii=False, indent=2) + "\n" if args.json else calc_text(r))
+    if getattr(args, "csv", None) is not None and not args.json:
+        sys.stdout.write(f"CSV: {args.csv}\n")
     # 결과가 미확정(미확인 입력·오류)이면 1: 완성값이 아님을 종료 코드로도 알린다
+    if r["kind"] == "plans":
+        return 0 if r["resolved"] else 1
     return 0 if r.get("result") is not None or r.get("result_krw") is not None else 1

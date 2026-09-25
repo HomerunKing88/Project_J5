@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://j5.local/schemas/calc_inputs.schema.json",
-  "title": "계산 입력 (j5 calc far / equity / cash). 데이터 사전 §9~§10, ADR-08",
-  "description": "kind 로 구분한 세 종류. far: 용적률 기준 여유면적(§9). equity: 가격 기준 정규화와 매입 전체 필요자기자본(§10.1). cash: 사업기간 최대 필요자기자본(§10.2). 금액은 원 단위 정수, 면적은 ㎡. 미확인 값은 null 과 사유로 적고 0 으로 채우지 않는다. 계산기는 미확인 입력이 있으면 결과를 null 로 두고 알려진 항목만 보인다.",
+  "title": "계산 입력 (j5 calc far / equity / cash / plans). 데이터 사전 §9~§10, ADR-08",
+  "description": "kind 로 구분한 네 종류. far: 용적률 기준 여유면적(§9). equity: 가격 기준 정규화와 매입 전체 필요자기자본(§10.1). cash: 사업기간 최대 필요자기자본(§10.2). plans: 개발안(현상 유지·리모델링·철거신축·공동매입) 후보별 필요자기자본·최대 현금 비교와 CSV(§9 후단, 릴리스 계획 §8 R5). 금액은 원 단위 정수, 면적은 ㎡. 미확인 값은 null 과 사유로 적고 0 으로 채우지 않는다. 계산기는 미확인 입력이 있으면 결과를 null 로 두고 알려진 항목만 보인다.",
   "type": "object",
   "required": [
     "kind"
@@ -13,7 +13,8 @@
       "enum": [
         "far",
         "equity",
-        "cash"
+        "cash",
+        "plans"
       ]
     }
   },
@@ -52,6 +53,18 @@
       },
       "then": {
         "$ref": "#/$defs/cash"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "plans"
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/plans"
       }
     }
   ],
@@ -777,6 +790,266 @@
         },
         "reserve_in_flows": {
           "type": "boolean"
+        },
+        "note": {
+          "$ref": "#/$defs/note"
+        }
+      }
+    },
+    "plans": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "asset_label",
+        "plans"
+      ],
+      "properties": {
+        "kind": {
+          "const": "plans"
+        },
+        "asset_label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "composition_as_of": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/date"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "plans": {
+          "description": "후보 개발안. plan_id 는 파일 안에서 유일. 각 안은 equity(kind: equity)·cash(kind: cash) 입력을 통째로 품는다",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "plan_id",
+              "plan_kind",
+              "label",
+              "equity",
+              "cash"
+            ],
+            "properties": {
+              "plan_id": {
+                "type": "string",
+                "pattern": "^[a-z0-9_-]{1,40}$"
+              },
+              "plan_kind": {
+                "type": "string",
+                "enum": [
+                  "keep",
+                  "remodel",
+                  "rebuild",
+                  "joint_purchase"
+                ]
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "equity": {
+                "$ref": "#/$defs/equity"
+              },
+              "cash": {
+                "$ref": "#/$defs/cash"
+              },
+              "appraisal": {
+                "description": "감정가(또는 금융기관 확인 담보가). 매입가 가정으로 잡은 대출과의 차이를 본다",
+                "$ref": "#/$defs/krw"
+              },
+              "construction": {
+                "description": "공사기간과 공실. remodel·rebuild 는 필수. months 가 미확인이면 reason",
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "months"
+                ],
+                "properties": {
+                  "months": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0,
+                    "maximum": 120
+                  },
+                  "vacancy_months": {
+                    "description": "공사로 임대수입이 끊기는 개월 수 (현금흐름의 vacancy 항목과 대조)",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0,
+                    "maximum": 120
+                  },
+                  "basis": {
+                    "$ref": "#/$defs/note"
+                  },
+                  "reason": {
+                    "$ref": "#/$defs/note"
+                  }
+                },
+                "allOf": [
+                  {
+                    "if": {
+                      "properties": {
+                        "months": {
+                          "type": "null"
+                        }
+                      }
+                    },
+                    "then": {
+                      "required": [
+                        "reason"
+                      ],
+                      "properties": {
+                        "reason": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  }
+                ]
+              },
+              "joint": {
+                "description": "공동매입안: 추가 가격·취득 순서·기간·한쪽만 확보했을 때의 운영안 (데이터 사전 §9). joint_purchase 는 필수",
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "extra_price",
+                  "included_in_price",
+                  "acquisition_order",
+                  "period_months",
+                  "partial_fallback"
+                ],
+                "properties": {
+                  "extra_price": {
+                    "$ref": "#/$defs/krw"
+                  },
+                  "included_in_price": {
+                    "description": "추가 가격이 이 후보의 equity 가격(P)과 cash 흐름에 이미 들어 있으면 true. false 면 계산기가 후보를 미확정으로 둔다(임의로 더하지 않는다)",
+                    "type": "boolean"
+                  },
+                  "acquisition_order": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 20,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    }
+                  },
+                  "period_months": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0,
+                    "maximum": 240
+                  },
+                  "partial_fallback": {
+                    "description": "한쪽만 확보했을 때의 운영안",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000
+                  }
+                }
+              },
+              "architect_review": {
+                "description": "건축사 검토안 유무. 설계 가능 연면적·주차·높이·구조는 건축사의 안과 조건을 저장한다(계산기가 판정하지 않음)",
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "reviewed"
+                ],
+                "properties": {
+                  "reviewed": {
+                    "type": "boolean"
+                  },
+                  "document_id": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/uuid"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "reviewed_on": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/date"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "note": {
+                    "$ref": "#/$defs/note"
+                  }
+                }
+              },
+              "assumptions": {
+                "type": "array",
+                "maxItems": 50,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1000
+                }
+              },
+              "note": {
+                "$ref": "#/$defs/note"
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "plan_kind": {
+                      "enum": [
+                        "remodel",
+                        "rebuild"
+                      ]
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "construction"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "plan_kind": {
+                      "const": "joint_purchase"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "joint"
+                  ]
+                }
+              }
+            ]
+          }
         },
         "note": {
           "$ref": "#/$defs/note"

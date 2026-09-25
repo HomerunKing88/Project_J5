@@ -8,11 +8,12 @@ from pathlib import Path
 from j5.calc.cash import cash_text, max_required_equity
 from j5.calc.equity import equity_text, required_equity
 from j5.calc.far import far_headroom, far_text
+from j5.calc.plans import compare_plans, plans_text
 from j5.db.validate import ValidationError
 from j5.schemas_loader import schema_errors
 
 INPUT_SCHEMA = "calc_inputs.schema.json"
-RUNNERS = {"far": (far_headroom, far_text), "equity": (required_equity, equity_text), "cash": (max_required_equity, cash_text)}
+RUNNERS = {"far": (far_headroom, far_text), "equity": (required_equity, equity_text), "cash": (max_required_equity, cash_text), "plans": (compare_plans, plans_text)}
 
 
 def load_calc_input(path: Path, expected_kind: str | None = None) -> dict:
