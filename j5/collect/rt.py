@@ -13,7 +13,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import secrets
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -335,8 +334,10 @@ def collect_months(data_home: Path, *, key: str, key_source: str, lawd_cd: str, 
 
 
 def _new_run_id() -> str:
-    """UTC 초 단위 시각 + 무작위 6자리. 같은 초의 실행·동시 실행이 같은 이름을 갖지 않게 한다."""
-    return _now().replace("-", "").replace(":", "").replace("T", "-").rstrip("Z") + "-" + secrets.token_hex(3)
+    """UTC 초 단위 시각 + 그 초 안의 마이크로초(16진수 6자리). 이름순이 시간순이라 정본이 실행 ID 로 선후를 가린다.
+    같은 마이크로초의 동시 실행은 원본·기록의 배타적 생성(_write_new)이 막는다."""
+    t = datetime.now(timezone.utc)
+    return t.strftime("%Y%m%d-%H%M%S") + f"-{t.microsecond:06x}"
 
 
 def _write_new(path: Path, data: bytes) -> None:

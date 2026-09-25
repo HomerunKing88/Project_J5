@@ -17,9 +17,9 @@ from j5 import cli
 from j5.collect import rt
 from j5.collect.rt import collect_months, month_range, months_done_on_disk
 from j5.db import schema as S
-from j5.db.backup import create_backup, restore_backup
+from j5.db.backup import check_raw_files, create_backup, restore_backup, verify_backup_dir
 from j5.db.store import Db, DbError
-from j5.db.transactions import IDENTITY_FIELDS, coverage, coverage_text, identity_hash, is_real_endpoint, load_run, normalize, unloaded_run_ids
+from j5.db.transactions import IDENTITY_FIELDS, assign_ordinals, coverage, coverage_text, identity_hash, is_real_endpoint, load_run, normalize, unloaded_run_ids
 from tests.test_j5_014_collect import KEY, _Handler, item, server  # noqa: F401  (server 픽스처 재사용)
 
 STUDY = "j5-synthetic-study"
@@ -172,6 +172,66 @@ def test_recollect_updates_seen_cancel_missing_and_new(db, home, server):
     assert t1b["cancel_status"] == "cancelled" and t1b["last_seen_run_id"] == run3.run_id and t1b["first_seen_run_id"] == old_id, "부분 응답(run4)에는 row(1) 이 없었으므로 마지막 확인은 run3"
 
 
+def test_duplicate_identity_ordinals_follow_content_not_order(db, home, server):
+    """같은 값의 별개 행(순번 0·1)이 다음 수집에서 순서가 바뀌거나 하나만 취소돼도 취소 상태가 다른 거래에 붙지 않는다 (Codex P2)."""
+    _Handler.scenarios = {"202608": {"kind": "pages", "items": [row(2), row(2)]}}
+    run1 = fetch(home, server, ["202608"])
+    load_run(db, home, "11110", run1.run_id)
+    # 두 번째 응답: 순서가 바뀌고 두 번째 행(원래 순번 0 자리)이 취소
+    _Handler.scenarios = {"202608": {"kind": "pages", "items": [row(2, cdealType="O", cdealDay="26.09.10"), row(2)]}}
+    run2 = fetch(home, server, ["202608"])
+    r2 = load_run(db, home, "11110", run2.run_id)
+    assert r2.transactions_new == 0 and r2.transactions_seen == 2 and r2.transactions_changed == 1 and r2.transactions_missing == 0
+    st = {t["ordinal"]: dict(t) for t in db.conn.execute("SELECT * FROM transactions")}
+    assert sorted(st) == [0, 1] and sum(t["cancel_status"] == "cancelled" for t in st.values()) == 1
+    cancelled_ordinal = next(o for o, t in st.items() if t["cancel_status"] == "cancelled")
+    # 세 번째 응답: 취소 행이 먼저 오든 나중에 오든 같은 거래에 붙는다 (내용 해시로 먼저 맞춤)
+    _Handler.scenarios = {"202608": {"kind": "pages", "items": [row(2), row(2, cdealType="O", cdealDay="26.09.10")]}}
+    run3 = fetch(home, server, ["202608"])
+    r3 = load_run(db, home, "11110", run3.run_id)
+    assert r3.transactions_new == 0 and r3.transactions_changed == 0 and r3.transactions_missing == 0
+    st3 = {t["ordinal"]: dict(t) for t in db.conn.execute("SELECT * FROM transactions")}
+    assert st3[cancelled_ordinal]["cancel_status"] == "cancelled" and st3[1 - cancelled_ordinal]["cancel_status"] == "none"
+    # 네 번째 응답: 취소 안 된 행만 남음 → 취소된 거래가 아니라 남은 행과 맞는 거래가 다시 확인되고, 취소 거래는 사라짐
+    _Handler.scenarios = {"202608": {"kind": "pages", "items": [row(2)]}}
+    run4 = fetch(home, server, ["202608"])
+    r4 = load_run(db, home, "11110", run4.run_id)
+    assert r4.transactions_new == 0 and r4.transactions_seen == 1 and r4.transactions_missing == 1
+    st4 = {t["ordinal"]: dict(t) for t in db.conn.execute("SELECT * FROM transactions")}
+    assert st4[cancelled_ordinal]["missing_since_run_id"] == run4.run_id and st4[1 - cancelled_ordinal]["missing_since_run_id"] is None
+    # 세 번째 같은 행이 새로 오면 새 순번 2
+    _Handler.scenarios = {"202608": {"kind": "pages", "items": [row(2), row(2), row(2)]}}
+    run5 = fetch(home, server, ["202608"])
+    r5 = load_run(db, home, "11110", run5.run_id)
+    assert r5.transactions_new == 1 and sorted(t[0] for t in db.conn.execute("SELECT ordinal FROM transactions")) == [0, 1, 2]
+    assert assign_ordinals(db, rt.PROVIDER, "11110", "209912", [(1, 0, row(7)), (1, 1, row(7))]) == [0, 1]
+
+
+def test_older_run_new_rows_are_reconciled_with_later_complete_runs(db, home, server):
+    """새 완전한 실행을 먼저 반영하고 오래된 실행을 나중에 반영하면, 오래된 실행에만 있던 거래는 그 뒤의 완전한 실행 기준으로 사라짐 표시된다 (Codex P2)."""
+    _Handler.scenarios = {"202608": {"kind": "pages", "items": [row(0), row(9)]}}
+    run_old = fetch(home, server, ["202608"])
+    _Handler.scenarios = {"202608": {"kind": "pages", "items": [row(0)]}}
+    run_new = fetch(home, server, ["202608"])
+    assert run_old.run_id < run_new.run_id
+    load_run(db, home, "11110", run_new.run_id)
+    r = load_run(db, home, "11110", run_old.run_id)
+    assert r.transactions_new == 1 and r.transactions_seen == 1 and r.transactions_missing == 1
+    t9 = db.conn.execute("SELECT * FROM transactions WHERE identity_hash = ?", (identity_hash(row(9)),)).fetchone()
+    assert t9["first_seen_run_id"] == run_old.run_id and t9["last_seen_run_id"] == run_old.run_id and t9["missing_since_run_id"] == run_new.run_id
+    t0 = db.conn.execute("SELECT * FROM transactions WHERE identity_hash = ?", (identity_hash(row(0)),)).fetchone()
+    assert t0["first_seen_run_id"] == run_old.run_id and t0["last_seen_run_id"] == run_new.run_id and t0["missing_since_run_id"] is None
+    assert coverage(db, "11110", ["202608"])["months"][0]["missing"] == 1
+    # 그 뒤 완전한 실행이 없는 달(부분 실행만)이면 사라짐 표시를 하지 않는다
+    _Handler.scenarios = {"202609": {"kind": "pages", "items": [row(1), row(8)]}}
+    old2 = fetch(home, server, ["202609"])
+    _Handler.scenarios = {"202609": {"kind": "short_pages", "items": [row(1)], "claimed_total": 9}}
+    new2 = fetch(home, server, ["202609"], num_rows=1)
+    load_run(db, home, "11110", new2.run_id)
+    r2 = load_run(db, home, "11110", old2.run_id)
+    assert r2.transactions_new == 1 and r2.transactions_missing == 0
+
+
 def test_rejects_leave_db_unchanged(db, home, server):
     _Handler.scenarios = {"202608": {"kind": "pages", "items": [row(0), row(1)]}}
     run = fetch(home, server, ["202608"])
@@ -250,14 +310,28 @@ def test_coverage_fetch_range_and_cli(db, home, server, capsys, monkeypatch):
     c = json.loads(capsys.readouterr().out)
     assert rc == 0 and [m["collection"] for m in c["months"]] == ["none", "complete", "complete", "empty", "none"] and c["gap_months"] == ["202606", "202610"]
     m8 = next(m for m in c["months"] if m["deal_ymd"] == "202608")
-    assert m8["transactions"] == 2 and m8["cancelled"] == 1 and m8["runs"] == 1 and c["transactions"] == 3 and c["linked"] == 0
+    assert m8["transactions"] == 1 and m8["rows_all"] == 2 and m8["cancelled"] == 1 and m8["runs"] == 1, "현재 통계는 취소 확정 거래를 뺀다"
+    assert c["transactions"] == 2 and c["cancelled"] == 1 and c["linked"] == 0
     d2 = Db.open(home / "db" / "j5.sqlite3")
     try:
         text = coverage_text(coverage(d2, "11110", ["202608", "202609"]))
-        assert "완전 수집 2/2개월" in text and "취소 1" in text and "수집 완료와 연결 완료는 별개" in text
-        # 백업·복구에 새 테이블이 포함된다
+        assert "완전 수집 2/2개월" in text and "거래 1건 (취소 확정 1건 제외)" in text and "수집 완료와 연결 완료는 별개" in text
+        # 백업에 새 테이블과 정본이 참조한 수집 원본(실행 기록·응답 XML)이 포함된다
         b = create_backup(d2, home)
-        assert b.counts["transactions"] == 3 and b.counts["collection_runs"] == 4
+        assert b.outcome == "completed", b.to_text()
+        assert b.counts["transactions"] == 3 and b.counts["collection_runs"] == 4 and b.raw_files == 2 + 4 and b.photos == 0
+        manifest = json.loads((home / b.backup_dir / "backup_manifest.json").read_text(encoding="utf-8"))
+        raw_listed = sorted(f["path"] for f in manifest["files"] if f["path"].startswith("raw/"))
+        assert len(raw_listed) == 6 and sum(p.endswith(".json") for p in raw_listed) == 2 and all(p.startswith("raw/rt_nrg/11110/") for p in raw_listed)
+        assert verify_backup_dir(home / b.backup_dir)["raw_files"] == 6
+        # 참조한 원본이 사라지거나 바뀌면 백업을 완료로 표시하지 않는다
+        xml_path = home / d2.conn.execute("SELECT raw_path FROM collection_pages WHERE deal_ymd = '202608'").fetchone()[0]
+        orig = xml_path.read_bytes()
+        xml_path.write_bytes(orig + b" ")
+        b_bad = create_backup(d2, home)
+        assert b_bad.outcome == "failed" and any(f["code"] == "raw_incomplete" and "hash_mismatch" in f["message"] for f in b_bad.findings)
+        xml_path.write_bytes(orig)
+        assert check_raw_files(d2, home)["ok_all"]
     finally:
         d2.close()
     dest = home / "restored"
@@ -265,4 +339,11 @@ def test_coverage_fetch_range_and_cli(db, home, server, capsys, monkeypatch):
     r = restore_backup(home / b.backup_dir, dest)
     assert r.outcome == "completed", r.to_text()
     assert r.counts["transactions"] == 3 and r.counts["transaction_observations"] == 3
+    assert (dest / "raw" / "rt_nrg" / "11110").is_dir() and len(list((dest / "raw").rglob("*.xml"))) == 4
+    with Db.open(dest / "db" / "j5.sqlite3") as rdb:
+        assert check_raw_files(rdb, dest)["ok_all"] and coverage(rdb, "11110", ["202608"])["transactions"] == 1
+    # 백업 폴더에서 원본 하나가 빠지면 복구를 거절한다
+    (home / b.backup_dir / raw_listed[0]).unlink()
+    rr = restore_backup(home / b.backup_dir, home / "restored2")
+    assert rr.outcome == "failed" and any(f["code"] in ("file_missing", "extra_or_missing") for f in rr.findings)
     assert cli.main(["db", "rt-coverage", "--lawd-cd", "11110", "--from", "2026-10", "--to", "2026-01"]) == 3

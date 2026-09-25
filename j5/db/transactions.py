@@ -6,7 +6,7 @@
 - 거래의 정체성: (제공자, 시군구, 계약월, 식별 해시, 순번). 식별 해시는 제공자가 나중에 채우거나 바꾸는 필드(취소·거래 유형·중개사 소재지·매수/매도 구분)를
   뺀 필드로 만든다. 같은 응답 안에서 식별 필드가 완전히 같은 행은 순번(0, 1, …)으로 구분해 별개 거래로 둔다(합치지 않는다).
 - 같은 달을 다시 받은 실행: 다시 보인 거래는 last_seen 과 가변 필드를 갱신하고, 완전한(complete/empty) 응답에서 사라진 거래는 missing_since_run_id 만 적는다.
-  사라졌다는 이유로 취소를 확정하지 않는다. 취소는 제공자의 cdealType 만 근거로 삼는다. 더 오래된 실행을 나중에 반영하면 새 거래만 넣고 최신 상태는 건드리지 않는다.
+  사라졌다는 이유로 취소를 확정하지 않는다. 취소는 제공자의 cdealType 만 근거로 삼는다. 더 오래된 실행을 나중에 반영하면 새 거래만 넣고(그 뒤의 완전한 실행에서 안 보였으면 사라짐으로 표시) 최신 상태는 건드리지 않는다.
 - 결측은 null 과 사유(missing_reasons_json). 금액·면적을 0 으로 채우지 않는다.
 """
 
@@ -295,11 +295,9 @@ def load_run(db: Db, data_home: Path, lawd_cd: str, run_id: str) -> RunLoadResul
                                             (doc["provider"], lawd_cd, deal_ymd)).fetchone()[0]
             is_newest = latest_before is None or run_id > latest_before
             seen_keys: set[tuple[str, int]] = set()
-            ordinals: dict[str, int] = {}
-            for page_no, row_index, content in rows:
+            assigned = assign_ordinals(db, doc["provider"], lawd_cd, deal_ymd, rows)
+            for (page_no, row_index, content), ordinal in zip(rows, assigned):
                 ih = identity_hash(content)
-                ordinal = ordinals.get(ih, 0)
-                ordinals[ih] = ordinal + 1
                 ch = _hash(content)
                 obs_id = str(uuid.uuid4())
                 fetched = next((p.get("fetched_at") for p in m["pages"] if p["page_no"] == page_no), None) or doc["finished_at"]
@@ -315,6 +313,7 @@ def load_run(db: Db, data_home: Path, lawd_cd: str, run_id: str) -> RunLoadResul
                 norm = normalize(content)
                 if cur is None:
                     tid = str(uuid.uuid4())
+                    missing_since = None if is_newest else _first_complete_run_after(db, lawd_cd, deal_ymd, run_id)
                     db.conn.execute(
                         "INSERT INTO transactions (transaction_id, provider, lawd_cd, deal_ymd, identity_hash, ordinal, deal_date, amount_krw, building_area_m2, plottage_area_m2,"
                         " build_year, missing_reasons_json, emd_name, jibun_raw, jibun_masked, jibun_prefix, building_kind, building_type_raw, building_use_raw, land_use_raw,"
@@ -323,10 +322,12 @@ def load_run(db: Db, data_home: Path, lawd_cd: str, run_id: str) -> RunLoadResul
                         " VALUES (:transaction_id, :provider, :lawd_cd, :deal_ymd, :identity_hash, :ordinal, :deal_date, :amount_krw, :building_area_m2, :plottage_area_m2,"
                         " :build_year, :missing_reasons_json, :emd_name, :jibun_raw, :jibun_masked, :jibun_prefix, :building_kind, :building_type_raw, :building_use_raw, :land_use_raw,"
                         " :floor_raw, :share_deal, :cancel_status, :cancel_date, :dealing_gbn_raw, :agent_sgg_raw, :buyer_kind_raw, :seller_kind_raw, :scope, :scope_basis, 'unlinked',"
-                        " :run_id, :run_id, NULL, :obs_id, :obs_id, :content_hash, :data_mode, :now, :now)",
+                        " :run_id, :run_id, :missing_since, :obs_id, :obs_id, :content_hash, :data_mode, :now, :now)",
                         {**norm, "transaction_id": tid, "provider": doc["provider"], "lawd_cd": lawd_cd, "deal_ymd": deal_ymd, "identity_hash": ih, "ordinal": ordinal,
-                         "run_id": run_id, "obs_id": obs_id, "content_hash": ch, "data_mode": db.data_mode, "now": now})
+                         "run_id": run_id, "obs_id": obs_id, "content_hash": ch, "data_mode": db.data_mode, "now": now, "missing_since": missing_since})
                     r.transactions_new += 1
+                    if missing_since:
+                        r.transactions_missing += 1
                 elif is_newest:
                     r.transactions_seen += 1
                     if cur["content_hash"] != ch:
@@ -357,6 +358,47 @@ def load_run(db: Db, data_home: Path, lawd_cd: str, run_id: str) -> RunLoadResul
     return r
 
 
+def assign_ordinals(db: Db, provider: str, lawd_cd: str, deal_ymd: str, rows: list[tuple[int, int, dict]]) -> list[int]:
+    """응답 행마다 거래 순번을 정한다. 식별 해시가 같은 행이 여럿이면(같은 값의 별개 행) 정본의 기존 거래와 먼저 맞춘다:
+    1) 내용 해시(가변 필드 포함)가 같은 기존 거래의 순번, 2) 남은 행은 남은 기존 순번을 순서대로, 3) 그래도 남으면 새 순번.
+    제공자가 행 순서를 바꾸거나 한 행이 빠져도 취소 상태·최신 관측이 다른 거래에 붙지 않는다."""
+    groups: dict[str, list[int]] = {}
+    for i, (_, _, content) in enumerate(rows):
+        groups.setdefault(identity_hash(content), []).append(i)
+    out = [0] * len(rows)
+    for ih, idxs in groups.items():
+        existing = db.conn.execute("SELECT ordinal, content_hash FROM transactions WHERE provider = ? AND lawd_cd = ? AND deal_ymd = ? AND identity_hash = ? ORDER BY ordinal",
+                                   (provider, lawd_cd, deal_ymd, ih)).fetchall()
+        free = [e["ordinal"] for e in existing]
+        by_content: dict[str, list[int]] = {}
+        for e in existing:
+            by_content.setdefault(e["content_hash"], []).append(e["ordinal"])
+        pending = []
+        for i in idxs:
+            ch = _hash(rows[i][2])
+            cands = by_content.get(ch, [])
+            if cands:
+                o = cands.pop(0)
+                free.remove(o)
+                out[i] = o
+            else:
+                pending.append(i)
+        next_new = (max(e["ordinal"] for e in existing) + 1) if existing else 0
+        for i in pending:
+            if free:
+                out[i] = free.pop(0)
+            else:
+                out[i] = next_new
+                next_new += 1
+    return out
+
+
+def _first_complete_run_after(db: Db, lawd_cd: str, deal_ymd: str, run_id: str) -> str | None:
+    row = db.conn.execute("SELECT MIN(run_id) FROM collection_runs WHERE lawd_cd = ? AND deal_ymd = ? AND run_id > ? AND outcome IN ('complete', 'empty')",
+                          (lawd_cd, deal_ymd, run_id)).fetchone()
+    return row[0] if row and row[0] else None
+
+
 def unloaded_run_ids(db: Db, data_home: Path, lawd_cd: str) -> list[str]:
     """실데이터 홈에 있는 실행 기록 중 정본에 없는 것 (오래된 순)."""
     loaded = {r[0] for r in db.conn.execute("SELECT DISTINCT run_id FROM collection_runs WHERE lawd_cd = ?", (lawd_cd,))}
@@ -374,20 +416,25 @@ def coverage(db: Db, lawd_cd: str, months: list[str]) -> dict:
     for ym in months:
         runs = db.conn.execute("SELECT run_id, outcome, total_count, items FROM collection_runs WHERE lawd_cd = ? AND deal_ymd = ? ORDER BY run_id", (lawd_cd, ym)).fetchall()
         best = max((r["outcome"] for r in runs), key=lambda o: OUTCOME_RANK[o], default=None)
+        # 현재 통계(거래·연결·마스킹·사라짐)는 취소 확정 거래를 뺀다 (데이터 사전 §7.2). 취소 건수는 따로 보인다.
         t = db.conn.execute(
-            "SELECT COUNT(*) AS n, SUM(cancel_status = 'cancelled') AS cancelled, SUM(missing_since_run_id IS NOT NULL) AS missing,"
-            " SUM(link_status = 'confirmed') AS linked, SUM(jibun_masked) AS masked FROM transactions WHERE lawd_cd = ? AND deal_ymd = ?", (lawd_cd, ym)).fetchone()
+            "SELECT COUNT(*) AS rows_all, SUM(cancel_status = 'cancelled') AS cancelled,"
+            " SUM(cancel_status <> 'cancelled') AS active, SUM(cancel_status <> 'cancelled' AND missing_since_run_id IS NOT NULL) AS missing,"
+            " SUM(cancel_status <> 'cancelled' AND link_status = 'confirmed') AS linked, SUM(cancel_status <> 'cancelled' AND jibun_masked) AS masked"
+            " FROM transactions WHERE lawd_cd = ? AND deal_ymd = ?", (lawd_cd, ym)).fetchone()
         out.append({"deal_ymd": ym, "collection": best or "none", "runs": len(runs), "latest_run_id": runs[-1]["run_id"] if runs else None,
-                    "transactions": t["n"] or 0, "cancelled": t["cancelled"] or 0, "missing": t["missing"] or 0, "linked": t["linked"] or 0, "masked": t["masked"] or 0})
+                    "transactions": t["active"] or 0, "rows_all": t["rows_all"] or 0, "cancelled": t["cancelled"] or 0, "missing": t["missing"] or 0,
+                    "linked": t["linked"] or 0, "masked": t["masked"] or 0})
     complete = [m["deal_ymd"] for m in out if m["collection"] in ("complete", "empty")]
     return {"lawd_cd": lawd_cd, "months": out, "complete_months": len(complete), "gap_months": [m["deal_ymd"] for m in out if m["collection"] not in ("complete", "empty")],
-            "transactions": sum(m["transactions"] for m in out), "linked": sum(m["linked"] for m in out)}
+            "transactions": sum(m["transactions"] for m in out), "cancelled": sum(m["cancelled"] for m in out), "linked": sum(m["linked"] for m in out)}
 
 
 def coverage_text(c: dict) -> str:
-    lines = [f"거래 수집 현황 시군구 {c['lawd_cd']}: 완전 수집 {c['complete_months']}/{len(c['months'])}개월 · 거래 {c['transactions']}건 · 물건 연결 확정 {c['linked']}건 (수집 완료와 연결 완료는 별개)"]
+    lines = [f"거래 수집 현황 시군구 {c['lawd_cd']}: 완전 수집 {c['complete_months']}/{len(c['months'])}개월 · 거래 {c['transactions']}건 (취소 확정 {c['cancelled']}건 제외)"
+             f" · 물건 연결 확정 {c['linked']}건 (수집 완료와 연결 완료는 별개)"]
     for m in c["months"]:
-        lines.append(f"  {m['deal_ymd'][:4]}-{m['deal_ymd'][4:]}: {m['collection']} · 실행 {m['runs']}회 · 거래 {m['transactions']} (취소 {m['cancelled']}, 사라짐 {m['missing']}, 지번 마스킹 {m['masked']}, 연결 {m['linked']})")
+        lines.append(f"  {m['deal_ymd'][:4]}-{m['deal_ymd'][4:]}: {m['collection']} · 실행 {m['runs']}회 · 거래 {m['transactions']} (취소 {m['cancelled']} 별도, 사라짐 {m['missing']}, 지번 마스킹 {m['masked']}, 연결 {m['linked']})")
     if c["gap_months"]:
         lines.append("미완 월: " + ", ".join(f"{g[:4]}-{g[4:]}" for g in c["gap_months"]) + " (rt-fetch 로 다시 받는다)")
     return "\n".join(lines) + "\n"
