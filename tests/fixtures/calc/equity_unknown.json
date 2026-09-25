@@ -1,0 +1,16 @@
+{
+  "kind": "equity",
+  "asset_label": "가상 물건 1",
+  "scenario": "기준 미확인 가상 검증",
+  "price": {"price_input_basis": "unknown", "price_input_krw": 3900000000, "deposit_already_deducted_krw": null, "reason": "차감 전후 미확인"},
+  "loan": {"amount_krw": 2400000000, "kind": "scenario", "ltv_assumption_pct": 60, "collateral_basis": "purchase_price_assumption", "deposit_netted_in_limit": false},
+  "assumed_tenant_deposits": {"amount_krw": 100000000, "basis": "가상"},
+  "costs": {
+    "acquisition_tax": {"amount_krw": null, "reason": "세무 확인 전"},
+    "transaction_costs": {"amount_krw": 16000000, "basis": "가상"},
+    "prepaid_taxes": {"amount_krw": 0, "basis": "가상"},
+    "initial_repairs": {"amount_krw": 0, "basis": "가상"},
+    "reserve_cash": {"amount_krw": 0, "basis": "가상"}
+  },
+  "note": "데이터 사전 §10.1 가상 검증: 완성 결과 미출력"
+}

@@ -1,0 +1,16 @@
+{
+  "kind": "equity",
+  "asset_label": "가상 물건 1",
+  "scenario": "총액 입력 가상 검증",
+  "price": {"price_input_basis": "gross_contract", "price_input_krw": 4000000000, "deposit_already_deducted_krw": null, "prepaid_krw": null, "vat_included": null, "settlement_basis": "가상 계약서 총액"},
+  "loan": {"amount_krw": 2400000000, "kind": "scenario", "ltv_assumption_pct": 60, "collateral_basis": "purchase_price_assumption", "deposit_netted_in_limit": false},
+  "assumed_tenant_deposits": {"amount_krw": 100000000, "basis": "가상 임대차 승계 보증금"},
+  "costs": {
+    "acquisition_tax": {"amount_krw": 184000000, "basis": "가상 취득세 4.6%"},
+    "transaction_costs": {"amount_krw": 16000000, "basis": "가상 중개·실사"},
+    "prepaid_taxes": {"amount_krw": 0, "basis": "가상: 별도 선지급 세액 없음"},
+    "initial_repairs": {"amount_krw": 0, "basis": "가상: 초기 수선 없음"},
+    "reserve_cash": {"amount_krw": 0, "basis": "가상: 예비현금은 사업기간 계산에서"}
+  },
+  "note": "데이터 사전 §10.1 가상 검증: P 40억, L 24억, D 1억, 기타 2억 → 17억"
+}

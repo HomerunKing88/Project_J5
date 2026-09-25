@@ -1,0 +1,51 @@
+{
+  "kind": "far",
+  "asset_label": "가상 물건 1",
+  "composition_as_of": "2026-09-01",
+  "site": {
+    "registered_parcel": {
+      "value_m2": 100,
+      "basis": "가상 공부면적"
+    },
+    "statutory_excluded": {
+      "value_m2": 10,
+      "basis": "가상 확인된 법정 제외 (도시계획시설 편입)",
+      "as_of": "2026-09-01"
+    },
+    "statutory": {
+      "value_m2": null,
+      "basis": "공부면적 − 확인된 제외면적",
+      "reason": "직접 입력 없이 registered_minus_excluded 로 잇는다"
+    },
+    "statutory_basis": "registered_minus_excluded",
+    "area_constraints": [
+      {
+        "kind": "도시계획시설 편입",
+        "area_m2": 10,
+        "basis": "가상",
+        "excluded_from_denominator": "true",
+        "reviewed_on": "2026-09-01"
+      },
+      {
+        "kind": "건축선 후퇴",
+        "area_m2": 30,
+        "basis": "가상: 특정 건축선 아님, 분모 제외 아님으로 검토",
+        "excluded_from_denominator": "false",
+        "reviewed_on": "2026-09-01"
+      }
+    ]
+  },
+  "regulation": {
+    "applied_far_pct": 600,
+    "regulation_version": "가상 일반상업 600% (2026-01 가상 고시)",
+    "zoning": "일반상업",
+    "end_date_confirmed": false
+  },
+  "current_gfa": {
+    "far_gfa": {
+      "value_m2": 240,
+      "basis": "가상 건축물대장"
+    }
+  },
+  "note": "데이터 사전 §9 가상 테스트: A=90, 검토면적 540, 여유면적 300"
+}

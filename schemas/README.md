@@ -40,4 +40,8 @@
 
 - `judgment_recheck.schema.json`: 재확인 입력(`j5 db recheck-add`)과 `judgment_rechecks` 행. 현재 목표 매수가·투자판단 기록을 가리키고 결과(`reconfirmed` / `revision_needed`)·재확인일·조건 대조(`condition`, `holds` true/false/null, `note`)·반대 증거(`note`, 선택 `document_id`·`observed_on`)·메모를 둔다. 재확인 시점의 신호 요약은 저장소가 붙인다. 판단 자체는 바꾸지 않는다(데이터 사전 §8, 릴리스 계획 §8·§9).
 
+## 파일 (calc_inputs, R5 J5-016A)
+
+- `calc_inputs.schema.json`: 계산기 입력(`j5 calc far / equity / cash`). `far` 는 대지(공부·대장·법정 제외·법정 산정·배치 검토영역·제약 목록)·규제(적용 용적률·규제 버전·종료일 확인)·현재 연면적(용적률 산정용·총연면적), `equity` 는 가격 기준(`gross_contract / net_after_deposit / settlement_residual / unknown`)·대출(실제/시나리오, 보증금 공제 반영 여부)·승계 보증금·비용 5종, `cash` 는 시점별 현금흐름(종류 enum, `owner_equity` 는 계산기가 거절)·별도 예비현금. 면적·금액은 값과 근거, 미확인은 `null` 과 사유(데이터 사전 §9~§10, ADR-08). 예제는 `tests/fixtures/calc/`.
+
 이벤트 해시는 파일에 있는 행의 UTF-8 바이트를 그대로 sha256 한 값이다. 재직렬화하지 않는다. 검증은 jsonschema(고정 버전, `requirements-dev.txt`) Draft 2020-12로 한다. 스키마와 데이터 사전이 충돌하면 PR을 완료하지 않는다.

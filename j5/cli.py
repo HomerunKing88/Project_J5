@@ -31,6 +31,7 @@ from j5.db.zones import apply_rules, changes_since, changes_text, current_rules,
 from j5.db.judgment import apply_record_input, asof, asof_text, load_record_input
 from j5.db.photos import export_series, photo_series, photo_tags, series_text
 from j5.db.recheck import apply_recheck_input, load_recheck_input, recheck_add_text, recheck_status, recheck_text
+from j5.calc.inputs import calc_text, load_calc_input, run_calc
 from j5.parcels.convert import Clip, ConvertError, ConvertOptions, convert, convert_text, inspect_source, inspect_text, write_bundle
 from j5.schemas_loader import schema_errors
 
@@ -190,6 +191,14 @@ def _build_parser() -> argparse.ArgumentParser:
     pc.add_argument("--synthetic", action="store_true", help="가상자료 표시 (data_mode synthetic)")
     pc.add_argument("--json", action="store_true")
 
+    ca = sub.add_parser("calc", help="계산기 (R5, J5-016, 데이터 사전 §9~§10): 용적률 기준 여유면적 / 매입 전체 필요자기자본 / 사업기간 최대 필요자기자본. 입력은 schemas/calc_inputs.schema.json")
+    casub = ca.add_subparsers(dest="calc_command")
+    for name, help_ in (("far", "용적률 기준 여유면적 = A×F/100 − C (A 법정 산정 대지면적, F 적용 용적률, C 용적률 산정용 연면적). 미확인 입력이면 결과 없음"),
+                        ("equity", "매입 전체 필요자기자본 = P − L − D + T + B + V + R + E (P 보증금 차감 전 계약 총액). 잔금만으로 총액을 복원하지 않는다"),
+                        ("cash", "사업기간 최대 필요자기자본 = max(0, −min 누적 CF) + 별도 예비현금")):
+        cx = casub.add_parser(name, help=help_)
+        cx.add_argument("file", type=Path, help="입력 JSON (kind: %s)" % name)
+        cx.add_argument("--json", action="store_true")
     co = sub.add_parser("collect", help="공식 API 수집 (J5-014). 인증키는 J5_DATA_HOME/config.env 의 DATA_GO_KR_SERVICE_KEY 에서만 읽는다")
     csub = co.add_subparsers(dest="collect_command", required=True)
     cs = csub.add_parser("rt-sample", help="상업·업무용 실거래 API 를 시군구·계약월 단위로 호출해 원본 응답과 요약을 남긴다 (R0 표본 월 실측). 정본에 쓰지 않는다")
@@ -708,4 +717,25 @@ def main(argv: list[str] | None = None) -> int:
         return _parcels_main(args)
     if args.command == "collect":
         return _collect_main(args)
+    if args.command == "calc":
+        return _calc_main(args)
     return USAGE_ERROR
+
+
+def _calc_main(args) -> int:
+    if not args.calc_command:
+        print("calc 하위 명령: far / equity / cash", file=sys.stderr)
+        return USAGE_ERROR
+    if not args.file.is_file():
+        print(f"입력 파일이 없음: {args.file}", file=sys.stderr)
+        return USAGE_ERROR
+    try:
+        r = run_calc(load_calc_input(args.file, expected_kind=args.calc_command))
+    except ValidationError as e:
+        print("입력 거절:", file=sys.stderr)
+        for m in e.errors:
+            print(f"  {m}", file=sys.stderr)
+        return USAGE_ERROR
+    sys.stdout.write(json.dumps(r, ensure_ascii=False, indent=2) + "\n" if args.json else calc_text(r))
+    # 결과가 미확정(미확인 입력·오류)이면 1: 완성값이 아님을 종료 코드로도 알린다
+    return 0 if r.get("result") is not None or r.get("result_krw") is not None else 1

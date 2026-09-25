@@ -13,7 +13,7 @@ dependencies = ["jsonschema==4.23.0"]
 j5 = "j5.cli:main"
 
 [tool.setuptools]
-packages = ["j5", "j5.package", "j5.db", "j5.parcels", "j5.collect"]
+packages = ["j5", "j5.package", "j5.db", "j5.parcels", "j5.collect", "j5.calc"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
