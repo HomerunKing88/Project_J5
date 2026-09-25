@@ -23,10 +23,14 @@ UTC_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
 # 기록 종류별 허용 대상 타입. R1b 는 임장 관측 → 매입 검토 단위만. 점포(survey_unit)는 R2 에서 추가한다.
 RECORD_TYPE_SUBJECTS: dict[str, frozenset[str]] = {
     "field_observation": frozenset({"asset"}),
+    "target_price": frozenset({"asset"}),          # R4 J5-015A: 목표 매수가 (데이터 사전 §8)
+    "investment_judgment": frozenset({"asset"}),   # R4 J5-015A: 투자판단 10항목 (초안 허용)
 }
 # 기록 종류별 payload 스키마 (schemas/ 의 $defs 참조) 와 payload 스키마 버전
 RECORD_PAYLOAD_SCHEMAS: dict[str, tuple[str, str, str]] = {
     "field_observation": ("observation_event.schema.json", "field_observation_payload", "1.0.0"),
+    "target_price": ("judgment_records.schema.json", "target_price_payload", "1.0.0"),
+    "investment_judgment": ("judgment_records.schema.json", "investment_judgment_payload", "1.0.0"),
 }
 assert set(RECORD_TYPE_SUBJECTS) == set(RECORD_TYPES) == set(RECORD_PAYLOAD_SCHEMAS)
 

@@ -83,8 +83,8 @@ class Db:
         conn = _connect(path)
         db = cls(conn, path)
         try:
+            db._migrate()
             with db.transaction():
-                db._apply_migrations()
                 now = now_utc()
                 for k, v in (("study_id", study_id), ("data_mode", data_mode), ("dataset_version", "0"), ("created_at", now)):
                     conn.execute("INSERT INTO meta (key, value) VALUES (?, ?)", (k, v))
@@ -110,8 +110,7 @@ class Db:
             if current > S.DB_SCHEMA_VERSION:
                 raise DbError("tool_too_old", f"정본 스키마 {current} 이 도구가 아는 {S.DB_SCHEMA_VERSION} 보다 새롭다. 도구를 갱신한다")
             if current < S.DB_SCHEMA_VERSION:
-                with db.transaction():
-                    db._apply_migrations()
+                db._migrate()
             for key in ("study_id", "data_mode", "dataset_version"):
                 if db.meta(key) is None:
                     raise DbError("meta_missing", f"meta.{key} 가 없다")
@@ -194,16 +193,47 @@ class Db:
             raise DbError("no_transaction", "쓰기는 transaction() 안에서만 한다")
 
     # ---- 스키마·메타 ----
-    def _apply_migrations(self) -> None:
+    def _migrate(self) -> None:
+        """미적용 마이그레이션을 버전 순서대로, 하나씩 자기 트랜잭션으로 적용한다. 표 재작성(FK_OFF_MIGRATIONS)은 외래키 검사를 끈 채 실행하고
+        foreign_key_check 가 비어야 커밋한다(SQLite 권장 절차, ADR-14). 그 밖에는 외래키를 켠 채 실행한다. 트랜잭션 밖에서 부른다."""
+        if self._depth > 0:
+            raise DbError("in_transaction", "마이그레이션은 트랜잭션 밖에서 시작한다")
         applied = {r[0] for r in self.conn.execute("SELECT version FROM schema_migrations")} if self._has_table("schema_migrations") else set()
         for version, name, sql in S.MIGRATIONS:
             if version in applied:
                 continue
-            # executescript 는 열린 트랜잭션을 커밋해 버리므로 문장 단위로 실행한다.
-            for stmt in _split_statements(sql):
-                self.conn.execute(stmt)
-            self.conn.execute("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)", (version, name, now_utc()))
+            if version in getattr(S, "FK_OFF_MIGRATIONS", frozenset()):
+                self._apply_migration_fk_off(version, name, sql)
+            else:
+                with self.transaction():
+                    self._apply_one(version, name, sql)
         self.conn.execute(f"PRAGMA user_version = {S.DB_SCHEMA_VERSION}")
+
+    def _apply_one(self, version: int, name: str, sql: str) -> None:
+        # executescript 는 열린 트랜잭션을 커밋해 버리므로 문장 단위로 실행한다.
+        for stmt in _split_statements(sql):
+            self.conn.execute(stmt)
+        self.conn.execute("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)", (version, name, now_utc()))
+
+    def _apply_migration_fk_off(self, version: int, name: str, sql: str) -> None:
+        """외래키 검사를 끄고(트랜잭션 밖에서만 가능) 한 트랜잭션으로 표를 다시 만든 뒤, 커밋 전에 foreign_key_check 로 참조 무결성을 확인한다.
+        검사가 하나라도 걸리면 되돌린다. 끝나면 외래키를 다시 켜고 켜졌는지 확인한다."""
+        self.conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._apply_one(version, name, sql)
+                bad = self.conn.execute("PRAGMA foreign_key_check").fetchall()
+                if bad:
+                    raise DbError("migration_fk_check", f"마이그레이션 {version} {name} 뒤 외래키 위반 {len(bad)}건: {[tuple(b) for b in bad[:3]]}. 되돌린다")
+                self.conn.execute("COMMIT")
+            except BaseException:
+                self.conn.execute("ROLLBACK")
+                raise
+        finally:
+            self.conn.execute("PRAGMA foreign_keys = ON")
+            if self.conn.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
+                raise DbError("foreign_keys_off", "마이그레이션 뒤 외래키를 다시 켤 수 없다")
 
     def _has_table(self, name: str) -> bool:
         return self.conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)).fetchone() is not None

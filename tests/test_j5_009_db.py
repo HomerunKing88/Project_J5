@@ -78,7 +78,7 @@ def event_to_record(ev: dict) -> tuple[dict, list[dict]]:
 
 def test_create_open_status_and_foreign_keys(db):
     st = db.status()
-    assert st["ok"] and st["foreign_keys"] == 1 and st["db_schema_version"] == S.DB_SCHEMA_VERSION == 8
+    assert st["ok"] and st["foreign_keys"] == 1 and st["db_schema_version"] == S.DB_SCHEMA_VERSION == 9
     assert st["study_id"] == "j5-synthetic-study" and st["data_mode"] == "synthetic" and st["dataset_version"] == 0
     assert is_utc_iso(st["created_at"])
     assert db.conn.execute("PRAGMA user_version").fetchone()[0] == S.DB_SCHEMA_VERSION
@@ -377,7 +377,7 @@ def test_json_payload_validation(seeded):
 
 
 def test_record_type_subject_matrix_is_single_source():
-    assert RECORD_TYPE_SUBJECTS == {"field_observation": frozenset({"asset"})}
+    assert RECORD_TYPE_SUBJECTS == {"field_observation": frozenset({"asset"}), "target_price": frozenset({"asset"}), "investment_judgment": frozenset({"asset"})}
     assert set(RECORD_TYPE_SUBJECTS) == set(S.RECORD_TYPES)
     assert all(t in S.SUBJECT_TYPES for ts in RECORD_TYPE_SUBJECTS.values() for t in ts)
 
