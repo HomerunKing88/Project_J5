@@ -185,3 +185,13 @@ python -m j5 db [--db 경로] photo-series --asset <asset_id> [--tag front|groun
 - 물건의 사진(정본 `attachments`, db_schema 10)을 촬영 지점(`viewpoint_id`) → 이전 사진 사슬(`previous_photo_sha256`) → 태그 조합 순으로 묶고, 묶음마다 연도별 첫 사진·인접 연도 비교 쌍·빠진 해를 보인다. 관측하지 않은 해는 비워 두고 보간하지 않는다. 정정된 관측의 사진은 `정정됨` 으로 표시한다.
 - `--export` 는 `J5_DATA_HOME/exports/private/photo_series/<물건>-<id 앞 8자>/<묶음>/<날짜>-<sha 앞 8자>.<ext>` 로 사진을 해시 검증하며 복사하고 `index.json` 을 쓴다. 이미 있는 파일은 같은 내용이면 건너뛰고 다른 내용이면 덮어쓰지 않고 문제로 보고한다(종료 코드 1). 내보낸 사진은 실데이터이며 저장소·공개 배포에 넣지 않는다.
 - 폰 앱이 사진마다 촬영 지점·방향·이전 사진을 선택 입력한다(J5-006 이벤트 바이트는 그대로). db_schema 10 은 이미 반영된 첨부를 수입 대장의 행 바이트에서 소급해 채운다.
+
+## 반대 증거·변경 조건 재확인 (R4, J5-015C)
+
+```text
+python -m j5 db [--db 경로] recheck --asset <asset_id> [--json]
+python -m j5 db [--db 경로] recheck-add <입력.json> [--json]
+```
+
+- `recheck` 는 현재(수정되지 않은) 목표 매수가·투자판단 기록마다 조건 목록(유효 조건·전제·가격차 변화 조건·판단 변경 조건·반대 근거·다음 확인사항), 판단 기록이 정본에 들어온 뒤 들어온 새 정보(관측·연결 결정·취소 표시·비교 근거 거래 변동·범위 규칙·구성 변경·반박 근거), 마지막 재확인을 보이고 상태를 `새 신호 없음 / 재확인 필요 / 재확인됨 / 수정 필요` 로 표시한다. 조건이 깨졌는지는 사람이 대조한다.
+- `recheck-add` 는 재확인 기록(`schemas/judgment_recheck.schema.json`, `kind: recheck`, db_schema 11)을 불변으로 넣는다. 결과(`reconfirmed` / `revision_needed`), 재확인일, 조건 대조, 반대 증거(선택 근거 문서는 `source_documents` 에 먼저), 그 시점의 신호 요약을 남긴다. 판단을 바꾸려면 `record-add` 로 새 기록(`supersedes_id`)을 넣는다. 수정된 기록은 재확인할 수 없다.
