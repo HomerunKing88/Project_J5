@@ -2,12 +2,12 @@
 
 백업(create_backup): 정본 연결의 읽기 트랜잭션 안에서 버전·행수·첨부 목록을 읽고 같은 스냅샷을 SQLite 백업 API 로 사본에 쓴다
     (그동안 다른 쓰기는 대기한다: "쓰기를 잠시 중단"). 사본을 읽기 전용으로 열어 무결성·외래키·행수·meta 를 원본과 대조하고,
-    첨부가 참조한 사진을 내용 해시를 검증하며 복사한 뒤 backup_manifest.json(파일 목록·해시) 을 쓴다. 디스크에서 다시 읽어 전부 검증(verify_backup_dir)
+    첨부가 참조한 사진과 거래 수집이 참조한 원본(실행 기록·응답 XML, raw/rt_nrg)을 내용 해시를 검증하며 복사한 뒤 backup_manifest.json(파일 목록·해시) 을 쓴다. 디스크에서 다시 읽어 전부 검증(verify_backup_dir)
     한 뒤에만 최종 폴더 이름으로 바꾸고 backups/latest.json 포인터를 교체한다. 정본은 바꾸지 않는다.
     실패하면 이전 백업·포인터는 그대로고 부분 산출물은 failed-<run8>/ 에 남는다(자동 삭제 없음). 참조 사진이 하나라도 없거나 해시가 다르면
     백업을 완료로 표시하지 않는다(사진 없는 DB 사본을 완전한 백업이라 하지 않는다).
 복구(restore_backup): 빈 폴더에만 한다. 백업 폴더를 전부 검증 → 스테이징에 복사(해시 재검증) → 복사한 정본을 열어 무결성·행수·사진 연결 확인
-    → db/·photos/ 를 제자리로 → 최종 확인 → logs/restore.log. 기존 정본·사진이 있는 폴더에는 복구하지 않는다.
+    → db/·photos/·raw/ 를 제자리로 → 최종 확인 → logs/restore.log. 기존 정본·사진이 있는 폴더에는 복구하지 않는다.
 사진 대사(check_photos): 정본 attachments 가 참조한 파일의 존재·크기·해시와 photos/ 의 미참조 파일을 보고한다. 아무것도 지우지 않는다.
 """
 
@@ -31,9 +31,10 @@ from j5.schemas_loader import schema_errors
 BACKUPS_DIR = Path("backups")
 LATEST_POINTER = "latest.json"
 BACKUP_MANIFEST = "backup_manifest.json"
-BACKUP_SCHEMA_VERSION = "1.0.0"
+BACKUP_SCHEMA_VERSION = "1.1.0"  # 1.1.0: 거래 수집 원본(raw/rt_nrg)도 참조 파일로 포함
 DB_REL = "db/j5.sqlite3"
 PHOTOS_DIR = "photos"
+RAW_DIR = "raw"
 BACKUP_LOG = Path("logs") / "backup.log"
 RESTORE_LOG = Path("logs") / "restore.log"
 CHUNK = 1 << 20
@@ -58,6 +59,7 @@ class BackupResult:
     counts: dict = field(default_factory=dict)
     files: int = 0
     photos: int = 0
+    raw_files: int = 0
     bytes: int = 0
     same_device: bool | None = None     # 백업 폴더가 정본과 같은 장치인지 (독립 사본 여부는 사용자가 판단)
     findings: list[dict] = field(default_factory=list)
@@ -75,7 +77,7 @@ class BackupResult:
     def to_text(self) -> str:
         lines = [f"백업: {'완료' if self.outcome == 'completed' else '실패 (이전 백업·포인터 유지, 정본 그대로)'}"]
         if self.backup_dir:
-            lines.append(f"위치: {self.backup_dir} (정본 v{self.dataset_version}, db_schema {self.db_schema_version}, 파일 {self.files}개 {self.bytes} 바이트, 사진 {self.photos}장)")
+            lines.append(f"위치: {self.backup_dir} (정본 v{self.dataset_version}, db_schema {self.db_schema_version}, 파일 {self.files}개 {self.bytes} 바이트, 사진 {self.photos}장, 수집 원본 {self.raw_files}개)")
         if self.counts:
             lines.append("행 수: " + ", ".join(f"{k} {v}" for k, v in self.counts.items()))
         if self.message:
@@ -195,6 +197,38 @@ def _referenced_photos(conn: sqlite3.Connection) -> list[dict]:
     return [{"rel_path": r["rel_path"], "sha256": r["sha256"], "bytes": r["bytes"]} for r in rows]
 
 
+def _referenced_raw(conn: sqlite3.Connection) -> list[dict]:
+    """정본이 참조한 거래 수집 원본: collection_runs.run_path(실행 기록, 해시는 정본에 없음)와 collection_pages.raw_path(응답 XML, 해시·크기 있음).
+    db_schema 6 이전 정본에는 표가 없으므로 빈 목록."""
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "collection_runs" not in tables or "collection_pages" not in tables:
+        return []
+    out: dict[str, dict] = {}
+    for r in conn.execute("SELECT DISTINCT run_path FROM collection_runs"):
+        out[r[0]] = {"rel_path": r[0], "sha256": None, "bytes": None}
+    for r in conn.execute("SELECT DISTINCT raw_path, raw_sha256, bytes FROM collection_pages WHERE raw_path IS NOT NULL"):
+        out[r["raw_path"]] = {"rel_path": r["raw_path"], "sha256": r["raw_sha256"], "bytes": r["bytes"]}
+    return sorted(out.values(), key=lambda x: x["rel_path"])
+
+
+def check_raw_files(db: Db, data_home: Path) -> dict:
+    """정본이 참조한 수집 원본(실행 기록·응답 XML)의 존재·해시·크기. 아무것도 지우지 않는다."""
+    data_home = Path(data_home)
+    referenced = _referenced_raw(db.conn)
+    ok, missing, mismatched = 0, [], []
+    for f in referenced:
+        p = data_home / f["rel_path"]
+        if not p.is_file():
+            missing.append(f["rel_path"])
+            continue
+        digest, n = _sha256_file(p)
+        if (f["sha256"] is not None and digest != f["sha256"]) or (f["bytes"] is not None and n != f["bytes"]):
+            mismatched.append(f["rel_path"])
+        else:
+            ok += 1
+    return {"referenced": len(referenced), "ok": ok, "missing": missing, "mismatched": mismatched, "ok_all": not missing and not mismatched}
+
+
 def _check_db_file(path: Path, *, expected_counts: dict | None = None, expected_meta: dict | None = None) -> dict:
     """DB 파일을 읽기 전용으로 열어 무결성·외래키·행수·meta 를 확인한다. 통과하면 {counts, meta, referenced} 를 돌려준다."""
     conn = _open_ro(path)
@@ -218,7 +252,7 @@ def _check_db_file(path: Path, *, expected_counts: dict | None = None, expected_
             for k, v in expected_meta.items():
                 if str(meta.get(k)) != str(v):
                     raise BackupError("db_meta", f"meta.{k}: 사본 {meta.get(k)}, 기대 {v}")
-        return {"counts": counts, "meta": meta, "referenced": _referenced_photos(conn)}
+        return {"counts": counts, "meta": meta, "referenced": _referenced_photos(conn), "referenced_raw": _referenced_raw(conn)}
     finally:
         conn.close()
 
@@ -244,6 +278,7 @@ def create_backup(db: Db, data_home: Path, *, dest_root: Path | None = None) -> 
             schema_version = db.schema_version()
             counts = _table_counts(db.conn)
             referenced = _referenced_photos(db.conn)
+            referenced_raw = _referenced_raw(db.conn)
             dst = sqlite3.connect(str(db_copy))
             try:
                 db.conn.backup(dst)
@@ -252,8 +287,8 @@ def create_backup(db: Db, data_home: Path, *, dest_root: Path | None = None) -> 
         r.dataset_version, r.db_schema_version, r.counts = meta["dataset_version"], schema_version, counts
         # 2. 사본 검사: 무결성·외래키·행수·meta 가 원본 스냅샷과 같다
         copy_info = _check_db_file(db_copy, expected_counts=counts, expected_meta={**meta, "db_schema_version": schema_version})
-        if copy_info["referenced"] != referenced:
-            raise BackupError("db_copy_refs", "사본의 첨부 목록이 원본 스냅샷과 다르다")
+        if copy_info["referenced"] != referenced or copy_info["referenced_raw"] != referenced_raw:
+            raise BackupError("db_copy_refs", "사본의 첨부·원본 목록이 원본 스냅샷과 다르다")
         digest, n = _sha256_file(db_copy)
         files = [{"path": DB_REL, "bytes": n, "sha256": digest}]
         # 3. 참조 사진 복사 (내용 해시 검증). 하나라도 없거나 다르면 백업을 완료로 표시하지 않는다.
@@ -268,6 +303,20 @@ def create_backup(db: Db, data_home: Path, *, dest_root: Path | None = None) -> 
             files.append({"path": ph["rel_path"], "bytes": ph["bytes"], "sha256": ph["sha256"]})
         if problems:
             raise BackupError("photos_incomplete", f"참조 사진 {len(problems)}건이 없거나 해시가 다르다: " + "; ".join(problems[:5]) + ". 사진 대사(check-photos)로 확인하고 이전 백업에서 되찾는다")
+        # 3b. 거래 수집 원본(실행 기록·응답 XML) 복사. 응답 XML 은 정본의 해시·크기와 대조하고, 실행 기록은 지금 해시를 잰다.
+        raw_problems = []
+        n_raw = 0
+        for f in referenced_raw:
+            src = data_home / f["rel_path"]
+            try:
+                digest_f, n_f = _copy_verified(src, tmp / f["rel_path"], sha256=f["sha256"], nbytes=f["bytes"])
+            except BackupError as e:
+                raw_problems.append(f"{f['rel_path']}: {e.code}")
+                continue
+            files.append({"path": f["rel_path"], "bytes": n_f, "sha256": digest_f})
+            n_raw += 1
+        if raw_problems:
+            raise BackupError("raw_incomplete", f"정본이 참조한 수집 원본 {len(raw_problems)}건이 없거나 해시가 다르다: " + "; ".join(raw_problems[:5]) + ". 실데이터 홈의 raw/ 를 확인하고 이전 백업에서 되찾는다")
         manifest = {
             "format": "j5backup", "backup_schema_version": BACKUP_SCHEMA_VERSION, "study_id": meta["study_id"], "data_mode": meta["data_mode"],
             "dataset_version": meta["dataset_version"], "db_schema_version": schema_version, "created_at": started, "run_id": run_id,
@@ -285,7 +334,7 @@ def create_backup(db: Db, data_home: Path, *, dest_root: Path | None = None) -> 
         os.rename(tmp, final)
         r.backup_dir = _display_path(final, data_home)
         r.manifest_sha256 = verified["manifest_sha256"]
-        r.files, r.photos, r.bytes = len(files), len(files) - 1, sum(f["bytes"] for f in files)
+        r.files, r.photos, r.raw_files, r.bytes = len(files), len(files) - 1 - n_raw, n_raw, sum(f["bytes"] for f in files)
         try:
             r.same_device = final.stat().st_dev == db.path.stat().st_dev
         except OSError:
@@ -390,7 +439,8 @@ def verify_backup_dir(bdir: Path) -> dict:
     info = _check_db_file(bdir / DB_REL, expected_counts=manifest["counts"],
                           expected_meta={"study_id": manifest["study_id"], "data_mode": manifest["data_mode"], "dataset_version": manifest["dataset_version"],
                                          "db_schema_version": manifest["db_schema_version"]})
-    photo_paths = {p for p in listed if p != DB_REL}
+    raw_paths = {p for p in listed if p.startswith(RAW_DIR + "/")}
+    photo_paths = {p for p in listed if p != DB_REL} - raw_paths
     for ph in info["referenced"]:
         f = listed.get(ph["rel_path"])
         if f is None or f["sha256"] != ph["sha256"] or f["bytes"] != ph["bytes"]:
@@ -398,7 +448,15 @@ def verify_backup_dir(bdir: Path) -> dict:
     unref = photo_paths - {ph["rel_path"] for ph in info["referenced"]}
     if unref:
         raise BackupError("photo_unreferenced", f"백업에 참조되지 않은 사진이 있다: {sorted(unref)[:3]}")
-    return {"manifest": manifest, "manifest_sha256": hashlib.sha256(raw).hexdigest(), "counts": info["counts"], "photos": len(photo_paths), "referenced": len(info["referenced"])}
+    for rf in info["referenced_raw"]:
+        f = listed.get(rf["rel_path"])
+        if f is None or (rf["sha256"] is not None and f["sha256"] != rf["sha256"]) or (rf["bytes"] is not None and f["bytes"] != rf["bytes"]):
+            raise BackupError("raw_link", f"정본 사본이 참조한 수집 원본 {rf['rel_path']} 가 백업에 없거나 해시가 다르다")
+    unref_raw = raw_paths - {rf["rel_path"] for rf in info["referenced_raw"]}
+    if unref_raw:
+        raise BackupError("raw_unreferenced", f"백업에 참조되지 않은 수집 원본이 있다: {sorted(unref_raw)[:3]}")
+    return {"manifest": manifest, "manifest_sha256": hashlib.sha256(raw).hexdigest(), "counts": info["counts"], "photos": len(photo_paths), "raw_files": len(raw_paths),
+            "referenced": len(info["referenced"])}
 
 
 def backup_status(db: Db, data_home: Path | None) -> dict:
@@ -486,7 +544,7 @@ def check_photos_text(c: dict) -> str:
 # ---- 복구 ----
 
 def _is_restorable_dir(p: Path) -> bool:
-    """빈 폴더, 또는 이전 복구 시도의 logs/ 만 있는 폴더. db/·photos/ 등 다른 항목이 있으면 복구하지 않는다."""
+    """빈 폴더, 또는 이전 복구 시도의 logs/ 만 있는 폴더. db/·photos/·raw/ 등 다른 항목이 있으면 복구하지 않는다."""
     return p.is_dir() and {e.name for e in p.iterdir()} <= {"logs"}
 
 
@@ -515,7 +573,7 @@ def restore_backup(backup_dir: Path, dest_home: Path) -> RestoreResult:
         # 3. 복사한 정본을 열어 확인 (도구가 더 새로우면 마이그레이션이 적용된다. 행수·버전·사진 연결은 그대로여야 한다)
         _verify_restored(staging, manifest)
         # 4. 제자리로
-        for name in ("db", PHOTOS_DIR):
+        for name in ("db", PHOTOS_DIR, RAW_DIR):
             src = staging / name
             if src.is_dir():
                 os.rename(src, dest_home / name)
@@ -575,4 +633,7 @@ def _verify_restored(home: Path, manifest: dict, *, check_copy: bool = True) -> 
             raise BackupError("restored_photos", f"누락 {len(c['missing'])}, 불일치 {len(c['mismatched'])}")
         if c["unreferenced"]:
             raise BackupError("restored_unreferenced", f"참조되지 않은 파일: {c['unreferenced'][:3]}")
-        return {"counts": counts, "photos": c["ok"], "db_schema_version": st["db_schema_version"]}
+        rw = check_raw_files(db, home)
+        if not rw["ok_all"]:
+            raise BackupError("restored_raw", f"수집 원본 누락 {len(rw['missing'])}, 불일치 {len(rw['mismatched'])}")
+        return {"counts": counts, "photos": c["ok"], "raw_files": rw["ok"], "db_schema_version": st["db_schema_version"]}

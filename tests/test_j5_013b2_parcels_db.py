@@ -47,7 +47,7 @@ def db(home):
 
 def test_schema_5_tables_and_status_counts(db):
     st = db.status()
-    assert st["db_schema_version"] == S.DB_SCHEMA_VERSION == 5 and st["counts"]["parcels"] == 0 and st["counts"]["asset_components"] == 0
+    assert st["db_schema_version"] == S.DB_SCHEMA_VERSION >= 5 and st["counts"]["parcels"] == 0 and st["counts"]["asset_components"] == 0
     cols = {r[1] for r in db.conn.execute("PRAGMA table_info(parcels)")}
     for c in ("pnu", "parcel_id", "registered_area_m2", "registered_area_missing_reason", "geom_area_m2", "geometry_crs", "geometry_version", "address_status", "source_document_id"):
         assert c in cols, c

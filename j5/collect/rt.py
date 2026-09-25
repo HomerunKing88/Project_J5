@@ -13,7 +13,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import secrets
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -335,8 +334,10 @@ def collect_months(data_home: Path, *, key: str, key_source: str, lawd_cd: str, 
 
 
 def _new_run_id() -> str:
-    """UTC 초 단위 시각 + 무작위 6자리. 같은 초의 실행·동시 실행이 같은 이름을 갖지 않게 한다."""
-    return _now().replace("-", "").replace(":", "").replace("T", "-").rstrip("Z") + "-" + secrets.token_hex(3)
+    """UTC 초 단위 시각 + 그 초 안의 마이크로초(16진수 6자리). 이름순이 시간순이라 정본이 실행 ID 로 선후를 가린다.
+    같은 마이크로초의 동시 실행은 원본·기록의 배타적 생성(_write_new)이 막는다."""
+    t = datetime.now(timezone.utc)
+    return t.strftime("%Y%m%d-%H%M%S") + f"-{t.microsecond:06x}"
 
 
 def _write_new(path: Path, data: bytes) -> None:
@@ -382,6 +383,54 @@ def summarize_items(items: list[dict]) -> dict:
 
 
 RUN_SUFFIX_RE = re.compile(r"^p\d{3}-(\d{8}-\d{6}(?:-[0-9a-f]{6})?)\.xml$")
+RUN_FILE_RE = re.compile(r"^run-(\d{8}-\d{6}-[0-9a-f]{6})\.json$")
+
+
+def list_run_ids(data_home: Path, lawd_cd: str) -> list[str]:
+    """시군구 폴더의 실행 기록(run-<실행>.json) ID 목록, 오래된 순 (실행 ID 는 UTC 시각으로 시작하므로 이름순이 시간순)."""
+    d = Path(data_home) / RAW_DIR / lawd_cd
+    if not d.is_dir():
+        return []
+    out = []
+    for p in d.glob("run-*.json"):
+        m = RUN_FILE_RE.match(p.name)
+        if m:
+            out.append(m.group(1))
+    return sorted(out)
+
+
+def month_range(from_ym: str, to_ym: str) -> list[str]:
+    """'2021-09', '2026-09' → ['202109', …, '202609'] (양끝 포함). 상한 600개월."""
+    a, b = parse_months(from_ym)[0], parse_months(to_ym)[0]
+    if a > b:
+        raise CollectError("bad_month", f"시작 {from_ym} 이 끝 {to_ym} 보다 늦다")
+    out = []
+    y, m = int(a[:4]), int(a[4:])
+    while f"{y:04d}{m:02d}" <= b:
+        out.append(f"{y:04d}{m:02d}")
+        m += 1
+        if m > 12:
+            y, m = y + 1, 1
+        if len(out) > 600:
+            raise CollectError("bad_month", "한 번에 600개월을 넘게 받지 않는다")
+    return out
+
+
+def months_done_on_disk(data_home: Path, lawd_cd: str) -> dict[str, str]:
+    """실행 기록 파일들에서 달마다 가장 좋은 결과(complete/empty/partial/failed)를 모은다. 깨진 기록은 무시한다."""
+    rank = {"complete": 3, "empty": 3, "partial": 2, "failed": 1}
+    best: dict[str, str] = {}
+    for rid in list_run_ids(data_home, lawd_cd):
+        try:
+            doc = json.loads((Path(data_home) / RAW_DIR / lawd_cd / f"run-{rid}.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        months = doc.get("months") if isinstance(doc, dict) else None
+        for m in months if isinstance(months, list) else []:
+            if isinstance(m, dict) and isinstance(m.get("deal_ymd"), str) and m.get("outcome") in rank:
+                if rank[m["outcome"]] > rank.get(best.get(m["deal_ymd"], ""), 0):
+                    best[m["deal_ymd"]] = m["outcome"]
+    return best
 
 
 def list_runs(data_home: Path, lawd_cd: str, deal_ymd: str) -> list[str]:

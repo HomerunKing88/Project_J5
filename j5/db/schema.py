@@ -395,6 +395,140 @@ CREATE TABLE asset_components (
 CREATE INDEX asset_components_by_component ON asset_components (component_subject_id, effective_from);
 """
 
+COLLECTION_OUTCOMES = ("complete", "empty", "partial", "failed")
+PAGE_OUTCOMES = ("ok", "empty", "api_error", "http_error", "network_error", "bad_response")
+BUILDING_KINDS = ("general", "strata", "unknown")
+CANCEL_STATUSES = ("none", "cancelled")
+TRANSACTION_SCOPES = ("whole_asset", "multi_parcel_bundle", "land_only", "building_only", "partial_share", "strata_unit", "unclear")
+SCOPE_BASES = ("auto_provider_fields", "manual_review")
+LINK_STATUSES = ("unlinked", "candidate", "pending_evidence", "confirmed", "withdrawn")
+RUN_ID_GLOB = "[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]"
+LAWD_GLOB = "[0-9]" * 5
+YM_GLOB = "[0-9][0-9][0-9][0-9][0-1][0-9]"
+
+# J5-014B-1 거래 수집 기록·원본 행·정규화 거래 (데이터 사전 §7.1·§7.2, ADR-05).
+# - collection_runs/collection_pages: `j5 collect rt-*` 의 실행 기록 파일(run-<실행>.json)을 정본에 옮긴 것. 실행 ID 는 파일 실행 ID 그대로다(체크포인트).
+# - transaction_observations: 응답의 항목 행을 태그명→문자열 그대로 보존한다(불변). 같은 (실행, 월, 페이지, 행 번호)는 한 번만 넣는다.
+# - transactions: (제공자, 시군구, 계약월, 식별 해시, 순번) 당 한 행. 식별 해시는 제공자가 나중에 채우거나 바꾸는 필드(취소·거래 유형·중개사·매수/매도 구분)를 뺀
+#   필드로 만들고, 같은 응답 안의 완전히 같은 행은 순번으로 구분한다(같은 값의 별개 행을 합치지 않는다). 응답에서 사라진 행은 missing_since_run_id 로만 표시하고 취소로 확정하지 않는다.
+# - 연결(transaction_links)·검토 결정은 다음 조각(J5-014B-2)에서 추가한다. link_status 는 미리 두되 이 조각에서는 'unlinked' 만 쓴다.
+MIGRATION_0006 = f"""
+CREATE TABLE collection_runs (
+  run_id             TEXT NOT NULL CHECK (run_id GLOB '{RUN_ID_GLOB}'),
+  provider           TEXT NOT NULL CHECK (length(provider) > 0),
+  endpoint           TEXT NOT NULL CHECK (length(endpoint) > 0),
+  lawd_cd            TEXT NOT NULL CHECK (lawd_cd GLOB '{LAWD_GLOB}'),
+  deal_ymd           TEXT NOT NULL CHECK (deal_ymd GLOB '{YM_GLOB}'),
+  outcome            TEXT NOT NULL CHECK (outcome {_in(COLLECTION_OUTCOMES)}),
+  total_count        INTEGER CHECK (total_count IS NULL OR total_count >= 0),
+  items              INTEGER NOT NULL CHECK (items >= 0),
+  pages              INTEGER NOT NULL CHECK (pages >= 0),
+  message            TEXT,
+  started_at         TEXT NOT NULL CHECK (started_at GLOB '{UTC_GLOB}'),
+  finished_at        TEXT NOT NULL CHECK (finished_at GLOB '{UTC_GLOB}'),
+  run_path           TEXT NOT NULL CHECK (length(run_path) > 0 AND run_path NOT GLOB '/*' AND run_path NOT GLOB '*..*'),
+  source_document_id TEXT NOT NULL REFERENCES source_documents (document_id),
+  data_mode          TEXT NOT NULL CHECK (data_mode {_in(DATA_MODES)}),
+  loaded_at          TEXT NOT NULL CHECK (loaded_at GLOB '{UTC_GLOB}'),
+  PRIMARY KEY (run_id, lawd_cd, deal_ymd),
+  CHECK (outcome <> 'complete' OR (total_count IS NOT NULL AND items = total_count))
+) STRICT;
+CREATE INDEX collection_runs_by_month ON collection_runs (lawd_cd, deal_ymd, run_id);
+
+CREATE TABLE collection_pages (
+  run_id      TEXT NOT NULL,
+  lawd_cd     TEXT NOT NULL,
+  deal_ymd    TEXT NOT NULL,
+  page_no     INTEGER NOT NULL CHECK (page_no >= 1),
+  outcome     TEXT NOT NULL CHECK (outcome {_in(PAGE_OUTCOMES)}),
+  http_status INTEGER,
+  result_code TEXT,
+  total_count INTEGER CHECK (total_count IS NULL OR total_count >= 0),
+  item_count  INTEGER NOT NULL DEFAULT 0 CHECK (item_count >= 0),
+  raw_path    TEXT CHECK (raw_path IS NULL OR (length(raw_path) > 0 AND raw_path NOT GLOB '/*' AND raw_path NOT GLOB '*..*')),
+  raw_sha256  TEXT CHECK (raw_sha256 IS NULL OR raw_sha256 GLOB '{SHA256_GLOB}'),
+  bytes       INTEGER CHECK (bytes IS NULL OR bytes >= 0),
+  fetched_at  TEXT NOT NULL CHECK (fetched_at GLOB '{UTC_GLOB}'),
+  fields_json TEXT NOT NULL CHECK (json_valid(fields_json) AND json_type(fields_json) = 'object'),
+  PRIMARY KEY (run_id, lawd_cd, deal_ymd, page_no),
+  FOREIGN KEY (run_id, lawd_cd, deal_ymd) REFERENCES collection_runs (run_id, lawd_cd, deal_ymd),
+  CHECK (outcome NOT IN ('ok', 'empty') OR raw_path IS NOT NULL),
+  CHECK ((raw_path IS NULL) = (raw_sha256 IS NULL))
+) STRICT;
+
+CREATE TABLE transaction_observations (
+  observation_id TEXT NOT NULL PRIMARY KEY CHECK (observation_id GLOB '{UUID_GLOB}'),
+  run_id         TEXT NOT NULL,
+  lawd_cd        TEXT NOT NULL,
+  deal_ymd       TEXT NOT NULL,
+  page_no        INTEGER NOT NULL,
+  row_index      INTEGER NOT NULL CHECK (row_index >= 0),
+  content_json   TEXT NOT NULL CHECK (json_valid(content_json) AND json_type(content_json) = 'object'),
+  content_hash   TEXT NOT NULL CHECK (content_hash GLOB '{SHA256_GLOB}'),
+  identity_hash  TEXT NOT NULL CHECK (identity_hash GLOB '{SHA256_GLOB}'),
+  ordinal        INTEGER NOT NULL CHECK (ordinal >= 0),
+  fetched_at     TEXT NOT NULL CHECK (fetched_at GLOB '{UTC_GLOB}'),
+  recorded_at    TEXT NOT NULL CHECK (recorded_at GLOB '{UTC_GLOB}'),
+  UNIQUE (run_id, lawd_cd, deal_ymd, page_no, row_index),
+  FOREIGN KEY (run_id, lawd_cd, deal_ymd, page_no) REFERENCES collection_pages (run_id, lawd_cd, deal_ymd, page_no)
+) STRICT;
+CREATE INDEX transaction_observations_by_identity ON transaction_observations (lawd_cd, deal_ymd, identity_hash, ordinal);
+CREATE TRIGGER transaction_observations_no_update BEFORE UPDATE ON transaction_observations BEGIN
+  SELECT RAISE(ABORT, 'transaction_observations 는 불변이다');
+END;
+CREATE TRIGGER transaction_observations_no_delete BEFORE DELETE ON transaction_observations BEGIN
+  SELECT RAISE(ABORT, 'transaction_observations 는 삭제하지 않는다');
+END;
+
+CREATE TABLE transactions (
+  transaction_id        TEXT NOT NULL PRIMARY KEY CHECK (transaction_id GLOB '{UUID_GLOB}'),
+  provider              TEXT NOT NULL CHECK (length(provider) > 0),
+  lawd_cd               TEXT NOT NULL CHECK (lawd_cd GLOB '{LAWD_GLOB}'),
+  deal_ymd              TEXT NOT NULL CHECK (deal_ymd GLOB '{YM_GLOB}'),
+  identity_hash         TEXT NOT NULL CHECK (identity_hash GLOB '{SHA256_GLOB}'),
+  ordinal               INTEGER NOT NULL CHECK (ordinal >= 0),
+  deal_date             TEXT CHECK (deal_date IS NULL OR deal_date GLOB '{DATE_GLOB}'),
+  amount_krw            INTEGER CHECK (amount_krw IS NULL OR amount_krw >= 0),
+  building_area_m2      REAL CHECK (building_area_m2 IS NULL OR building_area_m2 >= 0),
+  plottage_area_m2      REAL CHECK (plottage_area_m2 IS NULL OR plottage_area_m2 >= 0),
+  build_year            INTEGER CHECK (build_year IS NULL OR (build_year >= 1800 AND build_year <= 2100)),
+  missing_reasons_json  TEXT NOT NULL CHECK (json_valid(missing_reasons_json) AND json_type(missing_reasons_json) = 'object'),
+  emd_name              TEXT,
+  jibun_raw             TEXT,
+  jibun_masked          INTEGER NOT NULL CHECK (jibun_masked IN (0, 1)),
+  jibun_prefix          TEXT,
+  building_kind         TEXT NOT NULL CHECK (building_kind {_in(BUILDING_KINDS)}),
+  building_type_raw     TEXT,
+  building_use_raw      TEXT,
+  land_use_raw          TEXT,
+  floor_raw             TEXT,
+  share_deal            INTEGER NOT NULL CHECK (share_deal IN (0, 1)),
+  cancel_status         TEXT NOT NULL CHECK (cancel_status {_in(CANCEL_STATUSES)}),
+  cancel_date           TEXT CHECK (cancel_date IS NULL OR cancel_date GLOB '{DATE_GLOB}'),
+  dealing_gbn_raw       TEXT,
+  agent_sgg_raw         TEXT,
+  buyer_kind_raw        TEXT,
+  seller_kind_raw       TEXT,
+  scope                 TEXT NOT NULL CHECK (scope {_in(TRANSACTION_SCOPES)}),
+  scope_basis           TEXT NOT NULL CHECK (scope_basis {_in(SCOPE_BASES)}),
+  link_status           TEXT NOT NULL DEFAULT 'unlinked' CHECK (link_status {_in(LINK_STATUSES)}),
+  first_seen_run_id     TEXT NOT NULL CHECK (first_seen_run_id GLOB '{RUN_ID_GLOB}'),
+  last_seen_run_id      TEXT NOT NULL CHECK (last_seen_run_id GLOB '{RUN_ID_GLOB}'),
+  missing_since_run_id  TEXT CHECK (missing_since_run_id IS NULL OR missing_since_run_id GLOB '{RUN_ID_GLOB}'),
+  first_observation_id  TEXT NOT NULL REFERENCES transaction_observations (observation_id),
+  latest_observation_id TEXT NOT NULL REFERENCES transaction_observations (observation_id),
+  content_hash          TEXT NOT NULL CHECK (content_hash GLOB '{SHA256_GLOB}'),
+  data_mode             TEXT NOT NULL CHECK (data_mode {_in(DATA_MODES)}),
+  recorded_at           TEXT NOT NULL CHECK (recorded_at GLOB '{UTC_GLOB}'),
+  updated_at            TEXT NOT NULL CHECK (updated_at GLOB '{UTC_GLOB}'),
+  UNIQUE (provider, lawd_cd, deal_ymd, identity_hash, ordinal),
+  CHECK (cancel_status = 'cancelled' OR cancel_date IS NULL),
+  CHECK (last_seen_run_id >= first_seen_run_id)
+) STRICT;
+CREATE INDEX transactions_by_month_emd ON transactions (lawd_cd, deal_ymd, emd_name);
+CREATE INDEX transactions_by_link ON transactions (link_status, lawd_cd, deal_ymd);
+"""
+
 # (버전, 이름, SQL). 새 릴리스의 테이블은 새 항목으로 추가하고 기존 항목은 고치지 않는다.
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "r1b_minimum", MIGRATION_0001),
@@ -402,6 +536,7 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (3, "r1b_projection", MIGRATION_0003),
     (4, "r2_survey", MIGRATION_0004),
     (5, "r2_parcels", MIGRATION_0005),
+    (6, "r3_transactions", MIGRATION_0006),
 )
 DB_SCHEMA_VERSION = MIGRATIONS[-1][0]
 MIN_SQLITE_VERSION = (3, 38, 0)  # STRICT 테이블(3.37)과 내장 json_valid/json_type(3.38)
