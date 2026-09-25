@@ -59,7 +59,7 @@ def row(i: int, **over) -> dict:
 
 def test_schema_6_tables_and_status_counts(db):
     st = db.status()
-    assert st["db_schema_version"] == S.DB_SCHEMA_VERSION == 6
+    assert st["db_schema_version"] == S.DB_SCHEMA_VERSION >= 6
     for t in ("collection_runs", "transaction_observations", "transactions"):
         assert st["counts"][t] == 0
     cols = {r[1] for r in db.conn.execute("PRAGMA table_info(transactions)")}

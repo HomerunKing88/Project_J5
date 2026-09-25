@@ -26,6 +26,7 @@ from j5.package.validate import inspect_package
 from j5.collect.config import ConfigError, config_permission_warning, load_config, redact, service_key
 from j5.collect.rt import DEFAULT_ENDPOINT, DEFAULT_MAX_PAGES, DEFAULT_NUM_ROWS, CollectError, check_lawd, collect_months, month_range, months_done_on_disk, parse_months, report_from_raw, report_text, run_text
 from j5.db.transactions import coverage, coverage_text, load_run, unloaded_run_ids
+from j5.db.txlinks import apply_decisions, candidates, candidates_csv, candidates_text, read_decisions_csv
 from j5.parcels.convert import Clip, ConvertError, ConvertOptions, convert, convert_text, inspect_source, inspect_text, write_bundle
 from j5.schemas_loader import schema_errors
 
@@ -114,6 +115,17 @@ def _build_parser() -> argparse.ArgumentParser:
     rc.add_argument("--from", dest="from_ym", required=True, help="시작 계약월 YYYY-MM")
     rc.add_argument("--to", dest="to_ym", required=True, help="끝 계약월 YYYY-MM (포함)")
     rc.add_argument("--json", action="store_true")
+    rk = dsub.add_parser("rt-candidates", help="범위 안의 현재 거래(취소 확정 제외)를 후보 물건(연결된 필지의 법정동·지번 대조)과 함께 CSV 로 낸다. 정본에 쓰지 않는다. 결정 열을 채워 rt-link 로 반영")
+    rk.add_argument("--lawd-cd", required=True)
+    rk.add_argument("--from", dest="from_ym", required=True, help="시작 계약월 YYYY-MM")
+    rk.add_argument("--to", dest="to_ym", required=True, help="끝 계약월 YYYY-MM (포함)")
+    rk.add_argument("--emd", help="법정동 이름 목록 (쉼표 구분, 예: 종로5가,종로6가). 생략 시 전체")
+    rk.add_argument("--unlinked-only", action="store_true", help="유효한 연결이 없는 거래만")
+    rk.add_argument("--out", type=Path, help="CSV 출력 경로 (덮어쓰지 않음). 생략 시 표준 출력")
+    rk.add_argument("--json", action="store_true")
+    rn = dsub.add_parser("rt-link", help="결정 열(decision·asset_id·decision_scope·basis_kind·reviewed_on·note)을 채운 후보 CSV 를 정본 transaction_links 에 반영한다 (검토 결정 이력 보존)")
+    rn.add_argument("file", type=Path, help="rt-candidates 형식의 CSV")
+    rn.add_argument("--json", action="store_true")
     pk.add_argument("file", type=Path)
     pk.add_argument("--json", action="store_true")
 
@@ -327,6 +339,27 @@ def _db_main(args) -> int:
                 lawd = check_lawd(args.lawd_cd)
                 c = coverage(db, lawd, month_range(args.from_ym, args.to_ym))
                 sys.stdout.write(json.dumps(c, ensure_ascii=False, indent=2) + "\n" if args.json else coverage_text(c))
+                return 0
+            if args.db_command == "rt-candidates":
+                lawd = check_lawd(args.lawd_cd)
+                emd = [e.strip() for e in args.emd.split(",") if e.strip()] if args.emd else None
+                rows = candidates(db, lawd, month_range(args.from_ym, args.to_ym), emd_names=emd, unlinked_only=args.unlinked_only)
+                if args.json:
+                    sys.stdout.write(json.dumps(rows, ensure_ascii=False, indent=2) + "\n")
+                elif args.out is not None:
+                    try:
+                        with open(args.out, "x", encoding="utf-8", newline="") as f:
+                            f.write(candidates_csv(rows))
+                    except FileExistsError:
+                        print(f"이미 있는 파일을 덮어쓰지 않는다: {args.out}", file=sys.stderr)
+                        return USAGE_ERROR
+                    sys.stdout.write(candidates_text(rows) + f"CSV: {args.out}\n")
+                else:
+                    sys.stdout.write(candidates_csv(rows))
+                return 0
+            if args.db_command == "rt-link":
+                r = apply_decisions(db, read_decisions_csv(args.file))
+                sys.stdout.write(json.dumps(r.to_dict(), ensure_ascii=False, indent=2) + "\n" if args.json else r.to_text())
                 return 0
             if args.db_command == "parcels-load":
                 if not args.bundle.is_file():

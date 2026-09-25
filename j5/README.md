@@ -139,3 +139,15 @@ python -m j5 db [--db 경로] rt-coverage --lawd-cd 11110 --from 2006-01 --to 20
 - 금액은 만원 → 원(`amount_krw`), 계약일·면적·건축년도·취소일은 해석 불가 시 null + `missing_reasons_json` 사유. 지번 마스킹(`jibun_masked`)과 앞자리(`jibun_prefix`)를 따로 둔다. 초기 범위는 지분 → `partial_share`, 집합 → `strata_unit`, 그 외 `unclear`.
 - `rt-coverage` 는 월별 수집 결과와 거래·취소·사라짐·마스킹·연결 수를 보인다. 거래·연결 등 현재 통계는 취소 확정 거래를 빼고 세며 취소 건수는 따로 보인다. 수집 완료 기간과 물건 연결 완료 건수는 별개다. 연결(후보 CSV·수동 연결)은 다음 조각.
 - `backup` 은 정본이 참조한 수집 원본(실행 기록·응답 XML, `raw/rt_nrg/`)도 해시를 검증하며 함께 담고, `restore` 는 `raw/` 까지 제자리에 되돌려 대조한다. 원본이 없거나 바뀌었으면 백업을 완료로 표시하지 않는다.
+
+## 거래↔물건 연결: 후보 CSV·수동 연결 (R3, J5-014B-2)
+
+```text
+python -m j5 db [--db 경로] rt-candidates --lawd-cd 11110 --from 2021-09 --to 2026-09 [--emd 종로5가,종로6가] [--unlinked-only] [--out 후보.csv] [--json]
+python -m j5 db [--db 경로] rt-link 후보.csv [--json]
+```
+
+- `rt-candidates` 는 범위 안의 현재 거래(취소 확정 제외)마다 물건에 연결된 필지의 법정동·지번과 대조해 후보 물건을 붙인 CSV 를 낸다(db_schema 7). 지번이 온전하면 `jibun_exact`, 마스킹이면 앞자리·자릿수 범위로 `jibun_prefix`. 정본에 쓰지 않으며 `--out` 은 덮어쓰지 않는다.
+- CSV 의 결정 열 `decision`(candidate / pending_evidence / confirmed / withdrawn)·`asset_id`·`decision_scope`·`basis_kind`(jibun_exact / jibun_prefix / manual / document)·`reviewed_on`·`note` 를 스프레드시트에서 채워 저장한 뒤 `rt-link` 로 반영한다. 결정 열이 빈 행은 건너뛴다. 한 행이라도 오류면 전체 거절.
+- 거래당 유효한 연결은 하나다. 다른 물건으로 바꾸면 이전 연결을 철회(대체)하고 새 연결을 만들며, 상태 변화는 `review_decisions` 에 불변 이력으로 남는다. 앞자리 범위(`jibun_prefix`)만으로 `confirmed` 로 두지 않고, 취소 확정 거래는 확정하지 않는다.
+- 릴리스 계획 §4 의 결정대로 연결 검토 화면 대신 이 CSV·수동 확인으로 운영한다.

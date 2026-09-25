@@ -228,7 +228,7 @@ class Db:
         """정본 상태. data_home 을 주면 파생본 포인터·ZIP 파일까지 실제로 확인한다(없으면 '파일 미확인' 으로 표시)."""
         counts = {t: self.conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
                   for t in ("subjects", "assets", "source_documents", "records", "record_evidence", "attachments", "survey_units", "survey_sessions", "unit_observations", "parcels", "asset_components",
-                            "collection_runs", "transaction_observations", "transactions")}
+                            "collection_runs", "transaction_observations", "transactions", "transaction_links", "review_decisions")}
         integrity = [r[0] for r in self.conn.execute("PRAGMA integrity_check")]
         fk = [dict(zip(("table", "rowid", "parent", "fkid"), r)) for r in self.conn.execute("PRAGMA foreign_key_check")]
         projection = None

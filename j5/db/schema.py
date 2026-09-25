@@ -529,6 +529,54 @@ CREATE INDEX transactions_by_month_emd ON transactions (lawd_cd, deal_ymd, emd_n
 CREATE INDEX transactions_by_link ON transactions (link_status, lawd_cd, deal_ymd);
 """
 
+LINK_BASIS_KINDS = ("jibun_exact", "jibun_prefix", "manual", "document")
+LINK_DECISIONS = ("candidate", "pending_evidence", "confirmed", "withdrawn")
+
+# J5-014B-2 거래↔물건 연결과 검토 결정 (데이터 사전 §7.2 transaction_links, §2 review_decisions, §8 불변 검토기록).
+# - transaction_links: 거래 하나에 유효한(철회되지 않은) 연결은 하나다(부분 UNIQUE). 다른 물건으로 바꾸면 이전 연결을 철회(superseded_by)하고 새 연결을 만든다.
+# - review_decisions: 연결의 상태 변화(후보·근거 대기·확정·철회)마다 한 행. 불변(트리거). 현재 상태는 transaction_links 가 갖고 이력은 여기 남는다.
+MIGRATION_0007 = f"""
+CREATE TABLE transaction_links (
+  link_id              TEXT NOT NULL PRIMARY KEY CHECK (link_id GLOB '{UUID_GLOB}'),
+  transaction_id       TEXT NOT NULL REFERENCES transactions (transaction_id),
+  asset_id             TEXT NOT NULL REFERENCES assets (asset_id),
+  scope                TEXT NOT NULL CHECK (scope {_in(TRANSACTION_SCOPES)}),
+  status               TEXT NOT NULL CHECK (status {_in(LINK_DECISIONS)}),
+  basis_kind           TEXT NOT NULL CHECK (basis_kind {_in(LINK_BASIS_KINDS)}),
+  basis_note           TEXT,
+  evidence_document_id TEXT REFERENCES source_documents (document_id),
+  reviewed_on          TEXT NOT NULL CHECK (reviewed_on GLOB '{DATE_GLOB}'),
+  withdrawn_on         TEXT CHECK (withdrawn_on IS NULL OR withdrawn_on GLOB '{DATE_GLOB}'),
+  withdrawn_reason     TEXT,
+  superseded_by        TEXT REFERENCES transaction_links (link_id),
+  recorded_at          TEXT NOT NULL CHECK (recorded_at GLOB '{UTC_GLOB}'),
+  updated_at           TEXT NOT NULL CHECK (updated_at GLOB '{UTC_GLOB}'),
+  CHECK ((status = 'withdrawn') = (withdrawn_on IS NOT NULL)),
+  CHECK (superseded_by IS NULL OR status = 'withdrawn')
+) STRICT;
+CREATE UNIQUE INDEX transaction_links_active ON transaction_links (transaction_id) WHERE status <> 'withdrawn';
+CREATE INDEX transaction_links_by_asset ON transaction_links (asset_id, status);
+
+CREATE TABLE review_decisions (
+  decision_id          TEXT NOT NULL PRIMARY KEY CHECK (decision_id GLOB '{UUID_GLOB}'),
+  link_id              TEXT NOT NULL REFERENCES transaction_links (link_id),
+  decision             TEXT NOT NULL CHECK (decision {_in(LINK_DECISIONS)}),
+  scope                TEXT NOT NULL CHECK (scope {_in(TRANSACTION_SCOPES)}),
+  asset_id             TEXT NOT NULL REFERENCES assets (asset_id),
+  decided_on           TEXT NOT NULL CHECK (decided_on GLOB '{DATE_GLOB}'),
+  rationale            TEXT,
+  previous_decision_id TEXT REFERENCES review_decisions (decision_id),
+  recorded_at          TEXT NOT NULL CHECK (recorded_at GLOB '{UTC_GLOB}')
+) STRICT;
+CREATE INDEX review_decisions_by_link ON review_decisions (link_id, recorded_at);
+CREATE TRIGGER review_decisions_no_update BEFORE UPDATE ON review_decisions BEGIN
+  SELECT RAISE(ABORT, 'review_decisions 는 불변이다');
+END;
+CREATE TRIGGER review_decisions_no_delete BEFORE DELETE ON review_decisions BEGIN
+  SELECT RAISE(ABORT, 'review_decisions 는 삭제하지 않는다');
+END;
+"""
+
 # (버전, 이름, SQL). 새 릴리스의 테이블은 새 항목으로 추가하고 기존 항목은 고치지 않는다.
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "r1b_minimum", MIGRATION_0001),
@@ -537,6 +585,7 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (4, "r2_survey", MIGRATION_0004),
     (5, "r2_parcels", MIGRATION_0005),
     (6, "r3_transactions", MIGRATION_0006),
+    (7, "r3_links", MIGRATION_0007),
 )
 DB_SCHEMA_VERSION = MIGRATIONS[-1][0]
 MIN_SQLITE_VERSION = (3, 38, 0)  # STRICT 테이블(3.37)과 내장 json_valid/json_type(3.38)
