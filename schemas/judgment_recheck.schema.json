@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://j5.local/schemas/judgment_recheck.schema.json",
+  "title": "목표 매수가·투자판단 재확인 입력 (j5 db recheck-add) 과 judgment_rechecks 행",
+  "description": "데이터 사전 §8, 릴리스 계획 §8 R4 '반대 증거와 변경 조건'. 판단 기록은 불변이므로 재확인은 별도 불변 기록이다. 재확인은 현재(수정되지 않은) 목표 매수가·투자판단 기록만 가리킨다. 반대 증거는 자유 서술이며 근거 문서(source_documents)를 선택으로 붙인다. 재확인 시점에 본 신호는 저장소가 signals 로 남긴다.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "asset_id", "record_id", "reviewed_on", "outcome", "conditions_checked", "counter_evidence", "note"],
+  "properties": {
+    "kind": { "const": "recheck" },
+    "asset_id": { "$ref": "#/$defs/uuid" },
+    "record_id": { "description": "재확인하는 목표 매수가·투자판단 기록 (현재 기록이어야 한다)", "$ref": "#/$defs/uuid" },
+    "reviewed_on": { "description": "재확인일 (YYYY-MM-DD)", "$ref": "#/$defs/date" },
+    "outcome": {
+      "description": "reconfirmed: 조건이 아직 유효해 판단을 유지, revision_needed: 조건이 깨졌거나 반대 증거가 커서 새 기록(수정)이 필요",
+      "type": "string",
+      "enum": ["reconfirmed", "revision_needed"]
+    },
+    "conditions_checked": {
+      "description": "판단 기록의 유효 조건·변경 조건을 하나씩 대조한 결과. holds=null 은 확인하지 못함",
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["condition", "holds"],
+        "properties": {
+          "condition": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "holds": { "type": ["boolean", "null"] },
+          "note": { "type": ["string", "null"], "maxLength": 2000 }
+        }
+      }
+    },
+    "counter_evidence": {
+      "description": "판단에 반하는 증거. 근거 문서가 있으면 document_id 로 잇는다",
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["note"],
+        "properties": {
+          "note": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "document_id": { "oneOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }] },
+          "observed_on": { "description": "증거를 확인한 날짜", "oneOf": [{ "$ref": "#/$defs/date" }, { "type": "null" }] }
+        }
+      }
+    },
+    "note": { "type": ["string", "null"], "maxLength": 4000 }
+  },
+  "$defs": {
+    "uuid": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "date": { "type": "string", "format": "date", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" }
+  }
+}

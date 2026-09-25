@@ -84,7 +84,7 @@ def series_package(tmp_path) -> Path:
 
 
 def test_schema_10_columns_import_and_backfill(db, home, tmp_path):
-    assert db.status()["db_schema_version"] == S.DB_SCHEMA_VERSION == 10
+    assert db.status()["db_schema_version"] == S.DB_SCHEMA_VERSION >= 10
     cols = {r[1] for r in db.conn.execute("PRAGMA table_info(attachments)")}
     assert {"viewpoint_id", "heading_deg", "previous_photo_sha256"} <= cols
     r = import_package(db, series_package(tmp_path), home)
@@ -103,12 +103,13 @@ def test_schema_10_columns_import_and_backfill(db, home, tmp_path):
         d9.conn.execute("DROP INDEX attachments_by_viewpoint")
         for col in ("viewpoint_id", "heading_deg", "previous_photo_sha256"):
             d9.conn.execute(f"ALTER TABLE attachments DROP COLUMN {col}")
-        d9.conn.execute("DELETE FROM schema_migrations WHERE version = 10")
+        d9.conn.execute("DROP TABLE IF EXISTS judgment_rechecks")  # 마이그레이션 11 (J5-015C)
+        d9.conn.execute("DELETE FROM schema_migrations WHERE version >= 10")
     assert d9.schema_version() == 9 and "viewpoint_id" not in {r[1] for r in d9.conn.execute("PRAGMA table_info(attachments)")}
     d9.close()
     d10 = Db.open(old)
     try:
-        assert d10.schema_version() == 10 and d10.status()["ok"]
+        assert d10.schema_version() == S.DB_SCHEMA_VERSION and d10.status()["ok"]
         back = {(a["record_id"], a["sha256"]): dict(a) for a in d10.conn.execute("SELECT * FROM attachments")}
         assert back[(E[0], f24)]["viewpoint_id"] == "전면-남측" and back[(E[0], f24)]["heading_deg"] == 180 and back[(E[1], f25)]["previous_photo_sha256"] == f24
         assert back[(E[2], sha(PHOTOS["2026g"]))]["viewpoint_id"] is None and back[(E[2], sha(PHOTOS["2026g"]))]["previous_photo_sha256"] is None

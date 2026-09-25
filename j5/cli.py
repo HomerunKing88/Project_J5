@@ -30,6 +30,7 @@ from j5.db.txlinks import apply_decisions, candidates, candidates_csv, candidate
 from j5.db.zones import apply_rules, changes_since, changes_text, current_rules, load_rules, rules_text, zone_counts
 from j5.db.judgment import apply_record_input, asof, asof_text, load_record_input
 from j5.db.photos import export_series, photo_series, photo_tags, series_text
+from j5.db.recheck import apply_recheck_input, load_recheck_input, recheck_add_text, recheck_status, recheck_text
 from j5.parcels.convert import Clip, ConvertError, ConvertOptions, convert, convert_text, inspect_source, inspect_text, write_bundle
 from j5.schemas_loader import schema_errors
 
@@ -148,6 +149,12 @@ def _build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--export", action="store_true", help="묶음별 폴더로 사진을 복사하고 index.json 을 쓴다 (실데이터 홈 안, 저장소에 넣지 않는다)")
     ps.add_argument("--data-home", type=Path, help="사진이 있는 실데이터 홈. 생략 시 J5_DATA_HOME")
     ps.add_argument("--json", action="store_true")
+    rc = dsub.add_parser("recheck", help="현재 목표 매수가·투자판단 기록의 재확인 현황: 조건 목록, 판단 뒤 정본에 들어온 새 정보(관측·연결 결정·취소·비교 근거 변동·범위 규칙·구성 변경·반박 근거), 마지막 재확인")
+    rc.add_argument("--asset", required=True, help="asset_id")
+    rc.add_argument("--json", action="store_true")
+    rca = dsub.add_parser("recheck-add", help="재확인 기록을 넣는다 (schemas/judgment_recheck.schema.json, kind: recheck, 불변). 조건 대조·반대 증거를 남기고 그 시점의 신호 요약을 저장한다. 판단 자체는 바꾸지 않는다")
+    rca.add_argument("file", type=Path, help="입력 JSON (kind: recheck)")
+    rca.add_argument("--json", action="store_true")
     rg = dsub.add_parser("rt-changes", help="어떤 실행 이후의 변경: 새 거래·취소로 바뀜·응답에서 사라짐 (취소·정정 점검 결과 읽기)")
     rg.add_argument("--lawd-cd", required=True)
     rg.add_argument("--since-run", required=True, help="기준 실행 ID (이 실행 뒤의 실행들을 본다)")
@@ -423,6 +430,17 @@ def _db_main(args) -> int:
                 known = args.at if args.as_recorded and not args.known_by else args.known_by
                 a = asof(db, args.asset, args.at, known_by=known)
                 sys.stdout.write(json.dumps(a, ensure_ascii=False, indent=2) + "\n" if args.json else asof_text(a))
+                return 0
+            if args.db_command == "recheck":
+                st_ = recheck_status(db, args.asset)
+                sys.stdout.write(json.dumps(st_, ensure_ascii=False, indent=2) + "\n" if args.json else recheck_text(st_))
+                return 0
+            if args.db_command == "recheck-add":
+                if not args.file.is_file():
+                    print(f"입력 파일이 없음: {args.file}", file=sys.stderr)
+                    return USAGE_ERROR
+                r = apply_recheck_input(db, load_recheck_input(args.file))
+                sys.stdout.write(json.dumps(r, ensure_ascii=False, indent=2) + "\n" if args.json else recheck_add_text(r))
                 return 0
             if args.db_command == "photo-series":
                 if args.tag is not None and args.tag not in photo_tags():

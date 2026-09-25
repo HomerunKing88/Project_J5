@@ -656,6 +656,32 @@ UPDATE attachments SET
 CREATE INDEX attachments_by_viewpoint ON attachments (viewpoint_id);
 """
 
+# J5-015C 반대 증거·변경 조건 재확인 (데이터 사전 §8 "재확인 필요를 표시", 릴리스 계획 §8 R4 "반대 증거와 변경 조건", §9 "중요한 입력이 변경되면 영향받은 검토를 다시 요구하고 과거 승인 이력을 보존").
+# 목표 매수가·투자판단 기록은 불변이므로 재확인은 별도 불변 기록이다. 재확인 시점에 본 신호(판단 뒤의 관측·연결·취소·범위 규칙·구성 변경)를 signals_json 으로 남겨
+# 그 뒤 새 신호가 생기면 다시 "재확인 필요" 가 된다. 반대 증거는 자유 서술 + 선택 근거 문서(source_documents) 참조다.
+RECHECK_OUTCOMES = ("reconfirmed", "revision_needed")
+MIGRATION_0011 = f"""
+CREATE TABLE judgment_rechecks (
+  recheck_id              TEXT NOT NULL PRIMARY KEY CHECK (recheck_id GLOB '{UUID_GLOB}'),
+  record_id               TEXT NOT NULL REFERENCES records (record_id),
+  asset_id                TEXT NOT NULL REFERENCES assets (asset_id),
+  outcome                 TEXT NOT NULL CHECK (outcome {_in(RECHECK_OUTCOMES)}),
+  reviewed_on             TEXT NOT NULL CHECK (reviewed_on GLOB '{DATE_GLOB}'),
+  conditions_checked_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(conditions_checked_json) AND json_type(conditions_checked_json) = 'array'),
+  counter_evidence_json   TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(counter_evidence_json) AND json_type(counter_evidence_json) = 'array'),
+  signals_json            TEXT NOT NULL CHECK (json_valid(signals_json) AND json_type(signals_json) = 'object'),
+  note                    TEXT,
+  recorded_at             TEXT NOT NULL CHECK (recorded_at GLOB '{UTC_GLOB}')
+) STRICT;
+CREATE INDEX judgment_rechecks_by_record ON judgment_rechecks (record_id, recorded_at);
+CREATE TRIGGER judgment_rechecks_no_update BEFORE UPDATE ON judgment_rechecks BEGIN
+  SELECT RAISE(ABORT, 'judgment_rechecks 는 불변이다');
+END;
+CREATE TRIGGER judgment_rechecks_no_delete BEFORE DELETE ON judgment_rechecks BEGIN
+  SELECT RAISE(ABORT, 'judgment_rechecks 는 삭제하지 않는다');
+END;
+"""
+
 # (버전, 이름, SQL). 새 릴리스의 테이블은 새 항목으로 추가하고 기존 항목은 고치지 않는다.
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "r1b_minimum", MIGRATION_0001),
@@ -668,6 +694,7 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (8, "r3_zones", MIGRATION_0008),
     (9, "r4_record_types", MIGRATION_0009),
     (10, "r4_photo_series", MIGRATION_0010),
+    (11, "r4_rechecks", MIGRATION_0011),
 )
 # 표 재작성이 필요한 마이그레이션: 외래키 검사를 끈 채 한 트랜잭션으로 실행하고 foreign_key_check 가 비어야 커밋한다 (store._migrate).
 FK_OFF_MIGRATIONS = frozenset({9})

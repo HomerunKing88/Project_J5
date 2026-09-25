@@ -36,4 +36,8 @@
 
 - `judgment_records.schema.json`: 목표 매수가·투자판단 기록 입력(`j5 db record-add`)과 `records.record_type` `target_price`·`investment_judgment` 의 payload(`$defs/target_price_payload`, `$defs/investment_judgment_payload`). 목표 매수가는 가격 종류·원 단위 가격·판단일·전략·구성 기준일·전제·비교 근거·유효 조건·수정 사유, 투자판단은 10항목과 status(draft/formal)·decision(none/approved/withdrawn). formal 은 10항목 모두, 승인은 formal 만(데이터 사전 §8).
 
+## 파일 (judgment_recheck, R4 J5-015C)
+
+- `judgment_recheck.schema.json`: 재확인 입력(`j5 db recheck-add`)과 `judgment_rechecks` 행. 현재 목표 매수가·투자판단 기록을 가리키고 결과(`reconfirmed` / `revision_needed`)·재확인일·조건 대조(`condition`, `holds` true/false/null, `note`)·반대 증거(`note`, 선택 `document_id`·`observed_on`)·메모를 둔다. 재확인 시점의 신호 요약은 저장소가 붙인다. 판단 자체는 바꾸지 않는다(데이터 사전 §8, 릴리스 계획 §8·§9).
+
 이벤트 해시는 파일에 있는 행의 UTF-8 바이트를 그대로 sha256 한 값이다. 재직렬화하지 않는다. 검증은 jsonschema(고정 버전, `requirements-dev.txt`) Draft 2020-12로 한다. 스키마와 데이터 사전이 충돌하면 PR을 완료하지 않는다.
