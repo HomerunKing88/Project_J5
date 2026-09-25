@@ -293,6 +293,12 @@
             "note": "가상 설계"
           },
           {
+            "t": 1,
+            "amount_krw": 0,
+            "kind": "vacancy",
+            "note": "가상 설계 중 공실 (명도 완료)"
+          },
+          {
             "t": 2,
             "amount_krw": -1000000000,
             "kind": "construction",
@@ -321,6 +327,12 @@
             "amount_krw": 500000000,
             "kind": "rent",
             "note": "가상 임대 (신축 후)"
+          },
+          {
+            "t": 3,
+            "amount_krw": 0,
+            "kind": "vacancy",
+            "note": "가상 공사 중 공실"
           }
         ],
         "reserve_cash_krw": 100000000,
@@ -436,6 +448,7 @@
           "amount_krw": 1200000000,
           "basis": "가상 인접 필지 호가"
         },
+        "included_in_price": true,
         "acquisition_order": [
           "본 필지",
           "인접 필지"
@@ -444,7 +457,7 @@
         "partial_fallback": "본 필지만 확보 시 현상 유지 임대"
       },
       "assumptions": [
-        "인접 필지 12억 추가"
+        "인접 필지 12억을 가격 52억과 t=3 매입 흐름에 포함"
       ]
     }
   ],

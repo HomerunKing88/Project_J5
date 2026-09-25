@@ -928,6 +928,7 @@
                 "additionalProperties": false,
                 "required": [
                   "extra_price",
+                  "included_in_price",
                   "acquisition_order",
                   "period_months",
                   "partial_fallback"
@@ -935,6 +936,10 @@
                 "properties": {
                   "extra_price": {
                     "$ref": "#/$defs/krw"
+                  },
+                  "included_in_price": {
+                    "description": "추가 가격이 이 후보의 equity 가격(P)과 cash 흐름에 이미 들어 있으면 true. false 면 계산기가 후보를 미확정으로 둔다(임의로 더하지 않는다)",
+                    "type": "boolean"
                   },
                   "acquisition_order": {
                     "type": "array",
