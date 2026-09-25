@@ -24,7 +24,8 @@ from j5.db.validate import ValidationError
 from j5.package.preserve import PreserveError, copy_package
 from j5.package.validate import inspect_package
 from j5.collect.config import ConfigError, config_permission_warning, load_config, redact, service_key
-from j5.collect.rt import DEFAULT_ENDPOINT, DEFAULT_MAX_PAGES, DEFAULT_NUM_ROWS, CollectError, check_lawd, collect_months, parse_months, report_from_raw, report_text, run_text
+from j5.collect.rt import DEFAULT_ENDPOINT, DEFAULT_MAX_PAGES, DEFAULT_NUM_ROWS, CollectError, check_lawd, collect_months, month_range, months_done_on_disk, parse_months, report_from_raw, report_text, run_text
+from j5.db.transactions import coverage, coverage_text, load_run, unloaded_run_ids
 from j5.parcels.convert import Clip, ConvertError, ConvertOptions, convert, convert_text, inspect_source, inspect_text, write_bundle
 from j5.schemas_loader import schema_errors
 
@@ -103,6 +104,16 @@ def _build_parser() -> argparse.ArgumentParser:
     ps_.add_argument("--out", type=Path, help="제안을 쓸 JSON 파일 (덮어쓰지 않음). 생략하면 표준 출력")
     ps_.add_argument("--effective-from", help="연결 시작일 YYYY-MM-DD (기본 오늘, UTC)")
     pk = dsub.add_parser("parcels-link", help="검토한 연결 파일(asset_components_input)을 정본 asset_components 에 반영한다")
+    rl = dsub.add_parser("rt-load", help="실거래 수집 실행 기록(run-*.json)과 원본 XML 을 정본에 반영한다 (collection_runs / transaction_observations / transactions, db_schema 6). 같은 실행은 다시 반영하지 않는다")
+    rl.add_argument("--lawd-cd", required=True, help="시군구 코드 5자리")
+    rl.add_argument("--run-id", help="특정 실행만. 생략 시 정본에 없는 실행을 오래된 순으로 모두 반영")
+    rl.add_argument("--data-home", type=Path, help="원본·기록이 있는 실데이터 홈. 생략 시 J5_DATA_HOME")
+    rl.add_argument("--json", action="store_true")
+    rc = dsub.add_parser("rt-coverage", help="계약월 범위의 수집 현황(월별 완전/부분/실패/없음, 거래·취소·사라짐·연결 수). 수집 완료와 연결 완료를 따로 센다")
+    rc.add_argument("--lawd-cd", required=True)
+    rc.add_argument("--from", dest="from_ym", required=True, help="시작 계약월 YYYY-MM")
+    rc.add_argument("--to", dest="to_ym", required=True, help="끝 계약월 YYYY-MM (포함)")
+    rc.add_argument("--json", action="store_true")
     pk.add_argument("file", type=Path)
     pk.add_argument("--json", action="store_true")
 
@@ -144,6 +155,17 @@ def _build_parser() -> argparse.ArgumentParser:
     cs.add_argument("--num-rows", type=int, default=DEFAULT_NUM_ROWS, help="페이지당 행 수 (1~1000)")
     cs.add_argument("--max-pages", type=int, default=DEFAULT_MAX_PAGES, help="월당 최대 페이지 (1~500)")
     cs.add_argument("--json", action="store_true")
+    cf = csub.add_parser("rt-fetch", help="계약월 범위를 받는다. 이미 완전히 받은 달(실행 기록의 complete/empty)은 건너뛴다 (--refresh 로 다시 받음). 정본에 쓰지 않는다 (반영은 db rt-load)")
+    cf.add_argument("--lawd-cd", required=True, help="시군구 코드 5자리")
+    cf.add_argument("--from", dest="from_ym", required=True, help="시작 계약월 YYYY-MM")
+    cf.add_argument("--to", dest="to_ym", required=True, help="끝 계약월 YYYY-MM (포함)")
+    cf.add_argument("--refresh", action="store_true", help="이미 받은 달도 다시 받는다 (취소·정정 점검)")
+    cf.add_argument("--data-home", type=Path)
+    cf.add_argument("--config", type=Path)
+    cf.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
+    cf.add_argument("--num-rows", type=int, default=DEFAULT_NUM_ROWS)
+    cf.add_argument("--max-pages", type=int, default=DEFAULT_MAX_PAGES)
+    cf.add_argument("--json", action="store_true")
     cr = csub.add_parser("rt-report", help="저장된 원본 응답만으로 요약을 다시 만든다 (네트워크 없음)")
     cr.add_argument("--lawd-cd", required=True)
     cr.add_argument("--months", required=True)
@@ -289,6 +311,23 @@ def _db_main(args) -> int:
                 o = overview(db)
                 sys.stdout.write(json.dumps(o, ensure_ascii=True, sort_keys=True, indent=2) + "\n" if args.json else overview_text(o))
                 return 0
+            if args.db_command == "rt-load":
+                home = _data_home(args)
+                if home is None:
+                    return USAGE_ERROR
+                lawd = check_lawd(args.lawd_cd)
+                run_ids = [args.run_id] if args.run_id else unloaded_run_ids(db, home, lawd)
+                if not run_ids:
+                    print(f"정본에 없는 실행 기록이 없다 ({home / 'raw' / 'rt_nrg' / lawd})", file=sys.stderr)
+                    return 0
+                results = [load_run(db, home, lawd, rid) for rid in run_ids]
+                sys.stdout.write(json.dumps([r.to_dict() for r in results], ensure_ascii=False, indent=2) + "\n" if args.json else "".join(r.to_text() for r in results))
+                return 0
+            if args.db_command == "rt-coverage":
+                lawd = check_lawd(args.lawd_cd)
+                c = coverage(db, lawd, month_range(args.from_ym, args.to_ym))
+                sys.stdout.write(json.dumps(c, ensure_ascii=False, indent=2) + "\n" if args.json else coverage_text(c))
+                return 0
             if args.db_command == "parcels-load":
                 if not args.bundle.is_file():
                     print(f"번들 파일이 없음: {args.bundle}", file=sys.stderr)
@@ -321,6 +360,9 @@ def _db_main(args) -> int:
     except DbError as e:
         print(f"정본 오류 [{e.code}]: {e.message}", file=sys.stderr)
         return 1
+    except CollectError as e:
+        print(f"입력 오류 [{e.code}]: {e.message}", file=sys.stderr)
+        return USAGE_ERROR
     except sqlite3.Error as e:
         print(f"SQLite 오류 [{type(e).__name__}]: {e}. 정본은 트랜잭션 단위로 되돌아갔다", file=sys.stderr)
         return 1
@@ -402,6 +444,24 @@ def _collect_main(args) -> int:
         return USAGE_ERROR
     try:
         lawd = check_lawd(args.lawd_cd)
+        if args.collect_command == "rt-fetch":
+            wanted = month_range(args.from_ym, args.to_ym)
+            done = months_done_on_disk(home, lawd)
+            skipped = [] if args.refresh else [m for m in wanted if done.get(m) in ("complete", "empty")]
+            months = [m for m in wanted if m not in skipped]
+            if not months:
+                print(f"{len(wanted)}개월이 모두 이미 완전히 받아져 있다 (--refresh 로 다시 받는다)", file=sys.stderr)
+                return 0
+            key, source = service_key(home, config_path=args.config)
+            warn = config_permission_warning(load_config(home, path=args.config)[1])
+            if warn:
+                print(f"주의: {warn}", file=sys.stderr)
+            print(f"수집 시작: 시군구 {lawd}, {wanted[0]}~{wanted[-1]} 중 {len(months)}개월 (이미 받은 {len(skipped)}개월 건너뜀), 인증키 출처 {source}."
+                  f" 이 호출은 공공데이터포털 일일 트래픽을 약 {len(months)}회 이상 쓴다.", file=sys.stderr)
+            run = collect_months(home, key=key, key_source=source, lawd_cd=lawd, months=months, endpoint=args.endpoint, num_rows=args.num_rows, max_pages=args.max_pages)
+            text_ = json.dumps(run.to_dict(), ensure_ascii=False, indent=2) + "\n" if args.json else run_text(run) + "다음: `j5 db rt-load --lawd-cd " + lawd + "` 로 정본에 반영한다.\n"
+            sys.stdout.write(redact(text_, key))
+            return 0 if run.ok else 1
         months = parse_months(args.months)
         if args.collect_command == "rt-report":
             rep = report_from_raw(home, lawd, months, args.run_id, dist_fields=tuple(args.dist))

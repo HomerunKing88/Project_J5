@@ -124,3 +124,17 @@ python -m j5 collect rt-report --lawd-cd 11110 --months 2026-08,2021-09,2006-03 
 - 기본 엔드포인트는 코드에 적힌 알려진 주소이며 공공데이터포털 API 상세 페이지의 주소와 대조한다. 호출은 포털 일일 트래픽을 쓴다.
 - `rt-report` 는 그 실행의 기록 파일에서 totalCount·수집 결과를 함께 보인다. `--dist FIELD` 를 주면 그 필드는 값 종류가 20개를 넘어도 전체 분포를 보인다(법정동별 건수 등).
 - 나에게 보낼 것은 `rt-report` 의 요약(또는 `report-*.json`)이다. 원본 행·인증키는 보내지 않는다.
+
+## 거래 범위 수집·정본 반영·현황 (R3, J5-014B-1)
+
+```text
+python -m j5 collect rt-fetch --lawd-cd 11110 --from 2021-09 --to 2026-09 [--refresh] [--endpoint URL] [--num-rows] [--max-pages] [--data-home] [--config] [--json]
+python -m j5 db [--db 경로] rt-load --lawd-cd 11110 [--run-id 실행ID] [--data-home 경로] [--json]
+python -m j5 db [--db 경로] rt-coverage --lawd-cd 11110 --from 2006-01 --to 2026-09 [--json]
+```
+
+- `rt-fetch` 는 계약월 범위를 받되 실행 기록 파일(`run-*.json`)에서 이미 complete/empty 인 달을 건너뛴다. `--refresh` 는 취소·정정 점검용으로 다시 받는다. 원본은 `rt-sample` 과 같은 자리에 쌓이고 정본에는 쓰지 않는다.
+- `rt-load` 는 정본에 없는 실행 기록을 오래된 순으로 반영한다(db_schema 6: `collection_runs`, `collection_pages`, `transaction_observations`, `transactions`). 원본 XML 의 sha256·항목 수가 기록과 다르거나 기록이 깨졌으면 거절하고 정본을 바꾸지 않는다. 같은 실행은 다시 반영하지 않는다. 실제 제공자 응답은 `private_real` 정본에만 넣는다.
+- 거래는 (제공자, 시군구, 계약월, 식별 해시, 순번) 으로 한 행이다. 식별 해시는 취소·거래 유형·중개사·매수/매도 구분처럼 나중에 채워지는 필드를 빼고 만들며, 같은 응답 안의 완전히 같은 행은 순번으로 구분한다. 같은 달을 다시 받으면 다시 보인 거래의 가변 필드(취소 등)를 갱신하고, 완전한 응답에서 사라진 거래는 `missing_since_run_id` 로만 표시한다(취소 확정 아님).
+- 금액은 만원 → 원(`amount_krw`), 계약일·면적·건축년도·취소일은 해석 불가 시 null + `missing_reasons_json` 사유. 지번 마스킹(`jibun_masked`)과 앞자리(`jibun_prefix`)를 따로 둔다. 초기 범위는 지분 → `partial_share`, 집합 → `strata_unit`, 그 외 `unclear`.
+- `rt-coverage` 는 월별 수집 결과와 거래·취소·사라짐·마스킹·연결 수를 보인다. 수집 완료 기간과 물건 연결 완료 건수는 별개다. 연결(후보 CSV·수동 연결)은 다음 조각.
