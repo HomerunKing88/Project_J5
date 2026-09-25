@@ -416,6 +416,21 @@ def month_range(from_ym: str, to_ym: str) -> list[str]:
     return out
 
 
+def recent_months(n: int, *, today: str | None = None) -> list[str]:
+    """이번 달을 포함해 최근 n개월 (오래된 순). today 는 'YYYY-MM-DD' (테스트용), 기본은 UTC 오늘."""
+    if not (1 <= n <= 600):
+        raise CollectError("bad_month", "최근 개월 수는 1~600")
+    base = (today or _now())[:7]
+    y, m = int(base[:4]), int(base[5:7])
+    out = []
+    for _ in range(n):
+        out.append(f"{y:04d}{m:02d}")
+        m -= 1
+        if m == 0:
+            y, m = y - 1, 12
+    return [x for x in reversed(out) if x >= "200601"]
+
+
 def months_done_on_disk(data_home: Path, lawd_cd: str) -> dict[str, str]:
     """실행 기록 파일들에서 달마다 가장 좋은 결과(complete/empty/partial/failed)를 모은다. 깨진 기록은 무시한다."""
     rank = {"complete": 3, "empty": 3, "partial": 2, "failed": 1}

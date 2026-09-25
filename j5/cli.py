@@ -24,9 +24,10 @@ from j5.db.validate import ValidationError
 from j5.package.preserve import PreserveError, copy_package
 from j5.package.validate import inspect_package
 from j5.collect.config import ConfigError, config_permission_warning, load_config, redact, service_key
-from j5.collect.rt import DEFAULT_ENDPOINT, DEFAULT_MAX_PAGES, DEFAULT_NUM_ROWS, CollectError, check_lawd, collect_months, month_range, months_done_on_disk, parse_months, report_from_raw, report_text, run_text
+from j5.collect.rt import DEFAULT_ENDPOINT, DEFAULT_MAX_PAGES, DEFAULT_NUM_ROWS, CollectError, check_lawd, collect_months, month_range, months_done_on_disk, parse_months, recent_months, report_from_raw, report_text, run_text
 from j5.db.transactions import coverage, coverage_text, load_run, unloaded_run_ids
 from j5.db.txlinks import apply_decisions, candidates, candidates_csv, candidates_text, read_decisions_csv
+from j5.db.zones import apply_rules, changes_since, changes_text, current_rules, load_rules, rules_text, zone_counts
 from j5.parcels.convert import Clip, ConvertError, ConvertOptions, convert, convert_text, inspect_source, inspect_text, write_bundle
 from j5.schemas_loader import schema_errors
 
@@ -126,6 +127,15 @@ def _build_parser() -> argparse.ArgumentParser:
     rn = dsub.add_parser("rt-link", help="결정 열(decision·asset_id·decision_scope·basis_kind·reviewed_on·note)을 채운 후보 CSV 를 정본 transaction_links 에 반영한다 (검토 결정 이력 보존)")
     rn.add_argument("file", type=Path, help="rt-candidates 형식의 CSV")
     rn.add_argument("--json", action="store_true")
+    rz = dsub.add_parser("rt-zones", help="핵심·비교 범위 규칙(법정동 목록, schemas/zone_rules.schema.json): show / apply <규칙.json>. 반영하면 모든 거래를 다시 분류한다")
+    rz.add_argument("action", choices=["show", "apply"])
+    rz.add_argument("file", type=Path, nargs="?", help="apply 때 규칙 파일")
+    rz.add_argument("--json", action="store_true")
+    rg = dsub.add_parser("rt-changes", help="어떤 실행 이후의 변경: 새 거래·취소로 바뀜·응답에서 사라짐 (취소·정정 점검 결과 읽기)")
+    rg.add_argument("--lawd-cd", required=True)
+    rg.add_argument("--since-run", required=True, help="기준 실행 ID (이 실행 뒤의 실행들을 본다)")
+    rg.add_argument("--zone", action="append", choices=["core", "comparison", "outside", "unclassified"], help="범위 필터 (반복 가능)")
+    rg.add_argument("--json", action="store_true")
     pk.add_argument("file", type=Path)
     pk.add_argument("--json", action="store_true")
 
@@ -178,6 +188,18 @@ def _build_parser() -> argparse.ArgumentParser:
     cf.add_argument("--num-rows", type=int, default=DEFAULT_NUM_ROWS)
     cf.add_argument("--max-pages", type=int, default=DEFAULT_MAX_PAGES)
     cf.add_argument("--json", action="store_true")
+    ck = csub.add_parser("rt-recheck", help="취소·정정 점검: 최근 N개월(--recent) 또는 실행 기록상 실패·부분 월(--failed)을 다시 받는다. 정본 반영은 db rt-load, 변경 확인은 db rt-changes")
+    ck.add_argument("--lawd-cd", required=True)
+    ck.add_argument("--recent", type=int, help="이번 달 포함 최근 N개월을 다시 받는다 (운영 기본 6)")
+    ck.add_argument("--failed", action="store_true", help="실행 기록에서 complete/empty 가 아닌 달을 다시 받는다")
+    ck.add_argument("--from", dest="from_ym", help="--failed 의 범위 시작 YYYY-MM (기본 2006-01)")
+    ck.add_argument("--to", dest="to_ym", help="--failed 의 범위 끝 YYYY-MM (기본 이번 달)")
+    ck.add_argument("--data-home", type=Path)
+    ck.add_argument("--config", type=Path)
+    ck.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
+    ck.add_argument("--num-rows", type=int, default=DEFAULT_NUM_ROWS)
+    ck.add_argument("--max-pages", type=int, default=DEFAULT_MAX_PAGES)
+    ck.add_argument("--json", action="store_true")
     cr = csub.add_parser("rt-report", help="저장된 원본 응답만으로 요약을 다시 만든다 (네트워크 없음)")
     cr.add_argument("--lawd-cd", required=True)
     cr.add_argument("--months", required=True)
@@ -361,6 +383,23 @@ def _db_main(args) -> int:
                 r = apply_decisions(db, read_decisions_csv(args.file))
                 sys.stdout.write(json.dumps(r.to_dict(), ensure_ascii=False, indent=2) + "\n" if args.json else r.to_text())
                 return 0
+            if args.db_command == "rt-zones":
+                if args.action == "apply":
+                    if args.file is None or not args.file.is_file():
+                        print("규칙 파일이 필요하다: rt-zones apply <규칙.json>", file=sys.stderr)
+                        return USAGE_ERROR
+                    r = apply_rules(db, load_rules(args.file))
+                    sys.stdout.write(json.dumps(r.to_dict(), ensure_ascii=False, indent=2) + "\n" if args.json else r.to_text())
+                    return 0
+                rules = current_rules(db)
+                counts = zone_counts(db)
+                sys.stdout.write(json.dumps({"rules": rules, "counts": counts}, ensure_ascii=False, indent=2) + "\n" if args.json else rules_text(rules, counts))
+                return 0
+            if args.db_command == "rt-changes":
+                lawd = check_lawd(args.lawd_cd)
+                c = changes_since(db, lawd, args.since_run, zones=tuple(args.zone) if args.zone else None)
+                sys.stdout.write(json.dumps(c, ensure_ascii=False, indent=2) + "\n" if args.json else changes_text(c))
+                return 0
             if args.db_command == "parcels-load":
                 if not args.bundle.is_file():
                     print(f"번들 파일이 없음: {args.bundle}", file=sys.stderr)
@@ -477,6 +516,27 @@ def _collect_main(args) -> int:
         return USAGE_ERROR
     try:
         lawd = check_lawd(args.lawd_cd)
+        if args.collect_command == "rt-recheck":
+            if bool(args.recent) == bool(args.failed):
+                print("--recent N 또는 --failed 중 하나를 준다", file=sys.stderr)
+                return USAGE_ERROR
+            if args.recent:
+                months = recent_months(args.recent)
+                why = f"최근 {args.recent}개월 재조회"
+            else:
+                done = months_done_on_disk(home, lawd)
+                span = month_range(args.from_ym or "2006-01", args.to_ym or recent_months(1)[0][:4] + "-" + recent_months(1)[0][4:])
+                months = [m for m in span if done.get(m) not in ("complete", "empty")]
+                why = f"실패·부분·미수집 월 재조회 ({span[0]}~{span[-1]} 중 {len(months)}개월)"
+            if not months:
+                print("다시 받을 달이 없다", file=sys.stderr)
+                return 0
+            key, source = service_key(home, config_path=args.config)
+            print(f"점검 수집 시작: 시군구 {lawd}, {why}, 인증키 출처 {source}. 이 호출은 공공데이터포털 일일 트래픽을 약 {len(months)}회 이상 쓴다.", file=sys.stderr)
+            run = collect_months(home, key=key, key_source=source, lawd_cd=lawd, months=months, endpoint=args.endpoint, num_rows=args.num_rows, max_pages=args.max_pages)
+            text_ = json.dumps(run.to_dict(), ensure_ascii=False, indent=2) + "\n" if args.json else run_text(run) + f"다음: `j5 db rt-load --lawd-cd {lawd}` 로 반영하고 `j5 db rt-changes --lawd-cd {lawd} --since-run <이전 실행>` 으로 변경을 본다.\n"
+            sys.stdout.write(redact(text_, key))
+            return 0 if run.ok else 1
         if args.collect_command == "rt-fetch":
             wanted = month_range(args.from_ym, args.to_ym)
             done = months_done_on_disk(home, lawd)

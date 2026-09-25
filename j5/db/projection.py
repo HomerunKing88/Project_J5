@@ -31,6 +31,7 @@ SEED_FILE = "assets.seed.json"
 GEOJSON_FILE = "assets.geojson"
 RECORDS_FILE = "records.jsonl"
 PARCELS_FILE = "parcels.geojson"  # J5-013B-2: 정본 parcels 가 있을 때만. 형식은 폰이 읽는 번들(parcels_bundle.schema.json)과 같다
+TRANSACTIONS_FILE = "transactions.json"  # J5-014B-3: 범위 규칙이 있고 핵심·비교 범위의 거래가 있을 때만. 범위 밖·취소 확정 거래는 넣지 않는다
 EXIT_BY_OUTCOME = {"published": 0, "failed": 1}
 
 
@@ -109,7 +110,11 @@ def _read_snapshot(db: Db, *, generated_at: str) -> dict:
         for r in db.conn.execute("SELECT record_id, sha256, mime, bytes, tags_json, taken_at, rel_path FROM attachments ORDER BY record_id, sha256"):
             atts.setdefault(r["record_id"], []).append(dict(r))
         parcels = parcels_bundle_from_db(db, generated_at=generated_at, source_dataset_version=version) if db._has_table("parcels") else None
-        return {"version": version, "study_id": db.meta("study_id"), "data_mode": db.data_mode, "assets": assets, "records": records, "attachments": atts, "parcels": parcels}
+        from j5.db.zones import transactions_for_projection  # 순환 import 방지
+        transactions = (transactions_for_projection(db, generated_at=generated_at, study_id=db.meta("study_id") or "", source_dataset_version=version, data_mode=db.data_mode)
+                        if db._has_table("transactions") else None)
+        return {"version": version, "study_id": db.meta("study_id"), "data_mode": db.data_mode, "assets": assets, "records": records, "attachments": atts, "parcels": parcels,
+                "transactions": transactions}
 
 
 def _summaries(records: list[dict]) -> dict[str, dict]:
@@ -196,6 +201,16 @@ def _generate(snapshot: dict, out: Path, *, photos: bool, data_home: Path, run_i
         files[PARCELS_FILE] = (json.dumps(parcels, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
         n_parcels = parcels["count"]
 
+    txs = snapshot.get("transactions")
+    n_tx = 0
+    if txs is not None:
+        ids_set = {a["asset_id"] for a in assets}
+        for t in txs["transactions"]:
+            if t["asset_id"] is not None and t["asset_id"] not in ids_set:
+                raise ProjectionError("transaction_link_ref", f"거래 {t['transaction_id']} 의 연결 물건이 물건 목록에 없다")
+        files[TRANSACTIONS_FILE] = (json.dumps(txs, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+        n_tx = txs["count"]
+
     out.mkdir(parents=True, exist_ok=False)
     for name, data in files.items():
         p = out / name
@@ -208,7 +223,8 @@ def _generate(snapshot: dict, out: Path, *, photos: bool, data_home: Path, run_i
         "format": "j5view", "projection_schema_version": PROJECTION_SCHEMA_VERSION, "study_id": snapshot["study_id"], "data_mode": snapshot["data_mode"],
         "source_dataset_version": snapshot["version"], "generated_at": generated_at, "run_id": run_id,
         "scope_ids": sorted(a["asset_id"] for a in assets),
-        "counts": {"assets": len(assets), "located": len(features), "records": len(records), "attachments": n_atts, "photos": len(photo_files), "parcels": n_parcels},
+        "counts": {"assets": len(assets), "located": len(features), "records": len(records), "attachments": n_atts, "photos": len(photo_files), "parcels": n_parcels,
+                   "transactions": n_tx},
         "files": [{"path": name, "bytes": len(data), "sha256": _sha256(data)} for name, data in sorted(files.items())],
     }
     errs = schema_errors("view_manifest.schema.json", manifest)
@@ -279,8 +295,22 @@ def verify_projection_dir(out: Path, *, expected_version: int | None = None, exp
         for f in pb["features"]:
             if not set(f["properties"].get("asset_ids", [])) <= set(ids):
                 raise ProjectionError("verify_parcel_link", f"필지 {f['id']} 의 연결 물건이 물건 목록에 없다")
+    n_tx = manifest["counts"].get("transactions", 0)
+    if (TRANSACTIONS_FILE in listed) != (n_tx > 0):
+        raise ProjectionError("verify_transactions_file", "transactions.json 의 유무가 counts.transactions 와 맞지 않는다")
+    if TRANSACTIONS_FILE in listed:
+        tx = json.loads((out / TRANSACTIONS_FILE).read_text(encoding="utf-8"))
+        if tx.get("j5transactions") != "1.0.0" or tx.get("count") != n_tx or len(tx.get("transactions", [])) != n_tx:
+            raise ProjectionError("verify_transactions", "transactions.json 의 형식·건수가 manifest 와 맞지 않는다")
+        if tx.get("generated_at") != manifest["generated_at"] or tx.get("source_dataset_version") != manifest["source_dataset_version"] or tx.get("study_id") != manifest["study_id"]:
+            raise ProjectionError("verify_transactions_version", "transactions.json 의 생성 시각·정본 버전·study_id 가 manifest 와 다르다")
+        for t in tx["transactions"]:
+            if t.get("zone") not in ("core", "comparison") or t.get("transaction_id") is None:
+                raise ProjectionError("verify_transaction_zone", "범위 밖 거래 또는 ID 없는 거래가 파생본에 있다")
+            if t.get("asset_id") is not None and t["asset_id"] not in ids:
+                raise ProjectionError("verify_transaction_link", f"거래 {t['transaction_id']} 의 연결 물건이 물건 목록에 없다")
     if expected_counts is not None:
-        for k in ("assets", "records", "attachments", "parcels"):
+        for k in ("assets", "records", "attachments", "parcels", "transactions"):
             if manifest["counts"].get(k, 0) != expected_counts.get(k, 0):
                 raise ProjectionError("verify_counts", f"{k}: 파생본 {manifest['counts'][k]}, 정본 {expected_counts[k]}")
     return manifest
@@ -385,7 +415,8 @@ def build_projection(db: Db, data_home: Path, *, photos: bool = False) -> Projec
         result.source_dataset_version = snapshot["version"]
         manifest = _generate(snapshot, tmp, photos=photos, data_home=data_home, run_id=run_id, generated_at=started)
         expected = {"assets": len(snapshot["assets"]), "records": len(snapshot["records"]), "attachments": sum(len(v) for v in snapshot["attachments"].values()),
-                    "parcels": snapshot["parcels"]["count"] if snapshot.get("parcels") else 0}
+                    "parcels": snapshot["parcels"]["count"] if snapshot.get("parcels") else 0,
+                    "transactions": snapshot["transactions"]["count"] if snapshot.get("transactions") else 0}
         verify_projection_dir(tmp, expected_version=snapshot["version"], expected_counts=expected)
         stamp = started.replace("-", "").replace(":", "").replace("T", "-").rstrip("Z")
         zip_name = f"{_safe(snapshot['study_id'])}-ds{snapshot['version']}-{stamp}.j5view.zip"
