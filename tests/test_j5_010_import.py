@@ -82,7 +82,7 @@ def test_apply_valid_package(db, home, tmp_path, form):
     assert (r.events_total, r.events_new, r.events_skipped, r.photos_stored, r.photos_reused) == (3, 3, 0, 2, 0)
     assert (r.dataset_version_before, r.dataset_version_after) == (1, 2) and db.status()["dataset_version"] == 2
     st = db.status()
-    assert st["ok"] and st["counts"] == {"subjects": 5, "assets": 5, "source_documents": 1, "records": 3, "record_evidence": 3, "attachments": 3, "survey_units": 0, "survey_sessions": 0, "unit_observations": 0, "parcels": 0, "asset_components": 0, "collection_runs": 0, "transaction_observations": 0, "transactions": 0}
+    assert st["ok"] and st["counts"] == {"subjects": 5, "assets": 5, "source_documents": 1, "records": 3, "record_evidence": 3, "attachments": 3, "survey_units": 0, "survey_sessions": 0, "unit_observations": 0, "parcels": 0, "asset_components": 0, "collection_runs": 0, "transaction_observations": 0, "transactions": 0, "transaction_links": 0, "review_decisions": 0}
     # 기록: event_id 승계, 관측 시각·정밀도·기기 입력 시각 보존, collected_at 은 패키지 생성 시각, 정본 시각은 PC 부여
     rec = db.get_record(EVENT[1])
     assert rec["observed_at"] == "2026-09-22" and rec["observed_at_precision"] == "date" and rec["device_created_at"] == "2026-09-22T10:16:30+09:00"
