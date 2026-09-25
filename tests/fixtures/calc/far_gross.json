@@ -1,0 +1,15 @@
+{
+  "kind": "far",
+  "asset_label": "가상 물건 1",
+  "composition_as_of": "2026-09-01",
+  "site": {
+    "registered_parcel": {"value_m2": 100, "basis": "가상 공부면적", "as_of": "2026-09-01"},
+    "statutory": {"value_m2": 100, "basis": "가상 검토: 제외면적 없음", "as_of": "2026-09-01"},
+    "statutory_basis": "direct",
+    "placement_envelope": {"value_m2": 60, "basis": "가상 건축선 후퇴 반영 배치 검토영역"},
+    "area_constraints": [{"kind": "건축선 후퇴", "area_m2": 40, "basis": "가상", "excluded_from_denominator": "false", "reviewed_on": "2026-09-01"}]
+  },
+  "regulation": {"applied_far_pct": 600, "regulation_version": "가상 일반상업 600% (2026-01 가상 고시)", "zoning": "일반상업", "end_date_confirmed": true},
+  "current_gfa": {"far_gfa": {"value_m2": 240, "basis": "가상 건축물대장 용적률 산정용 연면적", "as_of": "2026-09-01"}, "total_gfa": {"value_m2": 300, "basis": "가상 총연면적"}},
+  "note": "데이터 사전 §9 가상 테스트: 검토면적 600, 여유면적 360"
+}

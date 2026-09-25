@@ -1,0 +1,16 @@
+{
+  "kind": "equity",
+  "asset_label": "가상 물건 1",
+  "scenario": "순액 입력 가상 검증",
+  "price": {"price_input_basis": "net_after_deposit", "price_input_krw": 3900000000, "deposit_already_deducted_krw": 100000000, "prepaid_krw": 400000000, "vat_included": null, "settlement_basis": "가상 매도인 제시 순액"},
+  "loan": {"amount_krw": 2400000000, "kind": "scenario", "ltv_assumption_pct": 60, "collateral_basis": "purchase_price_assumption", "deposit_netted_in_limit": false},
+  "assumed_tenant_deposits": {"amount_krw": 100000000, "basis": "가상 임대차 승계 보증금"},
+  "costs": {
+    "acquisition_tax": {"amount_krw": 184000000, "basis": "가상 취득세 4.6%"},
+    "transaction_costs": {"amount_krw": 16000000, "basis": "가상 중개·실사"},
+    "prepaid_taxes": {"amount_krw": 0, "basis": "가상"},
+    "initial_repairs": {"amount_krw": 0, "basis": "가상"},
+    "reserve_cash": {"amount_krw": 0, "basis": "가상"}
+  },
+  "note": "데이터 사전 §10.1 가상 검증: 입력 39억 + 이미 차감한 보증금 1억 → P 40억 복원 → 17억, 기지급 4억"
+}

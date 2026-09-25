@@ -1,0 +1,16 @@
+{
+  "kind": "cash",
+  "asset_label": "가상 물건 1",
+  "scenario": "가상 누적 -17, -20, -18억 + 예비 1억",
+  "period_unit": "quarter",
+  "flows": [
+    {"t": 0, "amount_krw": -1700000000, "kind": "purchase", "note": "가상 매입 필요자기자본"},
+    {"t": 1, "amount_krw": -300000000, "kind": "construction", "note": "가상 공사"},
+    {"t": 1, "amount_krw": -100000000, "kind": "deposit_return", "note": "가상 승계 보증금 반환"},
+    {"t": 1, "amount_krw": 100000000, "kind": "additional_loan", "note": "가상 추가 대출"},
+    {"t": 2, "amount_krw": 200000000, "kind": "rent", "note": "가상 임대"}
+  ],
+  "reserve_cash_krw": 100000000,
+  "reserve_in_flows": false,
+  "note": "데이터 사전 §10.2 가상 검증: 최대 필요자기자본 21억"
+}
