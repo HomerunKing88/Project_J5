@@ -35,7 +35,17 @@ def test_far_dictionary_cases():
     assert r["calculation_version"] == CALCULATION_VERSION and r["inputs"]["regulation_version"].startswith("가상 일반상업")
     r2 = far_headroom(fixture("far_excluded"))
     assert r2["inputs"]["A_m2"] == 90 and r2["result"]["review_area_m2"] == 540 and r2["result"]["headroom_m2"] == 300
-    assert any("재확인 필요" in n for n in r2["notes"]) and any("건축선 후퇴 (확인 전에는 제외하지 않는다)" in n for n in r2["notes"])
+    assert any("재확인 필요" in n for n in r2["notes"]) and r2["unknown"] == []
+    # 제약의 분모 제외 여부가 미확인이면 A 가 바뀔 수 있어 확정하지 않는다
+    d = fixture("far_excluded")
+    d["site"]["area_constraints"][1]["excluded_from_denominator"] = "unknown"
+    r3 = far_headroom(d)
+    assert r3["result"] is None and any("건축선 후퇴" in u for u in r3["unknown"])
+    # 규제 버전이 없으면 적용 용적률을 확정할 수 없다
+    d = fixture("far_gross")
+    d["regulation"]["regulation_version"] = None
+    r4 = far_headroom(d)
+    assert r4["result"] is None and any("regulation_version" in u for u in r4["unknown"])
 
 
 def test_far_unknown_zero_negative_and_inconsistent():
@@ -162,6 +172,33 @@ def test_inputs_schema_and_cli(tmp_path, capsys):
     assert "kind" in str(e.value)
     d = copy.deepcopy(fixture("equity_gross"))
     d["costs"]["acquisition_tax"]["amount_krw"] = -1
+    bad.write_text(json.dumps(d), encoding="utf-8")
+    with pytest.raises(ValidationError):
+        load_calc_input(bad)
+    # 미확인 금액에는 사유, 확인된 금액에는 근거가 필수. 날짜 시점은 YYYY-MM-DD 만
+    for mutate in (
+        lambda x: x["costs"]["acquisition_tax"].update(amount_krw=None, basis=None),
+        lambda x: x["costs"]["transaction_costs"].pop("basis"),
+        lambda x: x["loan"].update(amount_krw=None),
+        lambda x: x["price"].update(price_input_krw=None),
+    ):
+        d = copy.deepcopy(fixture("equity_gross"))
+        mutate(d)
+        bad.write_text(json.dumps(d), encoding="utf-8")
+        with pytest.raises(ValidationError):
+            load_calc_input(bad)
+    for mutate in (
+        lambda x: x["flows"].__setitem__(0, {**x["flows"][0], "t": "2026-2-01"}),
+        lambda x: x["flows"].__setitem__(0, {**x["flows"][0], "amount_krw": None}),
+        lambda x: x["site"]["statutory"].update(value_m2=None, reason=None) if "site" in x else x["flows"].clear(),
+    ):
+        d = copy.deepcopy(fixture("cash_basic"))
+        mutate(d)
+        bad.write_text(json.dumps(d), encoding="utf-8")
+        with pytest.raises(ValidationError):
+            load_calc_input(bad)
+    d = copy.deepcopy(fixture("far_gross"))
+    d["site"]["statutory"].update(value_m2=None, reason=None)
     bad.write_text(json.dumps(d), encoding="utf-8")
     with pytest.raises(ValidationError):
         load_calc_input(bad)

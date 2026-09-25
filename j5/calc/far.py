@@ -2,7 +2,7 @@
 
 A = 법정 산정 대지면적, F = 적용 용적률(%), C = 동일 구성 범위의 현재 용적률 산정용 연면적.
 검토면적 = A × F / 100, 여유면적 = A × F / 100 − C, 소진율 = C / (A × F / 100).
-어느 입력이든 미확인이면 결과는 null. 분모 0 은 오류. 음수 여유면적은 그대로 표시한다. 배치 검토영역을 A 대신 자동 대입하지 않는다.
+어느 입력이든 미확인이면 결과는 null(규제 버전 없음, 제약의 분모 제외 여부 미확인 포함). 분모 0 은 오류. 음수 여유면적은 그대로 표시한다. 배치 검토영역을 A 대신 자동 대입하지 않는다.
 법정 제외 영역이 겹쳐도 이중 차감하지 않는다(면적 합은 검토 보조값이며 A 를 바꾸지 않는다). 여유면적으로 신축 가능 여부·저평가를 판정하지 않는다.
 """
 
@@ -42,7 +42,7 @@ def far_headroom(doc: dict) -> dict:
     if F is None:
         unknown.append("applied_far_pct: " + (reg.get("reason") or "사유 없음"))
     if reg.get("regulation_version") is None:
-        notes.append("규제 버전(적용 법령·고시 시점)이 비어 있다. 결과에 규제 버전 없이 남긴다")
+        unknown.append("regulation_version: 적용 법령·고시 시점이 미확인이라 적용 용적률을 확정할 수 없다")
     if reg.get("end_date_confirmed") is False:
         notes.append("규제 종료일이 미확인이라 재확인 필요")
     C = _area(gfa.get("far_gfa"))
@@ -56,7 +56,7 @@ def far_headroom(doc: dict) -> dict:
         notes.append(f"배치 검토영역 {env}㎡ 는 설계 검토용이며 분모 A 를 대신하지 않는다")
     unknown_constraints = [c["kind"] for c in site.get("area_constraints", []) if c["excluded_from_denominator"] == "unknown"]
     if unknown_constraints:
-        notes.append("분모 제외 여부 미확인 제약: " + ", ".join(unknown_constraints) + " (확인 전에는 제외하지 않는다)")
+        unknown.append("area_constraints 의 분모 제외 여부 미확인: " + ", ".join(unknown_constraints) + " (확인 결과에 따라 A 가 바뀌므로 확정하지 않는다)")
     if A is not None and A <= 0:
         errors.append("법정 산정 대지면적이 0 이하다 (분모 0)")
     if F is not None and F <= 0:
