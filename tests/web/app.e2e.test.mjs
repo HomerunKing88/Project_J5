@@ -412,33 +412,73 @@ print(json.dumps({"same_obs": h(a) == h(b), "same_pkg": ma["package_id"] == mb["
     assert.ok(probeLogs.every((e) => e.includes("ERR_FAILED") || e.includes("Failed to load resource")), probeLogs.join("; "));
     assert.ok((await cdp.eval("document.getElementById('status-line').textContent")).includes("관측 1"));
     // IndexedDB 내용을 패키지 폴더로 꺼내 PC 검사기로 확인
-    const dump = await cdp.eval(`(async () => {
+    const dumpDb = () => cdp.eval(`(async () => {
       const db = await new Promise((res, rej) => { const r = indexedDB.open('j5'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
       const all = (s) => new Promise((res, rej) => { const r = db.transaction(s).objectStore(s).getAll(); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
       const events = await all('events'); const photos = await all('photos');
       const b64 = async (blob) => { const buf = new Uint8Array(await blob.arrayBuffer()); let s = ''; for (const x of buf) s += String.fromCharCode(x); return btoa(s); };
       return { events: events.map(e => ({ line: Array.from(e.line), hash: e.event_hash, status: e.status, study_id: e.study_id, data_mode: e.data_mode, exported_in: e.exported_in })), photos: await Promise.all(photos.map(async p => ({ sha256: p.sha256, ext: p.ext, b64: await b64(p.blob) }))) };
     })()`);
+    const dump = await dumpDb();
     assert.equal(dump.events.length, 1);
     assert.equal(dump.events[0].status, "exported", "저장 확인 후 내보냄");
     assert.equal(dump.events[0].exported_in.length, 1, "미확인 두 번째 시도는 exported_in 에 들어가지 않음");
     assert.equal(dump.events[0].study_id, "e2e-study", "기록에 study_id 고정");
     assert.equal(dump.events[0].data_mode, "synthetic", "기록에 data_mode 고정");
-    const pkg = join(tmp, "pkg"); mkdirSync(join(pkg, "photos"), { recursive: true });
-    const obs = Buffer.concat(dump.events.map((e) => Buffer.from(e.line)));
-    assert.equal(createHash("sha256").update(obs).digest("hex"), dump.events[0].hash, "저장된 해시 = 행 바이트(LF 포함) 해시");
-    writeFileSync(join(pkg, "observations.jsonl"), obs);
-    const files = [{ path: "observations.jsonl", bytes: obs.length, sha256: createHash("sha256").update(obs).digest("hex") }];
-    for (const p of dump.photos) { const buf = Buffer.from(p.b64, "base64"); writeFileSync(join(pkg, "photos", `${p.sha256}.${p.ext}`), buf); files.push({ path: `photos/${p.sha256}.${p.ext}`, bytes: buf.length, sha256: createHash("sha256").update(buf).digest("hex") }); }
-    writeFileSync(join(pkg, "manifest.json"), JSON.stringify({ format: "j5field", schema_version: "1.0.0", study_id: "e2e-study", package_id: "5e5e0000-0000-4000-8000-00000000e2e0", created_at: "2026-09-22T09:00:00+09:00", data_mode: "synthetic", files }, null, 2) + "\n");
-    const py = spawnSync("python3", ["-m", "j5", "inspect", pkg, "--seed", join(ROOT, "tests/fixtures/assets.seed.synthetic.json"), "--study-id", "e2e-study", "--json"], { cwd: ROOT, encoding: "utf8" });
-    if (py.error?.code === "ENOENT") { console.log("python3 없음: inspect 단계 건너뜀"); }
-    else {
+    // 덤프를 패키지 폴더로 써서 PC 검사기(j5 inspect)를 돌린다. 이벤트 순서는 기기 입력 시각순
+    const inspectDump = (d, name, packageId) => {
+      const pkg = join(tmp, name); mkdirSync(join(pkg, "photos"), { recursive: true });
+      const lines = d.events.map((e) => ({ buf: Buffer.from(e.line), ev: JSON.parse(Buffer.from(e.line).toString("utf8")) }));
+      lines.sort((a, b) => (a.ev.device_created_at < b.ev.device_created_at ? -1 : a.ev.device_created_at > b.ev.device_created_at ? 1 : 0));
+      const obs = Buffer.concat(lines.map((l) => l.buf));
+      writeFileSync(join(pkg, "observations.jsonl"), obs);
+      const files = [{ path: "observations.jsonl", bytes: obs.length, sha256: createHash("sha256").update(obs).digest("hex") }];
+      for (const p of d.photos) { const buf = Buffer.from(p.b64, "base64"); writeFileSync(join(pkg, "photos", `${p.sha256}.${p.ext}`), buf); files.push({ path: `photos/${p.sha256}.${p.ext}`, bytes: buf.length, sha256: createHash("sha256").update(buf).digest("hex") }); }
+      writeFileSync(join(pkg, "manifest.json"), JSON.stringify({ format: "j5field", schema_version: "1.0.0", study_id: "e2e-study", package_id: packageId, created_at: "2026-09-22T09:00:00+09:00", data_mode: "synthetic", files }, null, 2) + "\n");
+      const py = spawnSync("python3", ["-m", "j5", "inspect", pkg, "--seed", join(ROOT, "tests/fixtures/assets.seed.synthetic.json"), "--study-id", "e2e-study", "--json"], { cwd: ROOT, encoding: "utf8" });
+      if (py.error?.code === "ENOENT") { console.log("python3 없음: inspect 단계 건너뜀"); return null; }
       assert.equal(py.status, 0, py.stdout + py.stderr);
-      const rep = JSON.parse(py.stdout);
+      return JSON.parse(py.stdout);
+    };
+    assert.equal(createHash("sha256").update(Buffer.from(dump.events[0].line)).digest("hex"), dump.events[0].hash, "저장된 해시 = 행 바이트(LF 포함) 해시");
+    const rep = inspectDump(dump, "pkg", "5e5e0000-0000-4000-8000-00000000e2e0");
+    if (rep) {
       assert.equal(rep.verdict, "ok");
       assert.equal(rep.counts.events, 1);
       assert.equal(rep.counts.photos_referenced, 1);
+    }
+    assert.deepEqual(cdp.errors, [], "브라우저 콘솔 오류 없음");
+    // 연차 비교 입력 (J5-015B): 같은 물건의 두 번째 관측에서 촬영 지점·방향·이전 사진(이 기기에 저장된 첫 사진)을 고른다.
+    // 오프라인 상태 그대로다(저장은 IndexedDB). 이전 사진 목록은 기기의 기록에서 나온다
+    const firstSha = createHash("sha256").update(readFileSync(photo)).digest("hex");
+    const photo2 = join(tmp, "front-2026.png");
+    writeFileSync(photo2, png1x1([255, 128, 0]));
+    await cdp.eval("document.querySelectorAll('#asset-list li button')[0].click(); 'ok'");
+    await cdp.waitFor("!document.getElementById('sec-observe').hidden");
+    await cdp.setFiles("#photos", [photo2]);
+    await cdp.waitFor("document.querySelectorAll('#photo-list .photo-item .series select.previous option').length === 2");
+    assert.match(await cdp.eval("document.querySelectorAll('#photo-list select.previous option')[1].textContent"), new RegExp(`^\\d{4}-\\d{2}-\\d{2} 전면 · ${firstSha.slice(0, 8)}$`), "이전 사진 후보 = 첫 관측의 사진");
+    await cdp.eval(`(() => {
+      const vp = document.querySelector('#photo-list input.viewpoint'); vp.value = '전면-남측'; vp.dispatchEvent(new Event('input'));
+      const hd = document.querySelector('#photo-list input.heading'); hd.value = '180'; hd.dispatchEvent(new Event('input'));
+      const pv = document.querySelector('#photo-list select.previous'); pv.value = ${JSON.stringify(firstSha)}; pv.dispatchEvent(new Event('change'));
+      document.querySelector('#photo-list .tags input').click();
+      document.getElementById('change-status').value = 'no_change'; return 'ok'; })()`);
+    await cdp.eval("document.getElementById('save-observation').click(); 'ok'");
+    await cdp.waitFor("document.getElementById('observe-note').textContent.startsWith('저장됨')");
+    await cdp.waitFor("document.querySelectorAll('#record-list li').length === 2");
+    const dump2 = await dumpDb();
+    assert.equal(dump2.events.length, 2);
+    const second = dump2.events.map((e) => JSON.parse(Buffer.from(e.line).toString("utf8"))).find((ev) => ev.attachment_refs[0]?.sha256 !== firstSha);
+    assert.ok(second, "두 번째 이벤트");
+    assert.deepEqual([second.attachment_refs[0].viewpoint_id, second.attachment_refs[0].heading_deg, second.attachment_refs[0].previous_photo_sha256], ["전면-남측", 180, firstSha]);
+    const first = dump2.events.map((e) => JSON.parse(Buffer.from(e.line).toString("utf8"))).find((ev) => ev.attachment_refs[0]?.sha256 === firstSha);
+    assert.deepEqual(Object.keys(first.attachment_refs[0]).sort(), ["bytes", "mime", "path", "sha256", "tags"], "첫 이벤트에는 선택 키가 없다 (바이트 불변)");
+    const rep2 = inspectDump(dump2, "pkg2", "5e5e0000-0000-4000-8000-00000000e2e1");
+    if (rep2) {
+      assert.equal(rep2.verdict, "ok", JSON.stringify(rep2));
+      assert.equal(rep2.counts.events, 2);
+      assert.equal(rep2.counts.photos_referenced, 2);
     }
     assert.deepEqual(cdp.errors, [], "브라우저 콘솔 오류 없음");
   } finally {
