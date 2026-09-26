@@ -12,8 +12,8 @@ inspect_view(path, db=None): 게시된 폴더 또는 `.j5view.zip` 을 정본 �
 from __future__ import annotations
 
 import json
-import os
 import re
+import sqlite3
 import stat
 import tempfile
 import zipfile
@@ -25,6 +25,9 @@ from j5.package.limits import DEFAULT_LIMITS, Limits
 from j5.package.reader import ContainerError, sha256_stream
 
 SUPPORTED_PROJECTION_SCHEMA_VERSIONS = frozenset({PROJECTION_SCHEMA_VERSION})
+# 파생본은 누적 자료(전체 물건·기록·사진 이력)라 관측 패키지 한 개의 한도(§3.3, 100MB)보다 크다. 사진 한 장 한도는 같고 나머지는 누적을 감안해 넓게 둔다.
+# 값은 도구가 만든 파생본을 도구가 거절하지 않도록 정한 안전 상한이며(worklog J5-017), 실제 크기를 기록한 뒤 조정한다.
+VIEW_LIMITS = Limits(compressed=4_000_000_000, uncompressed=8_000_000_000, photo=DEFAULT_LIMITS.photo, manifest=500_000_000, max_photos=50_000)
 VIEW_ENTRY = re.compile(r"^(manifest\.json|assets\.seed\.json|assets\.geojson|records\.jsonl|parcels\.geojson|transactions\.json|photos/[0-9a-f]{64}\.(jpg|png|webp))$")
 EXIT_BY_VERDICT = {"ok": 0, "invalid": 1}
 
@@ -51,7 +54,7 @@ def _check_view_entry(name: str) -> None:
         raise ContainerError("entry_not_allowed", name, "파생본에 허용되지 않은 파일 이름")
 
 
-def extract_view_zip(zpath: Path, dest: Path, limits: Limits = DEFAULT_LIMITS) -> list[str]:
+def extract_view_zip(zpath: Path, dest: Path, limits: Limits = VIEW_LIMITS) -> list[str]:
     """`.j5view.zip` 을 안전하게 임시 폴더에 푼다. 헤더의 크기를 믿지 않고 실제 읽은 바이트로 한도를 강제한다. 입력은 바꾸지 않는다."""
     size = zpath.stat().st_size
     if size > limits.compressed:
@@ -106,9 +109,14 @@ def _summarize(out: Path, manifest: dict) -> dict:
     observed = []
     photos_with_path = 0
     for r in rows:
+        # 파생본 검증기는 키 존재만 보므로 값의 형을 여기서 확인한다. 형이 다르면 검증 실패(트레이스백 아님)
+        if not isinstance(r.get("record_type"), str) or not isinstance(r.get("observed_at"), str) or len(r["observed_at"]) < 10 or not isinstance(r.get("attachments"), list):
+            raise ViewError("record_field_type", f"{r.get('record_id')}: record_type·observed_at·attachments 의 값 형이 맞지 않는다")
+        if any(not isinstance(a, dict) for a in r["attachments"]):
+            raise ViewError("record_field_type", f"{r.get('record_id')}: attachments 항목이 객체가 아니다")
         by_type[r["record_type"]] = by_type.get(r["record_type"], 0) + 1
         observed.append(r["observed_at"][:10])
-        photos_with_path += sum(1 for a in r.get("attachments", []) if "path" in a)
+        photos_with_path += sum(1 for a in r["attachments"] if "path" in a)
     return {"records_by_type": dict(sorted(by_type.items())), "observed_from": min(observed) if observed else None, "observed_to": max(observed) if observed else None,
             "photos_included": manifest["counts"].get("photos", 0) > 0, "attachments_with_photo": photos_with_path}
 
@@ -127,7 +135,7 @@ def _compare(manifest: dict, db: Db | None) -> dict:
     return {"checked": True, "state": f"정본보다 새로움 (정본 v{cur}, 파생본 v{v}). 정본이 복구본이면 파생본을 다시 만든다", "stale": True, "dataset_version": cur}
 
 
-def inspect_view(path: Path, *, db: Db | None = None, limits: Limits = DEFAULT_LIMITS) -> dict:
+def inspect_view(path: Path, *, db: Db | None = None, limits: Limits = VIEW_LIMITS) -> dict:
     path = Path(path)
     r: dict = {"source": str(path), "kind": None, "verdict": "invalid", "problem": None, "message": None, "manifest": None, "summary": None, "freshness": None,
                "schema_supported": None, "tool_projection_schema_version": PROJECTION_SCHEMA_VERSION}
@@ -155,7 +163,7 @@ def inspect_view(path: Path, *, db: Db | None = None, limits: Limits = DEFAULT_L
         r["freshness"] = _compare(manifest, db)
         r["verdict"] = "ok"
         r["message"] = "파생본 검증 통과 (파일 해시·행수·참조·버전). 열람 결과는 최신 여부·백업을 뜻하지 않는다"
-    except (ProjectionError, ContainerError, ViewError, OSError, ValueError, KeyError) as e:
+    except (ProjectionError, ContainerError, ViewError, OSError, ValueError, KeyError, TypeError, sqlite3.Error) as e:
         code = getattr(e, "code", type(e).__name__)
         r["problem"] = code
         r["message"] = f"파생본 검증 실패 [{code}]: {getattr(e, 'message', e)}"

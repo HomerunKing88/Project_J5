@@ -19,8 +19,8 @@ from j5 import cli
 from j5.db.importer import import_package
 from j5.db.projection import build_projection
 from j5.db.store import Db
-from j5.db.viewpkg import ViewError, extract_view_zip, inspect_view, view_text
-from j5.package.limits import Limits
+from j5.db.viewpkg import VIEW_LIMITS, ViewError, extract_view_zip, inspect_view, view_text
+from j5.package.limits import DEFAULT_LIMITS, Limits
 from j5.package.reader import ContainerError
 from tests.conftest import PACKAGES
 
@@ -55,6 +55,20 @@ def _rezip(src: Path, dst: Path, mutate) -> Path:
         for n, data in items:
             zf.writestr(n, data)
     return dst
+
+
+def _rezip_consistent(src: Path, dst: Path, name: str, mutate_bytes) -> Path:
+    """항목 하나를 바꾸고 manifest 의 해시·크기도 맞춰 다시 쓴다(해시가 일관된 변조: 값 형 검사용)."""
+    def mut(items):
+        d = dict(items)
+        d[name] = mutate_bytes(d[name])
+        m = json.loads(d["manifest.json"])
+        for f in m["files"]:
+            if f["path"] == name:
+                f["bytes"], f["sha256"] = len(d[name]), hashlib.sha256(d[name]).hexdigest()
+        d["manifest.json"] = json.dumps(m).encode("utf-8")
+        return list(d.items())
+    return _rezip(src, dst, mut)
 
 
 def test_inspect_zip_and_dir_with_summary_and_freshness(db, home):
@@ -119,10 +133,19 @@ def test_rejects_tampered_and_adversarial_zips(db, home, tmp_path):
     from tests.test_j5_008_inspect import _patch_central_header
     _patch_central_header(enc, "records.jsonl", 8, (0x1).to_bytes(2, "little"))  # 중앙 디렉터리의 일반 플래그에 암호화 비트
     assert inspect_view(enc)["problem"] == "entry_encrypted"
-    # 크기 한도: 실제 읽은 바이트로 강제한다
+    # 크기 한도: 실제 읽은 바이트로 강제한다. 기본 한도는 누적 파생본용이라 관측 패키지 한 개의 한도보다 크다
     with pytest.raises(ContainerError) as e:
         extract_view_zip(z, tmp_path / "out", Limits(manifest=10))
     assert e.value.code == "entry_size_exceeded"
+    assert VIEW_LIMITS.compressed > DEFAULT_LIMITS.compressed and VIEW_LIMITS.uncompressed > DEFAULT_LIMITS.uncompressed
+    assert VIEW_LIMITS.manifest > DEFAULT_LIMITS.manifest and VIEW_LIMITS.max_photos > DEFAULT_LIMITS.max_photos and VIEW_LIMITS.photo == DEFAULT_LIMITS.photo
+    # 해시는 맞지만 값 형이 다른 기록(observed_at null) → 트레이스백 없이 검증 실패
+    def null_observed(data: bytes) -> bytes:
+        rows = [json.loads(l) for l in data.split(b"\n") if l]
+        rows[0]["observed_at"] = None
+        return b"".join(json.dumps(r, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n" for r in rows)
+    v = inspect_view(_rezip_consistent(z, tmp_path / "type.zip", "records.jsonl", null_observed))
+    assert v["verdict"] == "invalid" and v["problem"] == "record_field_type"
     # ZIP 이 아님·없음
     (tmp_path / "x.j5view.zip").write_bytes(b"not a zip")
     assert inspect_view(tmp_path / "x.j5view.zip")["problem"] == "zip_bad_file"
@@ -162,4 +185,7 @@ def test_cli_view_inspect(db, home, tmp_path, capsys):
     assert cli.main(["view", "inspect", str(bad)]) == 1
     assert cli.main(["view", "inspect", str(tmp_path / "nope.zip")]) == 3
     assert cli.main(["view", "inspect", str(z), "--db", str(tmp_path / "no.sqlite3")]) == 3
+    (tmp_path / "junk.sqlite3").write_bytes(b"not a database at all, just bytes")
+    assert cli.main(["view", "inspect", str(z), "--db", str(tmp_path / "junk.sqlite3")]) == 3
+    assert "정본을 열 수 없음" in capsys.readouterr().err
     assert hashlib.sha256(z.read_bytes()).hexdigest() == r.zip_sha256

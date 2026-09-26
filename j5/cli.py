@@ -813,8 +813,8 @@ def _view_main(args) -> int:
     if args.db is not None:
         try:
             db = Db.open_readonly(args.db)
-        except DbError as e:
-            print(f"정본을 열 수 없음 [{e.code}]: {e.message}", file=sys.stderr)
+        except (DbError, sqlite3.Error) as e:
+            print(f"정본을 열 수 없음 [{getattr(e, 'code', type(e).__name__)}]: {getattr(e, 'message', e)}", file=sys.stderr)
             return USAGE_ERROR
     try:
         r = inspect_view(args.package, db=db)
