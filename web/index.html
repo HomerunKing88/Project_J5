@@ -2,118 +2,173 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'">
 <title>종로5가 투자지도</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<h1>종로5가 투자지도</h1>
-<p class="muted">R1a 현장 기록. 정적 앱, 외부 통신 없음. <span id="status-line"></span></p>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">J5</div>
+      <div>
+        <h1>종로5가 투자지도</h1>
+        <div class="brand-sub">현장 기록</div>
+      </div>
+    </div>
+    <div id="status-line" class="status-line"></div>
+  </div>
+</header>
+
+<main>
 <p id="fatal" class="bad" hidden></p>
 
+<section class="intro" aria-labelledby="intro-title">
+  <h2 id="intro-title">이 앱으로 하는 일</h2>
+  <p class="help">현장에서 물건을 보고 사진과 상태를 기록한 뒤, 파일 하나로 내보내 PC 로 옮깁니다. 이 앱은 어디로도 자료를 보내지 않고 기록은 이 기기 안에만 남습니다.</p>
+  <ol>
+    <li>조사 설정을 저장합니다.</li>
+    <li>물건 목록을 불러옵니다. 처음이면 연습용 목록으로 해 보세요.</li>
+    <li>지도의 점이나 그 아래 목록에서 물건을 눌러 기록하고, 임장을 마치면 내보냅니다.</li>
+  </ol>
+</section>
+
 <section id="sec-settings">
-  <h2>설정</h2>
-  <label>study_id <input id="study-id" type="text" autocomplete="off" placeholder="예: j5-synthetic-study"></label>
-  <label>자료 모드
-    <select id="data-mode"><option value="synthetic">synthetic (가상)</option><option value="private_real">private_real (실제·비공개)</option></select>
-  </label>
-  <label>경로 버전 ID (선택, UUID) <input id="route-version" type="text" autocomplete="off" placeholder="비우면 자유 임장"></label>
-  <button id="save-settings">설정 저장</button> <span id="settings-note" class="muted"></span>
+  <details id="settings-details" open>
+    <summary><span class="step">1단계</span> 조사 설정 <span id="settings-summary" class="muted"></span></summary>
+    <div class="stack">
+      <label class="field"><span>조사 이름</span>
+        <input id="study-id" type="text" autocomplete="off" placeholder="예: jongno5ga-2026">
+        <span class="field-hint">PC 의 정본과 같은 이름이어야 기록이 반영됩니다. 영문·숫자·하이픈.</span>
+      </label>
+      <label class="field"><span>자료 종류</span>
+        <select id="data-mode"><option value="synthetic">연습용 (가상 자료)</option><option value="private_real">실제 (비공개)</option></select>
+        <span class="field-hint">연습용은 앱을 익히는 용도입니다. 실제 임장은 실제로 두고 실제 물건 목록을 넣습니다.</span>
+      </label>
+      <details class="plain">
+        <summary class="muted">조사 경로를 지정한 임장이면 (선택)</summary>
+        <label class="field"><span>경로 버전 ID</span>
+          <input id="route-version" type="text" autocomplete="off" placeholder="PC 에서 정한 경로 버전의 ID (UUID)">
+          <span class="field-hint">비우면 경로 없는 자유 임장으로 기록됩니다.</span>
+        </label>
+      </details>
+      <div class="row"><button id="save-settings" class="primary">설정 저장</button> <span id="settings-note" class="muted"></span></div>
+    </div>
+  </details>
 </section>
 
 <section id="sec-seed">
-  <h2>물건 목록 (assets.seed.json)</h2>
-  <p class="muted">시드를 바꿔도 저장된 관측은 지우지 않는다. 실제 시드 파일은 기기에서만 읽고 어디에도 보내지 않는다.</p>
-  <button id="load-synthetic">가상 시드 불러오기 (5개)</button>
-  <label>시드 파일 불러오기 <input id="seed-file" type="file" accept="application/json,.json"></label>
+  <div class="sec-head"><span class="step">2단계</span><h2>물건 목록</h2></div>
+  <p class="help">기록할 물건의 목록입니다. 목록을 바꿔도 이미 저장한 기록은 지워지지 않습니다.</p>
+  <div class="row">
+    <button id="load-synthetic">연습용 물건 5개 불러오기</button>
+    <label class="row"><span class="field-name">PC 에서 만든 목록 파일</span> <input id="seed-file" type="file" accept="application/json,.json"></label>
+  </div>
   <p id="seed-note" class="muted"></p>
-  <ul id="asset-list" class="plain"></ul>
-</section>
-
-<section id="sec-parcels">
-  <h2>필지 (연속지적도 경계·지번)</h2>
-  <p class="muted">PC 에서 <code>j5 parcels convert</code> 로 만든 <code>.j5parcels.json</code> 또는 파생본(<code>j5 db project</code>)의 <code>parcels.geojson</code> 을 넣는다. 파생본에는 정본에서 연결한 물건이 들어 있다. 기기에서만 읽고 어디에도 보내지 않는다. PNU 는 필지 ID 이고 물건(asset) ID 가 아니다.</p>
-  <button id="load-synthetic-parcels">가상 필지 불러오기 (6개)</button>
-  <label>필지 파일 불러오기 (.j5parcels.json 또는 파생본의 parcels.geojson) <input id="parcels-file" type="file" accept="application/json,application/geo+json,.json,.geojson"></label>
-  <button id="clear-parcels">필지 제거</button>
-  <p id="parcels-note" class="muted"></p>
 </section>
 
 <section id="sec-map">
-  <h2>지도 (필지 경계·지번, 배경 타일 없음)</h2>
-  <p class="muted">외부 타일·통신 없음. 북쪽이 위. 점을 누르면 관측 기록, 필지를 누르면 아래에 지번·PNU 와 그 안의 물건이 뜬다. 확대하면 지번이 보인다. 지도가 안 보여도 위 목록에서 선택할 수 있다.</p>
-  <svg id="map-svg" role="img" aria-label="필지 경계와 물건 위치점 지도"></svg>
+  <div class="sec-head"><span class="step">3단계</span><h2>지도에서 고르기</h2></div>
+  <p class="help">점을 누르면 그 물건의 기록 화면이 열립니다. 필지 경계 파일을 넣었으면 필지를 눌러 그 안의 물건을 볼 수 있습니다. 배경 지도는 없고 북쪽이 위입니다. 지도에 없는 물건은 아래 목록에서 고릅니다.</p>
+  <div class="map-wrap">
+    <svg id="map-svg" role="img" aria-label="물건 위치와 필지 경계 지도"></svg>
+    <div id="map-empty" class="map-empty"><div><strong>아직 표시할 물건이 없습니다</strong>2단계에서 물건 목록을 불러오면 위치가 여기에 표시됩니다.</div></div>
+  </div>
   <div class="map-controls">
-    <button id="map-zoom-in" aria-label="확대">+</button>
-    <button id="map-zoom-out" aria-label="축소">−</button>
+    <button id="map-zoom-in" class="icon" aria-label="확대">+</button>
+    <button id="map-zoom-out" class="icon" aria-label="축소">−</button>
     <button id="map-fit">전체 보기</button>
-    <span id="map-legend" class="muted"><span class="lg lg-syn"></span> 가상자료(synthetic) <span class="lg lg-real"></span> 실제·비공개(private_real) <span class="lg lg-parcel"></span> 필지 경계</span>
+    <span id="map-legend" class="map-legend"><span><span class="lg lg-syn"></span>연습용</span> <span><span class="lg lg-real"></span>실제</span> <span><span class="lg lg-parcel"></span>필지 경계</span></span>
   </div>
   <p id="map-note" class="muted"></p>
   <div id="parcel-panel" class="parcel-panel" hidden>
     <div><strong id="parcel-title"></strong> <span class="badge" id="parcel-mode"></span></div>
-    <div class="muted">PNU <span id="parcel-pnu" class="mono"></span></div>
+    <div class="muted">필지 번호 <span id="parcel-pnu" class="mono"></span></div>
     <div class="muted" id="parcel-meta"></div>
     <ul id="parcel-assets" class="plain"></ul>
-    <button id="parcel-close">닫기</button>
+    <div><button id="parcel-close">닫기</button></div>
   </div>
+  <details id="sec-parcels">
+    <summary>필지 경계 파일 <span class="muted">(선택)</span></summary>
+    <p class="help">PC 에서 만든 필지 경계 파일(<span class="mono">.j5parcels.json</span> 또는 <span class="mono">parcels.geojson</span>)을 넣으면 지도에 경계와 지번이 겹쳐 보입니다. 파일은 이 기기에서만 읽습니다.</p>
+    <div class="row">
+      <button id="load-synthetic-parcels">연습용 필지 6개 불러오기</button>
+      <label class="row"><span class="field-name">필지 경계 파일</span> <input id="parcels-file" type="file" accept="application/json,application/geo+json,.json,.geojson"></label>
+      <button id="clear-parcels" class="quiet">필지 지우기</button>
+    </div>
+    <p id="parcels-note" class="muted"></p>
+  </details>
+</section>
+
+<section id="sec-assets">
+  <div class="sec-head"><h2>목록에서 고르기</h2></div>
+  <p class="help">불러온 물건 전부입니다. 위치가 없어 지도에 나오지 않는 물건도 여기서 기록할 수 있습니다.</p>
+  <ul id="asset-list" class="plain"></ul>
 </section>
 
 <section id="sec-observe" hidden>
-  <h2>관측 기록: <span id="target-label"></span></h2>
-  <label>관측 상태
-    <select id="change-status">
-      <option value="">선택</option>
-      <option value="change_observed">변화 확인 (사진 또는 설명 필요)</option>
-      <option value="no_change">변화 없음</option>
-      <option value="hard_to_confirm">확인 어려움</option>
-    </select>
-  </label>
-  <label>관측 시각 <input id="observed-at" type="datetime-local"></label>
-  <label><input id="date-only" type="checkbox"> 날짜만 기록 (시각을 모를 때)</label>
-  <label>설명 (선택, 2000자) <textarea id="note" rows="3" maxlength="2000"></textarea></label>
-  <label>사진 (JPEG/PNG/WebP, 20MB 이하) <input id="photos" type="file" accept="image/*" multiple></label>
-  <div id="photo-list"></div>
-  <button id="save-observation">저장</button>
-  <button id="cancel-observation">취소</button>
-  <p id="observe-note"></p>
+  <div class="sec-head"><span class="step">기록</span><h2 id="observe-title"><span id="target-label"></span></h2></div>
+  <div class="stack">
+    <label class="field"><span>지난번과 비교해 어떤가요?</span>
+      <select id="change-status">
+        <option value="">선택하세요</option>
+        <option value="change_observed">달라진 점이 있음 (사진이나 설명을 남깁니다)</option>
+        <option value="no_change">달라진 점 없음</option>
+        <option value="hard_to_confirm">확인하기 어려움</option>
+      </select>
+    </label>
+    <label class="field"><span>본 시각</span><input id="observed-at" type="datetime-local"></label>
+    <label class="check"><input id="date-only" type="checkbox"> 시각을 모르면 날짜만 기록</label>
+    <label class="field"><span>설명 (선택)</span><textarea id="note" rows="3" maxlength="2000" placeholder="예: 1층 임대 광고 붙음, 간판 교체"></textarea></label>
+    <label class="field"><span>사진 (선택)</span><input id="photos" type="file" accept="image/*" multiple>
+      <span class="field-hint">JPEG·PNG·WebP, 한 장 20MB 까지. 사진마다 무엇을 찍었는지 표시할 수 있습니다.</span>
+    </label>
+    <div id="photo-list" class="stack"></div>
+    <div class="row"><button id="save-observation" class="primary">저장</button> <button id="cancel-observation">취소</button></div>
+    <p id="observe-note"></p>
+  </div>
+</section>
+
+<section id="sec-records">
+  <div class="sec-head"><h2>이 기기에 저장된 기록</h2> <span id="record-count" class="muted"></span></div>
+  <p class="help">저장됨은 아직 이 기기에만 있는 기록, 내보냄은 파일로 내보낸 기록입니다. PC 에 반영됐는지는 PC 에서 확인합니다.</p>
+  <ul id="record-list" class="plain"></ul>
 </section>
 
 <section id="sec-export">
-  <h2>내보내기 (.j5field.zip)</h2>
-  <p class="muted">현재 설정의 study_id·자료 모드와 같은 기록만 내보낸다. 파일 저장 뒤 "파일 저장 확인"을 눌러야 `내보냄`이 된다. 기록은 자동으로 지우지 않는다.</p>
-  <label><input id="include-exported" type="checkbox"> 이미 내보낸 기록도 포함 (같은 내용으로 다시 내보내기)</label>
+  <div class="sec-head"><span class="step">임장 뒤</span><h2>내보내기</h2></div>
+  <p class="help">현재 조사 설정의 기록을 파일 하나(<span class="mono">.j5field.zip</span>)로 묶어 저장합니다. 파일이 실제로 저장된 것을 확인한 뒤 "저장 확인"을 누르면 기록이 내보냄으로 표시됩니다. 기록은 지워지지 않습니다.</p>
+  <label class="check"><input id="include-exported" type="checkbox"> 이미 내보낸 기록도 다시 포함</label>
   <p id="export-summary" class="muted"></p>
   <ul id="export-errors" class="plain"></ul>
-  <button id="export-prepare">묶음 준비</button>
-  <button id="export-save" disabled>파일 저장</button>
-  <button id="export-confirm" disabled>파일 저장 확인</button>
+  <div class="row">
+    <button id="export-prepare" class="primary">내보낼 파일 준비</button>
+    <button id="export-save" disabled>파일 저장</button>
+    <button id="export-confirm" disabled>저장 확인</button>
+  </div>
   <p id="export-note"></p>
   <details><summary>내보내기 이력</summary><ul id="export-history" class="plain"></ul></details>
 </section>
 
 <section id="sec-migrate">
-  <h2>기기·도메인 이전 준비</h2>
-  <p class="muted">이 기기의 기록은 이 주소(origin <span id="migrate-origin" class="mono"></span>)의 브라우저 저장소에만 있다. 주소가 바뀌거나 기기를 바꾸면 보이지 않는다. 앱은 기록을 지우지 않는다.</p>
-  <p id="migrate-note"></p>
-  <p id="migrate-storage" class="muted"></p>
-  <ol class="muted">
-    <li>내보내기(.j5field.zip)로 남은 기록을 모두 내보내고 PC 에서 반영(<span class="mono">j5 db import</span>)·백업을 확인한다.</li>
-    <li>새 기기·새 주소에서 앱을 열고 같은 study_id·자료 모드를 저장한다.</li>
-    <li>PC 파생본(<span class="mono">j5 db project-copy</span>)의 <span class="mono">assets.seed.json</span> 을 시드 파일로, <span class="mono">parcels.geojson</span> 을 필지 파일로 불러온다. 구본이면 구본임을 알고 쓴다(<span class="mono">j5 view inspect</span>).</li>
-    <li>옛 기기의 사이트 데이터는 PC 반영을 확인한 뒤 브라우저 설정에서 지운다.</li>
-  </ol>
+  <details>
+    <summary>다른 기기나 주소로 옮길 때</summary>
+    <p class="help">기록은 이 주소(<span id="migrate-origin" class="mono"></span>)로 연 브라우저 안에만 있습니다. 주소나 기기를 바꾸면 보이지 않으므로 옮기기 전에 모두 내보냅니다. 앱은 기록을 지우지 않습니다.</p>
+    <p id="migrate-note"></p>
+    <p id="migrate-storage" class="muted"></p>
+    <ol class="muted">
+      <li>남은 기록을 모두 내보내고 PC 에서 반영·백업을 확인합니다.</li>
+      <li>새 기기·새 주소에서 앱을 열고 같은 조사 설정을 저장합니다.</li>
+      <li>PC 에서 만든 물건 목록 파일과 필지 경계 파일을 불러옵니다.</li>
+      <li>옛 기기의 사이트 데이터는 PC 반영을 확인한 뒤 브라우저 설정에서 지웁니다.</li>
+    </ol>
+  </details>
 </section>
+</main>
 
-<section id="sec-records">
-  <h2>저장된 관측 <span id="record-count" class="muted"></span></h2>
-  <p class="muted">상태: 저장됨 → 내보냄(J5-007). PC 반영 여부는 이 화면에서 알 수 없다(PC 반영 여부 미확인).</p>
-  <ul id="record-list" class="plain"></ul>
-</section>
-
-<p class="muted"><a href="devtest.html">기기 시험 페이지</a></p>
+<footer><span>외부 통신 없음</span><a href="devtest.html">기기 시험 페이지</a></footer>
 <script type="module" src="app/main.js"></script>
 </body>
 </html>

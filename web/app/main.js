@@ -11,13 +11,18 @@ import { selectRecords, planBatches, buildPackage, hasRemainingBatches, studyIdE
 import { migrationReadiness, migrationText, persistenceText } from "./migrate.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.1.0";
+export const APP_VERSION = "0.1.1";
+const MODE_LABEL = { synthetic: "연습용", private_real: "실제" };
 const $ = (id) => document.getElementById(id);
 const state = { store: null, assets: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, seedLoadedAt: null };
 
 function text(el, value, cls) {
   el.textContent = value;
   if (cls !== undefined) el.className = cls;
+}
+
+function modeBadge(mode) {
+  return el("span", { class: `badge mode-${mode}`, text: MODE_LABEL[mode] ?? mode });
 }
 
 function el(tag, props = {}, ...children) {
@@ -40,6 +45,13 @@ async function loadSettings() {
   $("study-id").value = studyId ?? "";
   $("data-mode").value = dataMode ?? "synthetic";
   $("route-version").value = route ?? "";
+  settingsSummary(studyId ?? "", dataMode ?? "synthetic");
+  // 조사 이름이 저장돼 있으면 설정 절을 접어 두고, 없으면 첫 단계로 펼쳐 둔다.
+  $("settings-details").open = !studyId;
+}
+
+function settingsSummary(studyId, dataMode) {
+  text($("settings-summary"), studyId ? `${studyId} · ${MODE_LABEL[dataMode] ?? dataMode}` : "아직 저장하지 않음");
 }
 
 async function saveSettings() {
@@ -52,6 +64,7 @@ async function saveSettings() {
   await state.store.setMeta("data_mode", $("data-mode").value);
   await state.store.setMeta("route_version_id", route || null);
   text($("settings-note"), "저장됨", "ok");
+  settingsSummary(studyId, $("data-mode").value);
   await renderMigrate(await state.store.listEvents());  // 설정(study_id·모드)이 바뀌면 '현재 설정' 기준이 바뀐다
   await refreshStatus();
 }
@@ -60,9 +73,10 @@ async function saveSettings() {
 async function loadSeedObject(seed, source) {
   // 스키마 전체 규칙으로 검증한다. 시드는 통째로 교체하며 저장된 관측은 건드리지 않는다.
   const errs = validateSeed(seed);
-  if (errs.length) return text($("seed-note"), "시드 오류: " + errs.slice(0, 5).join("; ") + (errs.length > 5 ? ` 외 ${errs.length - 5}건` : ""), "bad");
+  if (errs.length) return text($("seed-note"), "물건 목록 파일 오류: " + errs.slice(0, 5).join("; ") + (errs.length > 5 ? ` 외 ${errs.length - 5}건` : ""), "bad");
   await state.store.replaceAssets(seed, source);
-  text($("seed-note"), `${seed.length}개 물건 불러옴 (${source}). 이전 시드의 물건은 목록에서 제거됨`, "ok");
+  const from = source === "bundled_synthetic" ? "연습용" : source.replace(/^file:/, "");
+  text($("seed-note"), `물건 ${seed.length}개를 불러왔습니다 (${from}). 이전 목록은 교체됐고 저장된 기록은 그대로입니다.`, "ok");
   await renderAssets();
   await renderRecords();
 }
@@ -73,7 +87,7 @@ async function loadSyntheticSeed() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     await loadSeedObject(await res.json(), "bundled_synthetic");
   } catch (e) {
-    text($("seed-note"), "가상 시드를 읽지 못함: " + e, "bad");
+    text($("seed-note"), "연습용 물건 목록을 읽지 못함: " + e, "bad");
   }
 }
 
@@ -83,7 +97,7 @@ async function loadSeedFile(input) {
   try {
     await loadSeedObject(JSON.parse(await file.text()), "file:" + file.name);
   } catch (e) {
-    text($("seed-note"), "시드 파일 해석 실패: " + e, "bad");
+    text($("seed-note"), "물건 목록 파일을 읽지 못함: " + e, "bad");
   }
   input.value = "";
 }
@@ -94,12 +108,12 @@ async function renderAssets() {
   if (state.parcelsRec) parcelsNote(state.parcelsRec);
   const list = $("asset-list");
   list.replaceChildren(...state.assets.map((a) => el("li", {},
-    el("span", { text: a.label }),
-    el("span", { class: "badge", text: a.data_mode }),
-    el("span", { class: "muted", text: a.location_point ? ` [${a.location_point[0]}, ${a.location_point[1]}]` : a.address ? ` ${a.address}` : "" }),
-    el("button", { text: "관측 기록", onclick: () => startObservation(a) }),
+    el("span", { class: "title", text: a.label }),
+    modeBadge(a.data_mode),
+    el("button", { text: "기록하기", onclick: () => startObservation(a) }),
+    el("span", { class: "sub", text: a.address ? a.address : a.location_point ? "지도에 위치 표시됨" : "위치 정보 없음 (목록에서 선택)" }),
   )));
-  if (!state.assets.length) list.append(el("li", { class: "muted", text: "물건이 없다. 시드를 불러온다." }));
+  if (!state.assets.length) list.append(el("li", { class: "empty", text: "아직 물건이 없습니다. 연습용 목록을 불러오거나 PC 에서 만든 목록 파일을 선택하세요." }));
   // 목록을 먼저 채운 뒤 지도를 갱신한다. 지도 실패는 목록에 영향을 주지 않는다.
   mapCall((m) => mapNote(m.setAssets(state.assets)));
   await refreshStatus();
@@ -136,7 +150,7 @@ function applyParcels(rec) {
 }
 
 function parcelsNote(rec) {
-  if (!rec) return text($("parcels-note"), "필지 없음. 지도에는 위치점만 보인다.", "muted");
+  if (!rec) return text($("parcels-note"), "필지 없음. 지도에는 물건 위치만 보입니다.", "muted");
   const b = rec.bundle, s = b.source;
   const crs = s.crs?.epsg ? `EPSG:${s.crs.epsg}` : (s.crs?.name ?? "?");
   const hasLinks = b.features.some((f) => (f.properties.asset_ids ?? []).length);
@@ -176,7 +190,7 @@ function showParcel(feature) {
   const p = feature.properties;
   mapCall((m) => m.selectParcel(feature.id));
   $("parcel-title").textContent = parcelTitle(p);
-  $("parcel-mode").textContent = state.parcels?.data_mode === "synthetic" ? "가상 필지" : "연속지적도";
+  $("parcel-mode").textContent = state.parcels?.data_mode === "synthetic" ? "연습용 필지" : "연속지적도";
   $("parcel-pnu").textContent = feature.id;
   const src = state.parcels?.source;
   $("parcel-meta").textContent = `도형면적 ${fmtArea(p.area_m2_geom, p.area_missing_reason)} (공부면적 아님)` + (p.jimok ? ` · 지목 ${p.jimok}` : "") + (p.jibun_mismatch ? " · 원본 지번과 PNU 불일치" : "") +
@@ -184,11 +198,11 @@ function showParcel(feature) {
   const linksValid = parcelLinksValid();
   const inside = parcelAssets(feature, state.assets, { linksValid });
   $("parcel-assets").replaceChildren(...inside.map(({ asset: a, basis }) => el("li", {},
-    el("span", { text: a.label }), el("span", { class: "badge", text: a.data_mode }), el("span", { class: "badge", text: BASIS_LABEL[basis] }),
-    el("button", { text: "관측 기록", onclick: () => startObservation(a) }),
+    el("span", { class: "title", text: a.label }), modeBadge(a.data_mode), el("span", { class: "badge", text: BASIS_LABEL[basis] }),
+    el("button", { text: "기록하기", onclick: () => startObservation(a) }),
   )));
   if (!linksValid && (p.asset_ids ?? []).length) $("parcel-assets").append(el("li", { class: "warn", text: `정본 연결 ${p.asset_ids.length}건은 시드가 바뀐 뒤 확인되지 않아 표시하지 않는다. 같은 파생본의 시드와 필지 파일을 함께 다시 불러온다.` }));
-  if (!inside.length) $("parcel-assets").append(el("li", { class: "muted", text: "이 필지에 연결되거나 위치점이 들어 있는 물건이 없다. PC 에서 시드·연결을 넣은 뒤 다시 불러온다." }));
+  if (!inside.length) $("parcel-assets").append(el("li", { class: "empty", text: "이 필지에 연결되거나 위치점이 들어 있는 물건이 없다. PC 에서 물건 목록·연결을 넣은 뒤 다시 불러온다." }));
   $("parcel-panel").hidden = false;
 }
 
@@ -214,6 +228,7 @@ async function initMap() {
 function mapFailed(e) {
   try { state.map?.destroy(); } catch {}
   state.map = null;
+  $("map-empty").hidden = true;
   text($("map-note"), `지도 표시 불가: ${e?.message || e}. 목록에서 선택한다`, "warn");
 }
 
@@ -224,6 +239,7 @@ function mapCall(fn) {
 
 function mapNote(c) {
   if (!c) return;
+  $("map-empty").hidden = c.total > 0 || state.parcelsCount > 0;
   const parcels = state.parcelsCount ? ` · 필지 ${state.parcelsCount}개` : "";
   if (c.total === 0) return text($("map-note"), parcels ? `물건 없음${parcels}` : "", "muted");
   if (c.located === 0) return text($("map-note"), `위치점 있는 물건이 없다. 목록에서 선택한다${parcels}`, "muted");
@@ -505,14 +521,13 @@ async function renderRecords() {
   const labels = new Map(state.assets.map((a) => [a.asset_id, a.label]));
   $("record-list").replaceChildren(...events.map((r) => el("li", {},
     el("div", {}, el("strong", { text: labels.get(r.asset_id) ?? r.asset_label ?? r.asset_id }),
-      el("span", { class: "badge", text: r.status === "saved" ? "저장됨" : `내보냄 ${(r.exported_in?.[r.exported_in.length - 1] ?? "").slice(0, 8)}` }),
-      el("span", { class: "badge", text: `${r.data_mode} · ${r.study_id}` }),
-      labels.has(r.asset_id) ? el("span") : el("span", { class: "warn", text: " (현재 시드에 없는 물건)" })),
-    el("div", { class: "muted", text: `${CHANGE_STATUS_LABEL[r.event.payload.change_status]} · ${r.event.observed_at} · 사진 ${r.event.attachment_refs.length}장` }),
-    r.event.payload.note ? el("div", { text: r.event.payload.note }) : el("span"),
-    el("div", { class: "muted", text: `event ${r.event_id.slice(0, 8)}… · 해시 ${(r.event_hash || "").slice(0, 12)}…` }),
+      el("span", { class: r.status === "saved" ? "badge state-saved" : "badge state-exported", text: r.status === "saved" ? "저장됨" : "내보냄" }),
+      el("span", { class: "badge", text: `${MODE_LABEL[r.data_mode] ?? r.data_mode} · ${r.study_id}` }),
+      labels.has(r.asset_id) ? el("span") : el("span", { class: "warn", text: " (현재 목록에 없는 물건)" })),
+    el("div", { class: "sub record-line", text: `${CHANGE_STATUS_LABEL[r.event.payload.change_status]} · ${r.event.observed_at.replace("T", " ").slice(0, 16)} · 사진 ${r.event.attachment_refs.length}장` }),
+    r.event.payload.note ? el("div", { class: "record-line", text: r.event.payload.note }) : el("span"),
   )));
-  text($("record-count"), `(${events.length}건)`);
+  text($("record-count"), `${events.length}건`);
   await renderMigrate(events);
   await refreshStatus();
 }
@@ -535,7 +550,7 @@ async function refreshStatus() {
   const c = await state.store.counts();
   const studyId = await state.store.getMeta("study_id");
   const mode = (await state.store.getMeta("data_mode")) ?? "synthetic";
-  text($("status-line"), `앱 ${APP_VERSION} · ${mode} · study ${studyId ?? "(미설정)"} · 물건 ${c.assets} · 관측 ${c.events} · 사진 ${c.photos} · ${navigator.onLine ? "온라인" : "오프라인"}`);
+  text($("status-line"), `${MODE_LABEL[mode] ?? mode} · ${studyId ?? "조사 미설정"} · 물건 ${c.assets} · 관측 ${c.events} · 사진 ${c.photos} · ${navigator.onLine ? "온라인" : "오프라인"} · 앱 ${APP_VERSION}`);
 }
 
 function registerSw() {
@@ -550,22 +565,11 @@ async function main() {
   } catch (e) {
     const f = $("fatal");
     f.hidden = false;
-    f.textContent = "IndexedDB 를 열 수 없다: " + e + ". 이 브라우저에서는 기록을 저장할 수 없다.";
+    f.textContent = "이 브라우저에서는 기록을 저장할 수 없습니다 (브라우저 저장소를 열 수 없음: " + e + "). 다른 브라우저나 일반 창에서 여세요.";
     return;
   }
   await loadSettings();
-  await initMap();
-  try {
-    const rec = await state.store.getParcels();
-    state.seedLoadedAt = (await state.store.getMeta("seed_loaded_at")) ?? null;
-    if (rec) { state.parcelsRec = rec; state.parcels = rec.bundle; state.parcelsCount = rec.bundle.features.length; mapCall((m) => m.setParcels(rec.bundle)); }
-    parcelsNote(rec ?? null);
-  } catch (e) {
-    text($("parcels-note"), "저장된 필지를 읽지 못함: " + (e?.message || e), "bad");
-  }
-  await renderAssets();
-  await renderRecords();
-  await renderExportHistory();
+  // 버튼·입력 리스너는 목록·기록을 그리기 전에 붙인다. 첫 화면 직후의 탭이 무시되지 않게 한다.
   $("save-settings").addEventListener("click", saveSettings);
   $("load-synthetic").addEventListener("click", loadSyntheticSeed);
   $("seed-file").addEventListener("change", (e) => loadSeedFile(e.target));
@@ -583,6 +587,18 @@ async function main() {
   $("date-only").addEventListener("change", (e) => { $("observed-at").type = e.target.checked ? "date" : "datetime-local"; $("observed-at").value = e.target.checked ? localDate() : toDatetimeLocal(); });
   window.addEventListener("online", refreshStatus);
   window.addEventListener("offline", refreshStatus);
+  await initMap();
+  try {
+    const rec = await state.store.getParcels();
+    state.seedLoadedAt = (await state.store.getMeta("seed_loaded_at")) ?? null;
+    if (rec) { state.parcelsRec = rec; state.parcels = rec.bundle; state.parcelsCount = rec.bundle.features.length; mapCall((m) => m.setParcels(rec.bundle)); }
+    parcelsNote(rec ?? null);
+  } catch (e) {
+    text($("parcels-note"), "저장된 필지를 읽지 못함: " + (e?.message || e), "bad");
+  }
+  await renderAssets();
+  await renderRecords();
+  await renderExportHistory();
   registerSw();
 }
 
