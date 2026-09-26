@@ -1,7 +1,8 @@
 """J5-017B: 연말 개방형 포맷 보존본. 릴리스 계획 §8 R6 ("연말 개방형 포맷 보존본"), 데이터 사전 §12 ("연말 CSV/JSONL/GeoJSON 보존본을 유지한다").
 
 시험: 모든 표의 jsonl(값 보존: NULL·BLOB)·csv(편의 사본)·GeoJSON·schema.sql·스키마 사본·README·manifest 와 재검증, 사진 포함/미포함, 필지 GeoJSON,
-변조·누락 검출, 참조 사진 누락 시 실패(부분 산출물 격리, 정본·백업 그대로), 외장 위치, 정본 버전 변화에 따른 새 보존본과 옛 보존본 불변, CLI. 가상자료만 쓴다.
+변조·누락 검출, 참조 사진 누락 시 실패(부분 산출물 격리, 정본·백업 그대로), 외장 위치, 정본 버전 변화에 따른 새 보존본과 옛 보존본 불변,
+큰 셀(CSV 기본 필드 상한 초과)의 검증, 구버전 정본을 읽기 전용으로 열어 마이그레이션 없이 그 시점 스키마 그대로 보존(CLI), CLI. 가상자료만 쓴다.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import pytest
 
 from j5 import cli
 from j5.db import schema as S
-from j5.db.archive import ARCHIVE_LOG, ArchiveError, create_archive, verify_archive_dir
+from j5.db.archive import ARCHIVE_LOG, ArchiveError, _csv_reader, create_archive, verify_archive_dir
 from j5.db.backup import create_backup, read_latest
 from j5.db.importer import import_package
 from j5.db.parcels import load_bundle
@@ -47,7 +48,7 @@ def _rows(p: Path) -> list[dict]:
 
 def _csv(p: Path) -> list[list[str]]:
     with open(p, encoding="utf-8", newline="") as f:
-        return list(csv.reader(f))
+        return list(_csv_reader(f))  # 큰 셀도 읽는 리더 (기본 상한은 약 128KiB)
 
 
 def _log(home: Path) -> list[dict]:
@@ -183,6 +184,50 @@ def test_new_version_new_archive_old_untouched_and_external_dest(db, home, tmp_p
     tree1b = {p.relative_to(home / r1.archive_dir).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in (home / r1.archive_dir).rglob("*") if p.is_file()}
     assert tree1 == tree1b
     assert verify_archive_dir(Path(r2.archive_dir))["manifest"]["dataset_version"] == 3
+
+
+def test_large_cell_survives_csv_verification(db, home):
+    """CSV 파서 기본 필드 상한(약 128KiB)보다 큰 셀이 있어도 보존본 작성·검증이 된다."""
+    big = "x" * 300_000
+    with db.transaction():
+        db.set_meta("big_note", big)
+    r = create_archive(db, home)
+    assert r.outcome == "completed", r.to_text()
+    adir = home / r.archive_dir
+    meta = {row["key"]: row["value"] for row in _rows(adir / "tables/meta.jsonl")}
+    assert meta["big_note"] == big
+    c = _csv(adir / "tables/meta.csv")
+    assert any(row[1] == big for row in c[1:])
+    assert verify_archive_dir(adir)["rows"] == r.rows
+    assert csv.field_size_limit() < len(big), "검증 뒤 파서 상한은 원래 값으로 돌아간다"
+
+
+def test_cli_archive_opens_readonly_and_does_not_migrate(home, capsys, monkeypatch):
+    """구버전 정본(마지막 마이그레이션 없음)을 보존하면 그 시점 스키마 그대로 담고 정본을 바꾸지 않는다."""
+    import sqlite3
+    monkeypatch.setenv("J5_DATA_HOME", str(home))
+    assert cli.main(["db", "init", "--study-id", STUDY, "--data-mode", "synthetic"]) == 0
+    assert cli.main(["db", "load-seed", str(SEED_PATH)]) == 0
+    path = home / "db" / "j5.sqlite3"
+    conn = sqlite3.connect(str(path))
+    conn.execute("DELETE FROM schema_migrations WHERE version = ?", (S.DB_SCHEMA_VERSION,))
+    conn.commit()
+    conn.close()
+    before = path.read_bytes()
+    capsys.readouterr()
+    assert cli.main(["db", "archive", "--json"]) == 0
+    j = json.loads(capsys.readouterr().out)
+    assert j["db_schema_version"] == S.DB_SCHEMA_VERSION - 1
+    m = json.loads((home / j["archive_dir"] / "archive_manifest.json").read_text(encoding="utf-8"))
+    assert m["db_schema_version"] == S.DB_SCHEMA_VERSION - 1 and next(t for t in m["tables"] if t["name"] == "schema_migrations")["rows"] == S.DB_SCHEMA_VERSION - 1
+    assert path.read_bytes() == before, "보존본 작성은 정본 파일을 바꾸지 않는다(마이그레이션 없음)"
+    conn = sqlite3.connect(str(path))
+    assert conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == S.DB_SCHEMA_VERSION - 1
+    conn.execute("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)", (S.DB_SCHEMA_VERSION + 1, "future", "2030-01-01T00:00:00Z"))
+    conn.commit()
+    conn.close()
+    assert cli.main(["db", "archive"]) == 1
+    assert "tool_too_old" in capsys.readouterr().err
 
 
 def test_cli_archive_and_verify(home, tmp_path, capsys, monkeypatch):

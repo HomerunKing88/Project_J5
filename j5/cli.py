@@ -285,7 +285,7 @@ def _db_path(args) -> Path | None:
 
 
 def _db_main(args) -> int:
-    if args.db_command in ("restore", "backup-verify", "ops-check", "archive-verify"):
+    if args.db_command in ("restore", "backup-verify", "ops-check", "archive", "archive-verify"):
         return _db_offline(args)
     path = _db_path(args)
     if path is None:
@@ -376,13 +376,6 @@ def _db_main(args) -> int:
                 r = create_backup(db, home, dest_root=args.dest)
                 sys.stdout.write(r.to_json() if args.json else r.to_text())
                 return BACKUP_EXIT[r.outcome]
-            if args.db_command == "archive":
-                home = _data_home(args)
-                if home is None:
-                    return USAGE_ERROR
-                r = create_archive(db, home, dest_root=args.dest, photos=args.photos)
-                sys.stdout.write(r.to_json() if args.json else r.to_text())
-                return ARCHIVE_EXIT[r.outcome]
             if args.db_command == "check-photos":
                 home = _data_home(args)
                 if home is None:
@@ -565,7 +558,22 @@ def _db_main(args) -> int:
 
 
 def _db_offline(args) -> int:
-    """정본 연결 없이 하는 명령: 백업 검증·복구·운영 점검(읽기 전용, 마이그레이션 없음)."""
+    """정본 연결 없이 하는 명령: 백업 검증·복구·운영 점검·보존본(읽기 전용, 마이그레이션 없음)."""
+    if args.db_command == "archive":
+        home = _data_home(args)
+        path = _db_path(args)
+        if home is None or path is None:
+            return USAGE_ERROR
+        # 보존본은 정본을 바꾸지 않는다: 읽기 전용으로 열어 대기 중인 마이그레이션을 적용하지 않고 그 시점의 스키마 그대로 보존한다
+        try:
+            db = Db.open_readonly(path)
+        except DbError as e:
+            print(f"정본을 열 수 없음 [{e.code}]: {e.message}", file=sys.stderr)
+            return 1
+        with db:
+            r = create_archive(db, home, dest_root=args.dest, photos=args.photos)
+        sys.stdout.write(r.to_json() if args.json else r.to_text())
+        return ARCHIVE_EXIT[r.outcome]
     if args.db_command == "ops-check":
         home = _data_home(args)
         if home is None:

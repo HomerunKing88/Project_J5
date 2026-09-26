@@ -6,7 +6,8 @@ create_archive(db, data_home, dest_root=None, photos=False): 정본의 읽기 �
 필지가 있으면 `parcels.geojson`(폰 번들 형식). 정본의 표·인덱스·트리거 정의 `schema.sql`, 저장소의 JSON Schema 사본 `schemas/`, 설명 `README.txt`,
 목록·해시·버전 `archive_manifest.json`(schemas/archive_manifest.schema.json). `--photos` 면 첨부가 참조한 사진을 해시 검증하며 복사한다.
 임시 폴더에 전량 쓰고 디스크에서 다시 읽어 검증(verify_archive_dir)한 뒤에만 최종 이름으로 바꾼다. 실패하면 failed-<run8>/ 에 남긴다.
-정본·백업·파생본은 바꾸지 않는다. 보존본은 백업이 아니다(복구 명령은 백업 폴더만 받는다).
+정본·백업·파생본은 바꾸지 않는다. CLI 는 정본을 읽기 전용(Db.open_readonly)으로 열어 대기 중인 마이그레이션을 적용하지 않고 그 시점의 스키마 그대로 보존한다.
+보존본은 백업이 아니다(복구 명령은 백업 폴더만 받는다).
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import json
 import os
 import platform
 import sqlite3
+import sys
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -40,6 +42,7 @@ README_TXT = "README.txt"
 ASSETS_GEOJSON = "assets.geojson"
 PARCELS_GEOJSON = "parcels.geojson"
 EXIT_BY_OUTCOME = {"completed": 0, "failed": 1}
+CSV_FIELD_LIMIT = 1 << 30  # 검증 시 CSV 파서의 필드 상한. 기본값(약 128KiB)은 큰 geometry_json·payload_json 셀에서 csv.Error 를 낸다
 
 
 class ArchiveError(Exception):
@@ -270,7 +273,7 @@ def create_archive(db: Db, data_home: Path, *, dest_root: Path | None = None, ph
         r.outcome = "completed"
         r.message = f"보존본 완료 (정본 v{meta['dataset_version']}, 표 {len(tables)}개 · 행 {total_rows}개). 디스크에서 다시 읽어 검증했다"
         return r
-    except (ArchiveError, BackupError, DbError, OSError, ValueError, KeyError, sqlite3.Error) as e:
+    except (ArchiveError, BackupError, DbError, OSError, ValueError, KeyError, sqlite3.Error, csv.Error) as e:
         code = getattr(e, "code", type(e).__name__)
         msg = getattr(e, "message", str(e))
         r.outcome = "failed"
@@ -291,6 +294,18 @@ def create_archive(db: Db, data_home: Path, *, dest_root: Path | None = None, ph
 
 
 # ---- 검증 ----
+
+def _csv_reader(f):
+    """큰 셀도 읽도록 필드 상한을 올린 CSV 리더. 상한은 호출 뒤 원래 값으로 되돌린다."""
+    old = csv.field_size_limit()
+    try:
+        csv.field_size_limit(min(CSV_FIELD_LIMIT, sys.maxsize))
+    except OverflowError:
+        csv.field_size_limit(min(CSV_FIELD_LIMIT, 2**31 - 1))
+    try:
+        yield from csv.reader(f)
+    finally:
+        csv.field_size_limit(old)
 
 def verify_archive_dir(adir: Path) -> dict:
     """보존본 폴더를 디스크에서 전부 읽어 검증한다: manifest 스키마, 파일 목록·크기·해시(누락·여분 없음), 표마다 jsonl·csv 행 수가 manifest 와 같음,
@@ -336,7 +351,7 @@ def verify_archive_dir(adir: Path) -> dict:
             if list(row.keys()) != cols:
                 raise ArchiveError("columns_jsonl", f"{t['name']}: 열이 표 정의와 다르다")
         with open(adir / t["csv"], encoding="utf-8", newline="") as f:
-            rows = list(csv.reader(f))
+            rows = list(_csv_reader(f))
         if not rows or rows[0] != cols or len(rows) - 1 != t["rows"]:
             raise ArchiveError("rows_csv", f"{t['name']}: csv {max(len(rows) - 1, 0)}행·헤더 대조 실패, manifest {t['rows']}")
         total += t["rows"]
