@@ -128,7 +128,7 @@ def test_readonly_open_does_not_migrate_old_store_and_rejects_newer(db, home):
     import sqlite3
     conn = sqlite3.connect(str(path))
     # 마지막 마이그레이션이 없던 구버전처럼: 그 마이그레이션이 만든 표를 지우고 적용 기록을 뺀다 (표 재작성 부분은 다시 실행해도 같은 결과)
-    for t in ("readiness_decisions",):
+    for t in ("readiness_rechecks",):  # 마지막 마이그레이션(14)이 만든 표
         conn.execute(f"DROP TABLE IF EXISTS {t}")
     conn.execute("DELETE FROM schema_migrations WHERE version = ?", (S.DB_SCHEMA_VERSION,))
     conn.commit()

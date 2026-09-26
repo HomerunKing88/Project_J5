@@ -35,7 +35,8 @@ from j5.db.plans import apply_plan_input, load_plan_input, plan_add_text, plan_o
 from j5.db.ops import EXIT_BY_OK as OPS_EXIT, ops_check, ops_text
 from j5.db.archive import EXIT_BY_OUTCOME as ARCHIVE_EXIT, ArchiveError, create_archive, verify_archive_dir
 from j5.db.viewpkg import EXIT_BY_VERDICT as VIEW_EXIT, inspect_view, view_text
-from j5.db.readiness import apply_case_input, approve as readiness_approve, case_add_text, decision_text, enforce_release, evaluate as readiness_evaluate, load_case_input, readiness_text, withdraw as readiness_withdraw
+from j5.db.readiness import apply_case_input, apply_stage_recheck, approve as readiness_approve, case_add_text, decision_text, enforce_release, evaluate as readiness_evaluate, load_case_input, load_stage_recheck_input, readiness_text, stage_recheck_text, withdraw as readiness_withdraw
+from j5.db.cases import export_cases, export_text
 from j5.calc.inputs import calc_text, load_calc_input, run_calc
 from j5.calc.plans import plans_csv
 from j5.parcels.convert import Clip, ConvertError, ConvertOptions, convert, convert_text, inspect_source, inspect_text, write_bundle
@@ -196,6 +197,15 @@ def _build_parser() -> argparse.ArgumentParser:
     rwd.add_argument("--on", required=True, help="철회일 YYYY-MM-DD")
     rwd.add_argument("--reason", required=True)
     rwd.add_argument("--json", action="store_true")
+    crk = dsub.add_parser("case-recheck", help="계약 직전·잔금 직전 재확인을 남긴다 (R7, J5-018B: schemas/readiness_recheck.schema.json, kind: stage_recheck, 불변). 권리·임대차와 세무·법적·규제 항목 필수. 문제가 확인되면 purchase_ready 를 철회한다")
+    crk.add_argument("file", type=Path, help="입력 JSON (kind: stage_recheck)")
+    crk.add_argument("--json", action="store_true")
+    cex = dsub.add_parser("case-export", help="매입 검토 사건 비교자료 내보내기: 물건당 한 행의 cases.csv 와 전체 cases.json (exports/private/cases/<stamp>-<run8>/, 덮어쓰지 않음). 값은 정본 그대로")
+    cex.add_argument("--asset", action="append", help="대상 asset_id (반복 가능). 생략 시 현재 검토 기록이 있는 물건 전부")
+    cex.add_argument("--data-home", type=Path, help="실데이터 홈. 생략 시 J5_DATA_HOME")
+    cex.add_argument("--out", type=Path, help="출력 상위 폴더. 생략 시 J5_DATA_HOME/exports/private/cases")
+    cex.add_argument("--as-of", help="판정 기준일 YYYY-MM-DD. 생략 시 오늘")
+    cex.add_argument("--json", action="store_true")
     rg = dsub.add_parser("rt-changes", help="어떤 실행 이후의 변경: 새 거래·취소로 바뀜·응답에서 사라짐 (취소·정정 점검 결과 읽기)")
     rg.add_argument("--lawd-cd", required=True)
     rg.add_argument("--since-run", required=True, help="기준 실행 ID (이 실행 뒤의 실행들을 본다)")
@@ -420,6 +430,20 @@ def _db_main(args) -> int:
                         sys.stdout.write(decision_text(released))
                     sys.stdout.write(readiness_text(e))
                 return 0 if e["ready"] and not released else 1
+            if args.db_command == "case-recheck":
+                if not args.file.is_file():
+                    print(f"입력 파일이 없음: {args.file}", file=sys.stderr)
+                    return USAGE_ERROR
+                r = apply_stage_recheck(db, load_stage_recheck_input(args.file))
+                sys.stdout.write(json.dumps(r, ensure_ascii=False, indent=2) + "\n" if args.json else stage_recheck_text(r))
+                return 0
+            if args.db_command == "case-export":
+                home = _data_home(args)
+                if home is None:
+                    return USAGE_ERROR
+                r = export_cases(db, home, asset_ids=args.asset, out_root=args.out, today=args.as_of)
+                sys.stdout.write(json.dumps(r, ensure_ascii=False, indent=2) + "\n" if args.json else export_text(r))
+                return 0
             if args.db_command in ("readiness-approve", "readiness-withdraw"):
                 r = readiness_approve(db, args.asset, args.on, note=args.note) if args.db_command == "readiness-approve" else readiness_withdraw(db, args.asset, args.on, reason=args.reason)
                 sys.stdout.write(json.dumps(r, ensure_ascii=False, indent=2) + "\n" if args.json else decision_text(r))

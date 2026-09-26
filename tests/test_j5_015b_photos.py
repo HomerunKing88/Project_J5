@@ -105,6 +105,7 @@ def test_schema_10_columns_import_and_backfill(db, home, tmp_path):
             d9.conn.execute(f"ALTER TABLE attachments DROP COLUMN {col}")
         d9.conn.execute("DROP TABLE IF EXISTS judgment_rechecks")  # 마이그레이션 11 (J5-015C)
         d9.conn.execute("DROP TABLE IF EXISTS readiness_decisions")  # 마이그레이션 13 (J5-018A)
+        d9.conn.execute("DROP TABLE IF EXISTS readiness_rechecks")  # 마이그레이션 14 (J5-018B)
         d9.conn.execute("DELETE FROM schema_migrations WHERE version >= 10")
     assert d9.schema_version() == 9 and "viewpoint_id" not in {r[1] for r in d9.conn.execute("PRAGMA table_info(attachments)")}
     d9.close()
