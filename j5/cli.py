@@ -35,6 +35,7 @@ from j5.db.plans import apply_plan_input, load_plan_input, plan_add_text, plan_o
 from j5.db.ops import EXIT_BY_OK as OPS_EXIT, ops_check, ops_text
 from j5.db.archive import EXIT_BY_OUTCOME as ARCHIVE_EXIT, ArchiveError, create_archive, verify_archive_dir
 from j5.db.viewpkg import EXIT_BY_VERDICT as VIEW_EXIT, inspect_view, view_text
+from j5.db.readiness import apply_case_input, approve as readiness_approve, case_add_text, decision_text, enforce_release, evaluate as readiness_evaluate, load_case_input, readiness_text, withdraw as readiness_withdraw
 from j5.calc.inputs import calc_text, load_calc_input, run_calc
 from j5.calc.plans import plans_csv
 from j5.parcels.convert import Clip, ConvertError, ConvertOptions, convert, convert_text, inspect_source, inspect_text, write_bundle
@@ -178,6 +179,23 @@ def _build_parser() -> argparse.ArgumentParser:
     pl = dsub.add_parser("plans", help="물건의 현재 규제 검토·개발안·자금안 기록과 저장 시점 계산 결과를 나란히 보인다 (고르지 않음)")
     pl.add_argument("--asset", required=True, help="asset_id")
     pl.add_argument("--json", action="store_true")
+    ca_ = dsub.add_parser("case-add", help="매입 준비 검토 기록을 넣는다 (R7, J5-018A: schemas/acquisition_review.schema.json, kind: acquisition_review, 불변). 체크리스트 8항목·범위·가격·참조 기록. 수정은 supersedes_id 로 새 기록")
+    ca_.add_argument("file", type=Path, help="입력 JSON (kind: acquisition_review)")
+    ca_.add_argument("--json", action="store_true")
+    rd = dsub.add_parser("readiness", help="매입 준비 진입조건 판정: 항목별 확인·유효기한·미확인·검토 뒤 변경(가격·대출·전략·규제·구성·실사)을 보고 준비 여부를 표시한다. purchase_ready 가 유효하지 않으면 이력을 남기며 자동 철회한다")
+    rd.add_argument("--asset", required=True, help="asset_id")
+    rd.add_argument("--as-of", help="기준일 YYYY-MM-DD (유효기한 판정). 생략 시 오늘")
+    rd.add_argument("--json", action="store_true")
+    rap = dsub.add_parser("readiness-approve", help="본인 승인으로 purchase_ready 전환 (준비 조건을 충족할 때만). 결정 이력을 남긴다. 대출 확약·적법성 보증이 아니다")
+    rap.add_argument("--asset", required=True)
+    rap.add_argument("--on", required=True, help="승인일 YYYY-MM-DD")
+    rap.add_argument("--note")
+    rap.add_argument("--json", action="store_true")
+    rwd = dsub.add_parser("readiness-withdraw", help="purchase_ready 철회 (새 위험·변경 감지 시). 사유와 함께 결정 이력을 남기고 관심 단계를 detailed_review 로 되돌린다")
+    rwd.add_argument("--asset", required=True)
+    rwd.add_argument("--on", required=True, help="철회일 YYYY-MM-DD")
+    rwd.add_argument("--reason", required=True)
+    rwd.add_argument("--json", action="store_true")
     rg = dsub.add_parser("rt-changes", help="어떤 실행 이후의 변경: 새 거래·취소로 바뀜·응답에서 사라짐 (취소·정정 점검 결과 읽기)")
     rg.add_argument("--lawd-cd", required=True)
     rg.add_argument("--since-run", required=True, help="기준 실행 ID (이 실행 뒤의 실행들을 본다)")
@@ -384,6 +402,28 @@ def _db_main(args) -> int:
                 r = create_backup(db, home, dest_root=args.dest)
                 sys.stdout.write(r.to_json() if args.json else r.to_text())
                 return BACKUP_EXIT[r.outcome]
+            if args.db_command == "case-add":
+                if not args.file.is_file():
+                    print(f"입력 파일이 없음: {args.file}", file=sys.stderr)
+                    return USAGE_ERROR
+                r = apply_case_input(db, load_case_input(args.file))
+                sys.stdout.write(json.dumps(r, ensure_ascii=False, indent=2) + "\n" if args.json else case_add_text(r))
+                return 0
+            if args.db_command == "readiness":
+                released = enforce_release(db, args.asset, today=args.as_of)  # 유효하지 않은 purchase_ready 는 이력을 남기며 자동 철회한다
+                e = readiness_evaluate(db, args.asset, today=args.as_of)
+                e["auto_withdrawn"] = released
+                if args.json:
+                    sys.stdout.write(json.dumps(e, ensure_ascii=False, indent=2) + "\n")
+                else:
+                    if released:
+                        sys.stdout.write(decision_text(released))
+                    sys.stdout.write(readiness_text(e))
+                return 0 if e["ready"] and not released else 1
+            if args.db_command in ("readiness-approve", "readiness-withdraw"):
+                r = readiness_approve(db, args.asset, args.on, note=args.note) if args.db_command == "readiness-approve" else readiness_withdraw(db, args.asset, args.on, reason=args.reason)
+                sys.stdout.write(json.dumps(r, ensure_ascii=False, indent=2) + "\n" if args.json else decision_text(r))
+                return 0
             if args.db_command == "check-photos":
                 home = _data_home(args)
                 if home is None:

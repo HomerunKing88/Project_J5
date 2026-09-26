@@ -44,6 +44,10 @@
 
 - `judgment_recheck.schema.json`: 재확인 입력(`j5 db recheck-add`)과 `judgment_rechecks` 행. 현재 목표 매수가·투자판단 기록을 가리키고 결과(`reconfirmed` / `revision_needed`)·재확인일·조건 대조(`condition`, `holds` true/false/null, `note`)·반대 증거(`note`, 선택 `document_id`·`observed_on`)·메모를 둔다. 재확인 시점의 신호 요약은 저장소가 붙인다. 판단 자체는 바꾸지 않는다(데이터 사전 §8, 릴리스 계획 §8·§9).
 
+## 파일 (acquisition_review 1.0.0, R7 J5-018A)
+
+- `acquisition_review.schema.json`: 매입 준비 검토 기록 입력(`j5 db case-add`, `kind: acquisition_review`)과 저장 payload(`$defs/acquisition_review_payload`). 전략·범위·가격(미확인은 null 과 사유)·참조 기록·매물 사건·체크리스트 8항목(`$defs/check`: 상태 6종, 근거 문서, 검토자, 검토일, 유효기한, 재검토 조건 8종, 미해결 사항, 해당 없음 사유). `verified` 는 검토일, `not_applicable` 은 사유, `conditional`/`blocked` 는 미해결 사항이 필수(데이터 사전 §11). purchase_ready 전환은 이 기록이 아니라 `readiness_decisions`(db_schema 13)에 남는다.
+
 ## 파일 (plan_records 1.0.0, R5 J5-016C)
 
 - `plan_records.schema.json`: 규제 검토·개발안·자금안 기록 입력(`j5 db plan-add`, `kind: plan_record`)과 `records.record_type` `regulation_review`·`development_plan`·`financing_plan` 의 payload(`$defs/*_payload`). 규제 검토는 발행기관·고시번호·문서 단계(결정고시/입안공고/심의결과/보도자료/기타)·발표일·효력일·종료일을 두며 미확인 항목이 있으면 사유, 공식 자료면 근거 문서 1건 이상이 필수다(데이터 사전 §6). 입력 payload(`$defs/*_input`)에는 결과를 넣지 않고, 저장 payload 는 입력 + 저장 시점 계산 결과(`far_result` / `equity_result` / `cash_result`) + `calculation_version` 이다. 계산 입력은 `calc_inputs.schema.json` 의 정의를 상대 `$ref` 로 참조한다(`j5/schemas_loader.py` 의 registry 가 푼다).

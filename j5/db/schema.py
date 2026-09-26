@@ -21,8 +21,9 @@ RESOLUTION_STATUSES = ("confirmed", "pending")
 DATA_MODES = ("synthetic", "private_real")
 RECORD_TYPES_V1 = ("field_observation",)  # 마이그레이션 1 의 표 정의에 고정된 목록. 기존 마이그레이션 문구는 바꾸지 않는다
 RECORD_TYPES_V9 = ("field_observation", "target_price", "investment_judgment")  # 마이그레이션 9 의 표 정의에 고정된 목록 (J5-015A)
-# 현재 허용 목록: R1b 임장 관측, R4(J5-015A) 목표 매수가·투자판단, R5(J5-016C) 규제 검토·개발안·자금안 (데이터 사전 §2·§8·§9·§10). 표는 마이그레이션 12 에서 재작성
-RECORD_TYPES = ("field_observation", "target_price", "investment_judgment", "regulation_review", "development_plan", "financing_plan")
+RECORD_TYPES_V12 = ("field_observation", "target_price", "investment_judgment", "regulation_review", "development_plan", "financing_plan")  # 마이그레이션 12 의 표 정의에 고정된 목록 (J5-016C)
+# 현재 허용 목록: R1b 임장 관측, R4(J5-015A) 목표 매수가·투자판단, R5(J5-016C) 규제 검토·개발안·자금안, R7(J5-018A) 매입 준비 검토 (데이터 사전 §2·§8·§9·§10·§11). 표는 마이그레이션 13 에서 재작성
+RECORD_TYPES = RECORD_TYPES_V12 + ("acquisition_review",)
 SOURCE_KINDS = ("official_fact", "field_observation", "broker_report", "asking_price", "personal_estimate", "scenario_assumption", "calculated_result")
 DOCUMENT_KINDS = ("field_package", "official_api", "official_file", "broker_report", "manual_entry")
 VERIFICATION_STATUSES = ("unverified", "verified", "disputed")
@@ -691,7 +692,33 @@ END;
 
 # J5-016C 규제 검토·개발안·자금안 기록 종류 (데이터 사전 §2 "임장·건물·필지·규제·권리·매물 사건·목표 매수가·투자판단·개발안·자금안·매입 준비 검토를 구분", §9~§10, 릴리스 계획 §8 R5).
 # records.record_type 허용 목록을 넓히는 표 재작성. 절차는 마이그레이션 9 와 같다(ADR-14). payload 계약은 schemas/plan_records.schema.json.
-MIGRATION_0012 = _records_rewrite(RECORD_TYPES)
+MIGRATION_0012 = _records_rewrite(RECORD_TYPES_V12)
+
+# J5-018A 매입 준비 검토 (데이터 사전 §11, 릴리스 계획 §9 R7, ADR-07). records.record_type 에 acquisition_review 를 더하는 표 재작성(절차는 9·12 와 같다, ADR-14)과
+# 준비 상태 결정 이력 표. purchase_ready 전환·철회는 assets.tracking_status 를 바꾸되 결정마다 불변 행을 남겨 과거 승인 이력을 보존한다("새로운 위험을 확인하면 준비 상태를 철회하는 이력을 남긴다").
+READINESS_DECISIONS = ("approve", "withdraw")
+MIGRATION_0013 = _records_rewrite(RECORD_TYPES) + f"""
+CREATE TABLE readiness_decisions (
+  decision_id     TEXT NOT NULL PRIMARY KEY CHECK (decision_id GLOB '{UUID_GLOB}'),
+  asset_id        TEXT NOT NULL REFERENCES assets (asset_id),
+  record_id       TEXT NOT NULL REFERENCES records (record_id),
+  decision        TEXT NOT NULL CHECK (decision {_in(READINESS_DECISIONS)}),
+  decided_on      TEXT NOT NULL CHECK (decided_on GLOB '{DATE_GLOB}'),
+  previous_status TEXT NOT NULL CHECK (previous_status {_in(TRACKING_STATUSES)}),
+  new_status      TEXT NOT NULL CHECK (new_status {_in(TRACKING_STATUSES)}),
+  reason          TEXT,
+  evaluation_json TEXT NOT NULL CHECK (json_valid(evaluation_json) AND json_type(evaluation_json) = 'object'),
+  recorded_at     TEXT NOT NULL CHECK (recorded_at GLOB '{UTC_GLOB}'),
+  CHECK ((decision = 'approve') = (new_status = 'purchase_ready'))
+) STRICT;
+CREATE INDEX readiness_decisions_by_asset ON readiness_decisions (asset_id, recorded_at);
+CREATE TRIGGER readiness_decisions_no_update BEFORE UPDATE ON readiness_decisions BEGIN
+  SELECT RAISE(ABORT, 'readiness_decisions 는 불변이다');
+END;
+CREATE TRIGGER readiness_decisions_no_delete BEFORE DELETE ON readiness_decisions BEGIN
+  SELECT RAISE(ABORT, 'readiness_decisions 는 삭제하지 않는다');
+END;
+"""
 
 # (버전, 이름, SQL). 새 릴리스의 테이블은 새 항목으로 추가하고 기존 항목은 고치지 않는다.
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
@@ -707,8 +734,9 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (10, "r4_photo_series", MIGRATION_0010),
     (11, "r4_rechecks", MIGRATION_0011),
     (12, "r5_plan_records", MIGRATION_0012),
+    (13, "r7_acquisition_review", MIGRATION_0013),
 )
 # 표 재작성이 필요한 마이그레이션: 외래키 검사를 끈 채 한 트랜잭션으로 실행하고 foreign_key_check 가 비어야 커밋한다 (store._migrate).
-FK_OFF_MIGRATIONS = frozenset({9, 12})
+FK_OFF_MIGRATIONS = frozenset({9, 12, 13})
 DB_SCHEMA_VERSION = MIGRATIONS[-1][0]
 MIN_SQLITE_VERSION = (3, 38, 0)  # STRICT 테이블(3.37)과 내장 json_valid/json_type(3.38)

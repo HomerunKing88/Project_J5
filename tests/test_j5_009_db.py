@@ -378,7 +378,8 @@ def test_json_payload_validation(seeded):
 
 def test_record_type_subject_matrix_is_single_source():
     assert RECORD_TYPE_SUBJECTS == {"field_observation": frozenset({"asset"}), "target_price": frozenset({"asset"}), "investment_judgment": frozenset({"asset"}),
-                                    "regulation_review": frozenset({"asset"}), "development_plan": frozenset({"asset"}), "financing_plan": frozenset({"asset"})}
+                                    "regulation_review": frozenset({"asset"}), "development_plan": frozenset({"asset"}), "financing_plan": frozenset({"asset"}),
+                                    "acquisition_review": frozenset({"asset"})}
     assert set(RECORD_TYPE_SUBJECTS) == set(S.RECORD_TYPES)
     assert all(t in S.SUBJECT_TYPES for ts in RECORD_TYPE_SUBJECTS.values() for t in ts)
 

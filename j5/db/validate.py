@@ -28,6 +28,7 @@ RECORD_TYPE_SUBJECTS: dict[str, frozenset[str]] = {
     "regulation_review": frozenset({"asset"}),     # R5 J5-016C: 규제 검토(용도지역·적용 용적률·규제 버전·제약) (데이터 사전 §9)
     "development_plan": frozenset({"asset"}),      # R5 J5-016C: 개발안(현상 유지·리모델링·철거신축·공동매입)과 여유면적 계산 스냅샷
     "financing_plan": frozenset({"asset"}),        # R5 J5-016C: 자금안(필요자기자본·최대 현금 계산 스냅샷) (데이터 사전 §10)
+    "acquisition_review": frozenset({"asset"}),    # R7 J5-018A: 매입 준비 검토(체크리스트 8항목·범위·가격·참조 기록) (데이터 사전 §11)
 }
 # 기록 종류별 payload 스키마 (schemas/ 의 $defs 참조) 와 payload 스키마 버전
 RECORD_PAYLOAD_SCHEMAS: dict[str, tuple[str, str, str]] = {
@@ -37,6 +38,7 @@ RECORD_PAYLOAD_SCHEMAS: dict[str, tuple[str, str, str]] = {
     "regulation_review": ("plan_records.schema.json", "regulation_review_payload", "1.0.0"),
     "development_plan": ("plan_records.schema.json", "development_plan_payload", "1.0.0"),
     "financing_plan": ("plan_records.schema.json", "financing_plan_payload", "1.0.0"),
+    "acquisition_review": ("acquisition_review.schema.json", "acquisition_review_payload", "1.0.0"),
 }
 assert set(RECORD_TYPE_SUBJECTS) == set(RECORD_TYPES) == set(RECORD_PAYLOAD_SCHEMAS)
 

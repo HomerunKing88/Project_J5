@@ -414,6 +414,11 @@ def build_projection(db: Db, data_home: Path, *, photos: bool = False) -> Projec
     tmp = base / f".tmp-{run_id[:8]}"
     snapshot: dict | None = None
     try:
+        # 게시되는 관심 단계가 유효하지 않은 purchase_ready 를 담지 않도록 먼저 자동 철회(이력 남김)한다 (J5-018A, 데이터 사전 §11). 정본 버전이 오르면 그 버전을 스냅샷한다
+        from j5.db.readiness import enforce_all  # 순환 import 방지
+        if db._has_table("readiness_decisions"):
+            for d in enforce_all(db):
+                result.add("warn", "readiness_withdrawn", f"물건 {d['asset_id']} 의 purchase_ready 를 자동 철회했다 ({d['reason'][:120]})")
         snapshot = _read_snapshot(db, generated_at=started)
         result.source_dataset_version = snapshot["version"]
         manifest = _generate(snapshot, tmp, photos=photos, data_home=data_home, run_id=run_id, generated_at=started)
