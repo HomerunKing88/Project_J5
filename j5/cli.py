@@ -1,5 +1,5 @@
 """j5 명령줄. inspect(패키지 검사), copy(독립 사본), db(정본 SQLite: init/status/load-seed/import/project/backup/restore/check-photos/ops-check/archive/survey-*),
-parcels(연속지적도 SHP → 필지 번들: inspect/convert), collect(공식 API 수집: rt-sample/rt-report).
+view(조회 파생본 열람: inspect), parcels(연속지적도 SHP → 필지 번들: inspect/convert), collect(공식 API 수집: rt-sample/rt-report).
 
 종료 코드: 0 ok·반영·중복 / 1 reject·실패 / 2 hold·보류 / 3 사용 오류.
 """
@@ -34,6 +34,7 @@ from j5.db.recheck import apply_recheck_input, load_recheck_input, recheck_add_t
 from j5.db.plans import apply_plan_input, load_plan_input, plan_add_text, plan_overview, plan_overview_text
 from j5.db.ops import EXIT_BY_OK as OPS_EXIT, ops_check, ops_text
 from j5.db.archive import EXIT_BY_OUTCOME as ARCHIVE_EXIT, ArchiveError, create_archive, verify_archive_dir
+from j5.db.viewpkg import EXIT_BY_VERDICT as VIEW_EXIT, inspect_view, view_text
 from j5.calc.inputs import calc_text, load_calc_input, run_calc
 from j5.calc.plans import plans_csv
 from j5.parcels.convert import Clip, ConvertError, ConvertOptions, convert, convert_text, inspect_source, inspect_text, write_bundle
@@ -184,6 +185,13 @@ def _build_parser() -> argparse.ArgumentParser:
     rg.add_argument("--json", action="store_true")
     pk.add_argument("file", type=Path)
     pk.add_argument("--json", action="store_true")
+
+    vw = sub.add_parser("view", help="조회 파생본(.j5view.zip 또는 게시 폴더) 열람 (R6, J5-017C): 정본 없이 검증하고 내용을 요약한다. --db 를 주면 최신·구본 여부를 표시")
+    vsub = vw.add_subparsers(dest="view_command", required=True)
+    vi = vsub.add_parser("inspect", help="파생본을 안전하게 풀어 검증(manifest 스키마·파일 해시·행수·참조·버전)하고 버전·범위·기록 종류·관측일·사진 포함 여부를 보여준다. 입력은 바꾸지 않는다")
+    vi.add_argument("package", type=Path, help=".j5view.zip 또는 게시 폴더")
+    vi.add_argument("--db", type=Path, help="비교할 정본 (읽기 전용으로 연다). 생략 시 최신 여부 미확인")
+    vi.add_argument("--json", action="store_true")
 
     pa = sub.add_parser("parcels", help="필지 경계·지번 (ADR-13): 연속지적도 SHP → 폰 지도용 번들(.j5parcels.json)")
     psub = pa.add_subparsers(dest="parcels_command", required=True)
@@ -786,6 +794,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "db":
         return _db_main(args)
+    if args.command == "view":
+        return _view_main(args)
     if args.command == "parcels":
         return _parcels_main(args)
     if args.command == "collect":
@@ -793,6 +803,26 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "calc":
         return _calc_main(args)
     return USAGE_ERROR
+
+
+def _view_main(args) -> int:
+    if not args.package.exists():
+        print(f"입력이 없음: {args.package}", file=sys.stderr)
+        return USAGE_ERROR
+    db = None
+    if args.db is not None:
+        try:
+            db = Db.open_readonly(args.db)
+        except DbError as e:
+            print(f"정본을 열 수 없음 [{e.code}]: {e.message}", file=sys.stderr)
+            return USAGE_ERROR
+    try:
+        r = inspect_view(args.package, db=db)
+    finally:
+        if db is not None:
+            db.close()
+    sys.stdout.write(json.dumps(r, ensure_ascii=True, sort_keys=True, indent=2) + "\n" if args.json else view_text(r))
+    return VIEW_EXIT[r["verdict"]]
 
 
 def _calc_main(args) -> int:
