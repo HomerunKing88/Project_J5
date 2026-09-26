@@ -189,7 +189,14 @@ def _check_db(db: Db, data_home: Path, r: dict, now_dt: datetime) -> None:
             r["actions"].append({"code": "backup_verify_failed", "text": f"백업: {bs['state']}: {getattr(e, 'message', e)}. `j5 db backup` 으로 새 백업을 만든다 (옛 백업은 지우지 않는다)"})
     ps = projection_status(db, data_home) if db._has_table("projection_runs") else {"state": "표 없음 (db_schema < 3)", "stale": True, "published_at": None}
     r["projection"] = ps
-    if ps["stale"]:
+    if ps["stale"] and counts.get("assets", 0) == 0 and not ps.get("published_at") and ps.get("pointer_problem") == "pointer_missing":
+        # 물건이 없는 정본은 `project` 가 빈 파생본을 거절한다(no_assets). 만들 수 없는 것을 조치 항목으로 두면 점검을 통과할 수 없으므로 표시로만 둔다
+        # (2026-09-26 첫 실사용에서 확인). 포인터가 아예 없을 때만이다: 다른 정본의 파생본·손상된 포인터가 남아 있으면 그대로 조치 항목이다(리뷰 반영).
+        # 물건을 넣으면 다음 점검부터 다시 조치 항목이 된다.
+        ps["not_applicable"] = True
+        ps["state"] = "대상 없음 (정본에 물건이 없어 파생본을 만들 수 없다)"
+        r["warnings"].append("파생본 대상 없음: 정본에 물건이 없다. 물건 목록을 넣은 뒤(`j5 db load-seed`) `j5 db project` 로 만든다")
+    elif ps["stale"]:
         r["actions"].append({"code": "projection_stale", "text": f"파생본: {ps['state']}. `j5 db project`"})
     # 사진·수집 원본 대사 (삭제 없음)
     ph = check_photos(db, data_home)
