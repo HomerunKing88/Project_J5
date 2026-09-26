@@ -18,7 +18,8 @@ from j5 import cli
 from j5.db import schema as S
 from j5.db.judgment import apply_record_input
 from j5.db.plans import apply_plan_input
-from j5.db.readiness import CHECK_KEYS, apply_case_input, approve, current_case, evaluate, load_case_input, readiness_text, withdraw
+from j5.db.projection import build_projection
+from j5.db.readiness import AUTO_PREFIX, CHECK_KEYS, MANDATORY_TRIGGERS, apply_case_input, approve, current_case, enforce_all, enforce_release, evaluate, load_case_input, readiness_text, withdraw
 from j5.db.store import Db
 from j5.db.validate import RECORD_TYPE_SUBJECTS, ValidationError
 from tests.test_j5_015a_judgment import A, DOC, SEED_PATH, target, write
@@ -136,6 +137,11 @@ def test_case_input_validation(db, tmp_path):
     na["payload"]["checks"][0] = check("scope_price", status="not_applicable", na_reason=None)
     with pytest.raises(ValidationError):
         load_case_input(write(tmp_path, na))
+    noev = case()
+    noev["payload"]["checks"][0] = check("scope_price", evidence=())  # verified 인데 근거 없음
+    with pytest.raises(ValidationError):
+        load_case_input(write(tmp_path, noev))
+    assert all(MANDATORY_TRIGGERS[k] for k in CHECK_KEYS) and MANDATORY_TRIGGERS["final_decision"] == frozenset({"price", "loan", "deposit", "strategy", "composition", "regulation", "due_diligence", "tenancy"})
     cond = case()
     cond["payload"]["checks"][0] = check("scope_price", status="conditional", issues=())
     with pytest.raises(ValidationError):
@@ -225,19 +231,19 @@ def test_readiness_flow_and_blockers(db):
     with pytest.raises(sqlite3.IntegrityError):
         with db.transaction():
             db.conn.execute("DELETE FROM readiness_decisions")
-    # 승인 뒤 변경: 새 자금안(대출) → 금융·사업·자금 항목 재검토, 해제 필요
+    # 승인 뒤 변경: 새 자금안(대출) → 금융·사업·자금·최종 의사결정 항목 재검토(기본 조건), 해제 필요. 입력 조건을 비워도 기본 조건이 잡는다
     apply_plan_input(db, financing(on="2026-09-26"))
     e = evaluate(db, A[0], today=TODAY)
     vd = {c["key"]: c["verdict"] for c in e["checks"]}
-    assert vd["financing"] == "recheck" and vd["business_funding"] == "recheck" and vd["scope_price"] == "ok"
+    assert vd["financing"] == "recheck" and vd["business_funding"] == "recheck" and vd["final_decision"] == "recheck" and vd["scope_price"] == "ok" and vd["tax_legal"] == "ok"
     assert not e["ready"] and e["release_required"] and any("금융: 변경 감지" in b and "대출 변경" in b for b in e["blockers"])
     assert "주의: purchase_ready 인데" in readiness_text(e) and "검토 뒤 변경 1건: 대출(record)" in readiness_text(e)
-    # 참조한 목표 매수가를 수정하면 가격 변경으로 잡힌다
+    # 참조한 목표 매수가를 수정하면 가격 변경으로 잡힌다. 해당 없음 항목도 기본 조건에 걸리면 재검토다
     tp2 = target(price=1_400_000_000, decided="2026-09-26", supersedes_id=refs["target_price_id"])
     tp2["payload"]["revision_reason"] = "가상: 인근 거래 반영"
     apply_record_input(db, tp2)
     e = evaluate(db, A[0], today=TODAY)
-    assert {c["key"]: c["verdict"] for c in e["checks"]}["negotiation"] == "not_applicable" and {c["key"]: c["verdict"] for c in e["checks"]}["final_decision"] == "recheck"
+    assert {c["key"]: c["verdict"] for c in e["checks"]}["negotiation"] == "recheck" and {c["key"]: c["verdict"] for c in e["checks"]}["scope_price"] == "recheck"
     assert len(e["ref_changes"]) == 1 and e["ref_changes"][0]["reference"] == "target_price_id"
     # 철회: 사유 필수, 이력 보존, 관심 단계 복귀
     with pytest.raises(ValidationError):
@@ -262,6 +268,35 @@ def test_readiness_flow_and_blockers(db):
     assert db.conn.execute("SELECT COUNT(*) FROM readiness_decisions").fetchone()[0] == 3 and current_fin == new_fin
 
 
+def test_auto_withdrawal_on_readiness_and_projection(db, home):
+    """purchase_ready 가 유효하지 않으면 readiness·파생본 생성이 이력을 남기며 자동 철회한다. 게시된 파생본은 오래된 purchase_ready 를 담지 않는다."""
+    refs = _plans(db)
+    checks = [check(k) for k in CHECK_KEYS]
+    apply_case_input(db, case(checks=checks, refs=refs))
+    approve(db, A[0], TODAY)
+    assert enforce_release(db, A[0], today=TODAY) is None and enforce_all(db, today=TODAY) == []
+    apply_plan_input(db, regulation(on="2026-09-26"))  # 규제 변경
+    d = enforce_release(db, A[0], today=TODAY)
+    assert d is not None and d["decision"] == "withdraw" and d["reason"].startswith(AUTO_PREFIX) and "규제 변경" in d["reason"]
+    assert db.conn.execute("SELECT tracking_status FROM assets WHERE asset_id = ?", (A[0],)).fetchone()[0] == "detailed_review"
+    assert enforce_release(db, A[0], today=TODAY) is None
+    rows = [tuple(r) for r in db.conn.execute("SELECT decision, reason FROM readiness_decisions ORDER BY recorded_at, rowid")]
+    assert rows[0][0] == "approve" and rows[1][0] == "withdraw" and rows[1][1].startswith(AUTO_PREFIX)
+    # 파생본 생성 경로: 다시 승인한 뒤 변경을 넣고 project 를 돌리면 게시본의 관심 단계가 detailed_review 다
+    reg2 = db.conn.execute("SELECT record_id FROM records WHERE record_type = 'regulation_review' AND observed_at = '2026-09-26'").fetchone()[0]
+    cur = current_case(db, A[0])
+    apply_case_input(db, case(on="2026-09-26", supersedes_id=cur["record_id"], checks=checks, refs={**refs, "regulation_review_id": reg2}))
+    approve(db, A[0], TODAY)
+    apply_plan_input(db, financing(on="2026-09-26"))
+    r = build_projection(db, home)
+    assert r.outcome == "published" and any(f["code"] == "readiness_withdrawn" for f in r.findings)
+    seed = json.loads((home / r.output_dir / "assets.seed.json").read_text(encoding="utf-8"))
+    geo = json.loads((home / r.output_dir / "assets.geojson").read_text(encoding="utf-8"))
+    assert next(f["properties"]["tracking_status"] for f in geo["features"] if f["properties"]["asset_id"] == A[0]) == "detailed_review"
+    assert db.conn.execute("SELECT COUNT(*) FROM readiness_decisions WHERE reason LIKE ?", (AUTO_PREFIX + "%",)).fetchone()[0] == 2
+    assert r.source_dataset_version == db.status()["dataset_version"], "자동 철회로 오른 버전을 스냅샷했다"
+
+
 def test_composition_change_and_observation_trigger_recheck(db):
     from j5.db.parcels import apply_links, load_bundle
     from tests.test_j5_015a_judgment import BUNDLE, P1
@@ -275,6 +310,10 @@ def test_composition_change_and_observation_trigger_recheck(db):
     vd = {c["key"]: c["verdict"] for c in e["checks"]}
     assert vd["scope_price"] == "recheck" and vd["building_land"] == "recheck" and vd["financing"] == "ok" and any(s["trigger"] == "composition" for s in e["signals"])
     assert not e["ready"] and any("구성 토지 변경" in b for b in e["blockers"])
+    # 같은 초에 들어온 구성 변경도 검토 뒤로 본다: 검토 기록과 같은 시각의 updated_at 을 흉내
+    with db.transaction():
+        db.conn.execute("UPDATE asset_components SET updated_at = ? WHERE asset_id = ?", (current_case(db, A[0])["recorded_at"], A[0]))
+    assert any(s["trigger"] == "composition" for s in evaluate(db, A[0], today=TODAY)["signals"])
 
 
 def test_cli_case_readiness_approve_withdraw(db, tmp_path, capsys, monkeypatch):
@@ -296,13 +335,14 @@ def test_cli_case_readiness_approve_withdraw(db, tmp_path, capsys, monkeypatch):
     assert cli.main(["db", "readiness", "--asset", A[0], "--as-of", TODAY, "--json"]) == 0
     j = json.loads(capsys.readouterr().out)
     assert j["tracking_status"] == "purchase_ready" and j["ready"] and j["last_decision"]["decision"] == "approve"
-    # 승인 뒤 새 규제 검토 → 재검토·해제 필요 (종료 코드 1) → 철회
+    # 승인 뒤 새 규제 검토 → readiness 가 이력을 남기며 자동 철회 (종료 코드 1). 그 뒤 수동 철회는 할 것이 없다
     assert cli.main(["db", "plan-add", str(write(tmp_path, regulation(on="2026-09-26"), "reg.json"))]) == 0
     capsys.readouterr()
     assert cli.main(["db", "readiness", "--asset", A[0], "--as-of", TODAY]) == 1
-    assert "규제 변경" in capsys.readouterr().out
-    assert cli.main(["db", "readiness-withdraw", "--asset", A[0], "--on", TODAY, "--reason", "규제 검토 갱신"]) == 0
-    assert "purchase_ready → detailed_review" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "자동 철회: 물건" in out and AUTO_PREFIX in out and "규제 변경" in out and "관심 단계 detailed_review" in out
+    assert cli.main(["db", "readiness-withdraw", "--asset", A[0], "--on", TODAY, "--reason", "규제 검토 갱신"]) == 1
+    assert "철회할 것이 없다" in capsys.readouterr().err
     assert cli.main(["db", "readiness", "--asset", "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a99"]) == 1
     assert cli.main(["db", "readiness", "--asset", A[1]]) == 1
     assert "검토 기록 없음" in capsys.readouterr().out

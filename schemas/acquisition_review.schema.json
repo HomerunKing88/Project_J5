@@ -49,17 +49,17 @@
       "properties": {
         "key": { "$ref": "#/$defs/check_key" },
         "status": { "$ref": "#/$defs/check_status" },
-        "evidence_ids": { "description": "근거 문서 ID (source_documents)", "type": "array", "maxItems": 50, "uniqueItems": true, "items": { "$ref": "#/$defs/uuid" } },
+        "evidence_ids": { "description": "근거 문서 ID (source_documents). verified 면 1건 이상", "type": "array", "maxItems": 50, "uniqueItems": true, "items": { "$ref": "#/$defs/uuid" } },
         "reviewer_role": { "type": "string", "enum": ["self", "broker", "lawyer", "tax_advisor", "architect", "bank", "appraiser", "other"] },
         "checked_at": { "description": "검토일. verified 면 필수", "oneOf": [{ "$ref": "#/$defs/date" }, { "type": "null" }] },
         "valid_until": { "description": "유효기한. 정해지지 않았으면 null 로 두고 자동으로 채우지 않는다", "oneOf": [{ "$ref": "#/$defs/date" }, { "type": "null" }] },
-        "recheck_triggers": { "type": "array", "maxItems": 8, "uniqueItems": true, "items": { "$ref": "#/$defs/recheck_trigger" } },
+        "recheck_triggers": { "description": "항목의 기본 재검토 조건(도구가 정한 최소 매핑, j5/db/readiness.py MANDATORY_TRIGGERS)에 더하는 조건. 기본 조건은 뺄 수 없다", "type": "array", "maxItems": 8, "uniqueItems": true, "items": { "$ref": "#/$defs/recheck_trigger" } },
         "open_issues": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/text" } },
         "not_applicable_reason": { "oneOf": [{ "$ref": "#/$defs/text" }, { "type": "null" }] },
         "note": { "type": ["string", "null"], "maxLength": 2000 }
       },
       "allOf": [
-        { "if": { "properties": { "status": { "const": "verified" } } }, "then": { "properties": { "checked_at": { "$ref": "#/$defs/date" } } } },
+        { "if": { "properties": { "status": { "const": "verified" } } }, "then": { "properties": { "checked_at": { "$ref": "#/$defs/date" }, "evidence_ids": { "minItems": 1 } } } },
         { "if": { "properties": { "status": { "const": "not_applicable" } } }, "then": { "properties": { "not_applicable_reason": { "$ref": "#/$defs/text" } } } },
         { "if": { "properties": { "status": { "enum": ["conditional", "blocked"] } } }, "then": { "properties": { "open_issues": { "minItems": 1 } } } }
       ]

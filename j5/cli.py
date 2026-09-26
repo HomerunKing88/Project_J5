@@ -35,7 +35,7 @@ from j5.db.plans import apply_plan_input, load_plan_input, plan_add_text, plan_o
 from j5.db.ops import EXIT_BY_OK as OPS_EXIT, ops_check, ops_text
 from j5.db.archive import EXIT_BY_OUTCOME as ARCHIVE_EXIT, ArchiveError, create_archive, verify_archive_dir
 from j5.db.viewpkg import EXIT_BY_VERDICT as VIEW_EXIT, inspect_view, view_text
-from j5.db.readiness import apply_case_input, approve as readiness_approve, case_add_text, decision_text, evaluate as readiness_evaluate, load_case_input, readiness_text, withdraw as readiness_withdraw
+from j5.db.readiness import apply_case_input, approve as readiness_approve, case_add_text, decision_text, enforce_release, evaluate as readiness_evaluate, load_case_input, readiness_text, withdraw as readiness_withdraw
 from j5.calc.inputs import calc_text, load_calc_input, run_calc
 from j5.calc.plans import plans_csv
 from j5.parcels.convert import Clip, ConvertError, ConvertOptions, convert, convert_text, inspect_source, inspect_text, write_bundle
@@ -182,7 +182,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ca_ = dsub.add_parser("case-add", help="매입 준비 검토 기록을 넣는다 (R7, J5-018A: schemas/acquisition_review.schema.json, kind: acquisition_review, 불변). 체크리스트 8항목·범위·가격·참조 기록. 수정은 supersedes_id 로 새 기록")
     ca_.add_argument("file", type=Path, help="입력 JSON (kind: acquisition_review)")
     ca_.add_argument("--json", action="store_true")
-    rd = dsub.add_parser("readiness", help="매입 준비 진입조건 판정: 항목별 확인·유효기한·미확인·검토 뒤 변경(가격·대출·전략·규제·구성·실사)을 보고 준비 여부와 해제 필요를 표시한다 (상태를 바꾸지 않음)")
+    rd = dsub.add_parser("readiness", help="매입 준비 진입조건 판정: 항목별 확인·유효기한·미확인·검토 뒤 변경(가격·대출·전략·규제·구성·실사)을 보고 준비 여부를 표시한다. purchase_ready 가 유효하지 않으면 이력을 남기며 자동 철회한다")
     rd.add_argument("--asset", required=True, help="asset_id")
     rd.add_argument("--as-of", help="기준일 YYYY-MM-DD (유효기한 판정). 생략 시 오늘")
     rd.add_argument("--json", action="store_true")
@@ -410,9 +410,16 @@ def _db_main(args) -> int:
                 sys.stdout.write(json.dumps(r, ensure_ascii=False, indent=2) + "\n" if args.json else case_add_text(r))
                 return 0
             if args.db_command == "readiness":
+                released = enforce_release(db, args.asset, today=args.as_of)  # 유효하지 않은 purchase_ready 는 이력을 남기며 자동 철회한다
                 e = readiness_evaluate(db, args.asset, today=args.as_of)
-                sys.stdout.write(json.dumps(e, ensure_ascii=False, indent=2) + "\n" if args.json else readiness_text(e))
-                return 0 if e["ready"] and not e["release_required"] else 1
+                e["auto_withdrawn"] = released
+                if args.json:
+                    sys.stdout.write(json.dumps(e, ensure_ascii=False, indent=2) + "\n")
+                else:
+                    if released:
+                        sys.stdout.write(decision_text(released))
+                    sys.stdout.write(readiness_text(e))
+                return 0 if e["ready"] and not released else 1
             if args.db_command in ("readiness-approve", "readiness-withdraw"):
                 r = readiness_approve(db, args.asset, args.on, note=args.note) if args.db_command == "readiness-approve" else readiness_withdraw(db, args.asset, args.on, reason=args.reason)
                 sys.stdout.write(json.dumps(r, ensure_ascii=False, indent=2) + "\n" if args.json else decision_text(r))

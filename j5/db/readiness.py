@@ -3,10 +3,13 @@
 - `apply_case_input`: 매입 준비 검토 기록(`schemas/acquisition_review.schema.json`, kind: acquisition_review)을 불변 기록(records)으로 넣는다. 체크리스트 8항목 각 1회, verified 는 검토일 필수,
   not_applicable 은 사유 필수, conditional·blocked 는 미해결 사항 필수. 참조 기록(목표 매수가·투자판단·자금안·개발안·규제 검토)과 근거 문서는 이 물건의 현재 기록·정본 문서여야 한다.
   물건마다 현재(수정되지 않은) 검토 기록은 하나이며 새 검토는 이전 검토를 supersedes 로 가리킨다.
+- 항목마다 도구가 정한 최소 재검토 조건(MANDATORY_TRIGGERS)이 있고 입력의 recheck_triggers 는 거기에 더해진다(뺄 수 없다). verified 항목은 근거 문서 1건 이상이 있어야 확인 유효다.
 - `evaluate`: 현재 검토 기록의 진입조건을 판정한다. 항목마다 `ok / not_applicable / expired(유효기한 경과) / incomplete / conditional / blocked / recheck(변경 감지)`.
   중요 미확인(계약 총액·보증금 명세·필요자기자본·여유면적·규제 효력·참조 기록 수정)을 모으고, 검토 기록이 정본에 들어온 뒤의 변경(가격·대출·전략·규제·구성·실사)을 신호로 잡아
   그 변경을 재검토 조건으로 둔 항목을 `recheck` 로 바꾼다. ready 는 모든 항목이 ok 또는 사유 있는 not_applicable 이고 미확인·변경 신호가 없을 때다.
   이미 purchase_ready 인 물건에 준비가 아닌 상태나 승인 뒤 변경이 있으면 `release_required`(해제 필요)다.
+- `enforce_release` / `enforce_all`: 해제가 필요한 물건의 준비 상태를 자동으로 철회한다(사유 "[자동 해제] ..." 와 판정 스냅샷을 남기는 감사 가능한 철회). `j5 db readiness` 와 파생본 생성(`db project`)이
+  먼저 이를 실행하므로 게시되는 관심 단계는 유효하지 않은 purchase_ready 를 담지 않는다.
 - `approve` / `withdraw`: purchase_ready 전환은 사용자 승인이며 ready 가 아니면 거절한다. 철회는 사유와 함께 남긴다. 둘 다 assets.tracking_status 를 바꾸고 readiness_decisions 에
   불변 행(이전·새 상태, 판정 스냅샷)을 남겨 과거 승인 이력을 보존한다. 은행 사전 한도는 실행 확약이 아니며 이 도구는 계약·송금을 자동화하지 않는다.
 """
@@ -37,6 +40,22 @@ REF_TYPES = {"target_price_id": ("target_price", ("price",)), "investment_judgme
 # 검토 뒤 정본에 들어온 새 기록 종류 → 변경 종류
 NEW_RECORD_TRIGGERS = {"target_price": "price", "financing_plan": "loan", "development_plan": "strategy", "regulation_review": "regulation"}
 WITHDRAWN_STATUS = "detailed_review"
+AUTO_PREFIX = "[자동 해제] "
+# 항목별 최소 재검토 조건 (데이터 사전 §11 "가격·대출·임대보증금·전략·구성 토지·규제·중요 실사 결과가 바뀌면 영향을 받는 체크를 재검토"). 입력은 여기에 더할 수만 있다.
+MANDATORY_TRIGGERS: dict[str, frozenset[str]] = {
+    "scope_price": frozenset({"price", "composition", "deposit"}),
+    "financing": frozenset({"loan", "deposit", "price"}),
+    "tax_legal": frozenset({"regulation", "strategy", "composition"}),
+    "rights_tenancy": frozenset({"tenancy", "deposit", "due_diligence", "composition"}),
+    "building_land": frozenset({"regulation", "composition", "due_diligence", "strategy"}),
+    "business_funding": frozenset({"strategy", "loan", "price", "regulation"}),
+    "negotiation": frozenset({"price", "strategy", "deposit"}),
+    "final_decision": frozenset({"price", "loan", "deposit", "strategy", "composition", "regulation", "due_diligence", "tenancy"}),
+}
+
+
+def effective_triggers(check: dict) -> set[str]:
+    return set(MANDATORY_TRIGGERS[check["key"]]) | set(check["recheck_triggers"])
 
 
 def load_case_input(path: Path) -> dict:
@@ -190,7 +209,8 @@ def _signals_since(db: Db, asset_id: str, since: str, since_rowid: int) -> list[
             out.append({"kind": "record", "record_type": r["record_type"], "record_id": r["record_id"], "trigger": NEW_RECORD_TRIGGERS[r["record_type"]], "recorded_at": r["recorded_at"]})
         elif r["record_type"] == "field_observation" and r["cs"] == "change_observed":
             out.append({"kind": "observation", "record_type": r["record_type"], "record_id": r["record_id"], "trigger": "due_diligence", "recorded_at": r["recorded_at"]})
-    for c in db.conn.execute("SELECT component_id, updated_at FROM asset_components WHERE asset_id = ? AND updated_at > ? ORDER BY updated_at", (asset_id, since)):
+    # 구성(asset_components)은 기록과 rowid 를 비교할 수 없으므로 같은 초의 변경도 검토 뒤로 본다(안전한 쪽: 재검토를 더 요구할지언정 놓치지 않는다)
+    for c in db.conn.execute("SELECT component_id, updated_at FROM asset_components WHERE asset_id = ? AND updated_at >= ? ORDER BY updated_at", (asset_id, since)):
         out.append({"kind": "component", "component_id": c["component_id"], "trigger": "composition", "recorded_at": c["updated_at"]})
     return out
 
@@ -227,11 +247,14 @@ def evaluate(db: Db, asset_id: str, *, today: str | None = None) -> dict:
             signals.append({"kind": "reference", "reference": rc["reference"], "record_id": rc["record_id"], "superseded_by": rc["superseded_by"], "trigger": t, "recorded_at": rc["recorded_at"]})
     triggered = {s["trigger"] for s in signals}
     for c in p["checks"]:
-        hit = sorted(set(c["recheck_triggers"]) & triggered)
+        hit = sorted(effective_triggers(c) & triggered)
         if hit:
             verdict = "recheck"
         elif c["status"] == "verified":
-            verdict = "expired" if (c["valid_until"] is not None and c["valid_until"] < today) else "ok"
+            if not c["evidence_ids"]:
+                verdict = "incomplete"  # 근거 없는 확인은 확인이 아니다 (스키마도 막지만 옛 기록을 위해 여기서도 본다)
+            else:
+                verdict = "expired" if (c["valid_until"] is not None and c["valid_until"] < today) else "ok"
         elif c["status"] == "not_applicable":
             verdict = "not_applicable"
         elif c["status"] in ("conditional", "blocked"):
@@ -344,9 +367,28 @@ def withdraw(db: Db, asset_id: str, decided_on: str, *, reason: str, today: str 
             "record_id": rid, "reason": reason.strip()}
 
 
+def enforce_release(db: Db, asset_id: str, *, today: str | None = None) -> dict | None:
+    """purchase_ready 인데 준비 조건이 깨졌거나 승인 뒤 변경이 있으면 자동으로 철회한다(감사 가능: 사유·판정 스냅샷). 아니면 None."""
+    e = evaluate(db, asset_id, today=today)
+    if not e["release_required"]:
+        return None
+    reason = AUTO_PREFIX + ("; ".join(e["blockers"]) if e["blockers"] else "승인 뒤 변경 감지 (" + ", ".join(sorted({TRIGGER_LABEL[s["trigger"]] for s in e["signals"]})) + ")")
+    return withdraw(db, asset_id, today or e["today"], reason=reason[:2000], today=today)
+
+
+def enforce_all(db: Db, *, today: str | None = None) -> list[dict]:
+    """purchase_ready 인 모든 물건에 enforce_release 를 적용한다. 파생본 생성 전에 불러 유효하지 않은 준비 상태가 게시되지 않게 한다."""
+    out = []
+    for r in db.conn.execute("SELECT asset_id FROM assets WHERE tracking_status = 'purchase_ready' ORDER BY asset_id").fetchall():
+        d = enforce_release(db, r["asset_id"], today=today)
+        if d is not None:
+            out.append(d)
+    return out
+
+
 def decision_text(r: dict) -> str:
     if r["decision"] == "approve":
         return (f"승인: 물건 {r['asset_id']} 관심 단계 {r['previous_status']} → purchase_ready ({r['decided_on']}) · 결정 {r['decision_id']} · dataset_version {r['dataset_version']}\n"
                 "이 상태는 계약 협상 준비 상태다. 대출 확약·허가·계약 적법성 보증이 아니며 계약 직전·잔금 직전에 권리·규제·임대차를 다시 점검한다.\n")
-    return (f"철회: 물건 {r['asset_id']} 관심 단계 purchase_ready → {r['new_status']} ({r['decided_on']}) · 사유 {r['reason']} · 결정 {r['decision_id']} · dataset_version {r['dataset_version']}\n"
+    return (f"{'자동 ' if r['reason'].startswith(AUTO_PREFIX) else ''}철회: 물건 {r['asset_id']} 관심 단계 purchase_ready → {r['new_status']} ({r['decided_on']}) · 사유 {r['reason']} · 결정 {r['decision_id']} · dataset_version {r['dataset_version']}\n"
             "승인 이력은 readiness_decisions 에 그대로 남는다. 재검토 뒤 새 검토 기록과 승인으로 다시 전환한다.\n")
