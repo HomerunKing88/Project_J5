@@ -13,6 +13,7 @@ import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import quote
 
 from j5.db import schema as S
 from j5.db.validate import ValidationError, is_sha256, is_uuid, now_utc, parse_date, parse_datetime, record_errors, seed_asset_errors
@@ -114,6 +115,29 @@ class Db:
             for key in ("study_id", "data_mode", "dataset_version"):
                 if db.meta(key) is None:
                     raise DbError("meta_missing", f"meta.{key} 가 없다")
+        except BaseException:
+            conn.close()
+            raise
+        return db
+
+    @classmethod
+    def open_readonly(cls, path: Path) -> "Db":
+        """읽기 전용으로 연다(J5-017A 운영 점검·휴면 재개). 마이그레이션을 적용하지 않으므로 도구보다 오래된 정본도 그대로 읽고,
+        도구보다 새로운 정본은 거절한다(모르는 표·열을 해석하지 않는다). 쓰기 트랜잭션은 SQLite 가 거절한다."""
+        cls.check_sqlite_version()
+        path = Path(path)
+        if not path.is_file():
+            raise DbError("missing", f"정본 파일이 없다: {path}")
+        conn = sqlite3.connect(f"file:{quote(path.resolve().as_posix())}?mode=ro", uri=True, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        db = cls(conn, path)
+        try:
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if "schema_migrations" not in tables or "meta" not in tables:
+                raise DbError("not_j5", f"j5 정본이 아니다: {path}")
+            if db.schema_version() > S.DB_SCHEMA_VERSION:
+                raise DbError("tool_too_old", f"정본 스키마 {db.schema_version()} 이 도구가 아는 {S.DB_SCHEMA_VERSION} 보다 새롭다. 도구를 갱신한다")
         except BaseException:
             conn.close()
             raise

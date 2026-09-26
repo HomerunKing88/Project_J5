@@ -1,4 +1,4 @@
-"""j5 명령줄. inspect(패키지 검사), copy(독립 사본), db(정본 SQLite: init/status/load-seed/import/project/backup/restore/check-photos/survey-*),
+"""j5 명령줄. inspect(패키지 검사), copy(독립 사본), db(정본 SQLite: init/status/load-seed/import/project/backup/restore/check-photos/ops-check/survey-*),
 parcels(연속지적도 SHP → 필지 번들: inspect/convert), collect(공식 API 수집: rt-sample/rt-report).
 
 종료 코드: 0 ok·반영·중복 / 1 reject·실패 / 2 hold·보류 / 3 사용 오류.
@@ -32,6 +32,7 @@ from j5.db.judgment import apply_record_input, asof, asof_text, load_record_inpu
 from j5.db.photos import export_series, photo_series, photo_tags, series_text
 from j5.db.recheck import apply_recheck_input, load_recheck_input, recheck_add_text, recheck_status, recheck_text
 from j5.db.plans import apply_plan_input, load_plan_input, plan_add_text, plan_overview, plan_overview_text
+from j5.db.ops import EXIT_BY_OK as OPS_EXIT, ops_check, ops_text
 from j5.calc.inputs import calc_text, load_calc_input, run_calc
 from j5.calc.plans import plans_csv
 from j5.parcels.convert import Clip, ConvertError, ConvertOptions, convert, convert_text, inspect_source, inspect_text, write_bundle
@@ -91,6 +92,9 @@ def _build_parser() -> argparse.ArgumentParser:
     dr.add_argument("dest_home", type=Path, help="비어 있거나 없는 폴더. 복구 후 J5_DATA_HOME 으로 쓴다")
     dr.add_argument("--json", action="store_true")
     dk = dsub.add_parser("check-photos", help="사진 대사: 정본이 참조한 사진의 존재·해시와 미참조 파일을 보고한다 (삭제 없음)")
+    do = dsub.add_parser("ops-check", help="운영 점검·휴면 재개 (R6, J5-017A): 정본을 읽기 전용으로 열어(마이그레이션 없음) 도구·정본 스키마 버전, 무결성·외래키, 백업·파생본 상태, 사진·수집 원본 대사, 마지막 활동을 확인하고 할 일을 순서대로 낸다. 통과하면 ops/last_known_good.json 에 마지막 정상 버전을 기록한다")
+    do.add_argument("--data-home", type=Path, help="실데이터 홈. 생략 시 J5_DATA_HOME")
+    do.add_argument("--json", action="store_true")
     dk.add_argument("--data-home", type=Path)
     dk.add_argument("--json", action="store_true")
     sa = dsub.add_parser("survey-apply", help="조사 입력 파일(route_version / units / frame_version / session, schemas/survey_input.schema.json)을 정본에 반영한다")
@@ -272,7 +276,7 @@ def _db_path(args) -> Path | None:
 
 
 def _db_main(args) -> int:
-    if args.db_command in ("restore", "backup-verify"):
+    if args.db_command in ("restore", "backup-verify", "ops-check"):
         return _db_offline(args)
     path = _db_path(args)
     if path is None:
@@ -545,7 +549,14 @@ def _db_main(args) -> int:
 
 
 def _db_offline(args) -> int:
-    """정본 연결 없이 하는 명령: 백업 검증·복구."""
+    """정본 연결 없이 하는 명령: 백업 검증·복구·운영 점검(읽기 전용, 마이그레이션 없음)."""
+    if args.db_command == "ops-check":
+        home = _data_home(args)
+        if home is None:
+            return USAGE_ERROR
+        r = ops_check(home, db_path=args.db)
+        sys.stdout.write(json.dumps(r, ensure_ascii=True, sort_keys=True, indent=2) + "\n" if args.json else ops_text(r))
+        return OPS_EXIT[r["ok"]]
     if not args.backup_dir.is_dir():
         print(f"백업 폴더가 없음: {args.backup_dir}", file=sys.stderr)
         return USAGE_ERROR
