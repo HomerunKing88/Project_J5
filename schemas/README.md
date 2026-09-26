@@ -18,6 +18,10 @@
 
 - `backup_manifest.schema.json`: 정본 백업 폴더의 `backup_manifest.json`. `dataset_version`·`db_schema_version`·`created_at`·테이블별 행 수와 파일 목록(`db/j5.sqlite3`·`photos/<sha 앞 2자>/<sha>.<ext>`)의 바이트·해시(데이터 사전 §12). 복구 후 이 값과 대조한다.
 
+## 파일 (archive_schema 1.0.0, R6 J5-017B)
+
+- `archive_manifest.schema.json`: 연말 개방형 포맷 보존본 폴더의 `archive_manifest.json`(`j5 db archive`). 정본의 모든 사용자 표를 `tables/<표>.jsonl`(값 보존)·`tables/<표>.csv`(편의 사본)로, 위치점·필지를 GeoJSON 으로, 표 정의 `schema.sql`·JSON Schema 사본 `schemas/`·`README.txt` 와 함께 담고 파일 목록·해시, 표별 행 수·열 정의, 도구 버전을 기록한다(데이터 사전 §12). 백업이 아니며 `archive-verify` 가 SQLite 없이 검증한다.
+
 ## 파일 (survey_input 1.0, R2 J5-013A)
 
 - `survey_input.schema.json`: 조사 경로·점포·표본틀·세션 수동 입력 파일(`j5 db survey-apply`). `kind` 로 구분한 네 종류(route_version / units / frame_version / session). 점포 관측 상태는 `occupied / vacant / closed_today / lease_ad_only / not_visited / unclear` 이며 앞의 둘만 확인(K)이다(데이터 사전 §5).

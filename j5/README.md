@@ -83,6 +83,18 @@ python -m j5 db [--db 경로] ops-check [--data-home 경로] [--json]
 - 휴면 뒤 재개 순서: `ops-check` → (백업이 최신·접근 가능인지 확인) → 마이그레이션이 대기 중이면 `j5 db status` 로 열어 적용 → `backup` → `project` → `ops-check` 통과 확인. 정본이 도구보다 새로우면(다른 PC 의 새 도구로 만든 정본) 이 도구로 열지 않고 도구를 갱신한다.
 - 새 PC 이전: 백업 폴더(외장 위치)를 새 PC 로 옮겨 `restore <백업 폴더> <빈 폴더>` → `ops-check`(복구본에는 백업·파생본이 없으므로 "백업 필요" 가 나온다) → `backup` → `project` → `ops-check` 통과. 옛 PC 의 정본은 지우지 않고 보관한다. 폰 이전: 폰의 IndexedDB 기록은 사이트 origin(도메인)에 묶여 있으므로 도메인·기기를 바꾸기 전에 내보내기(`.j5field.zip`)로 PC 에 반영하고, 새 폰에서는 `project-copy` 로 낸 파생본의 `assets.seed.json` 을 불러온다(데이터 사전 §12).
 
+## 연말 개방형 포맷 보존본 (R6, J5-017B)
+
+```text
+python -m j5 db [--db 경로] archive [--data-home 경로] [--dest 상위폴더] [--photos] [--json]
+python -m j5 db archive-verify <보존본 폴더> [--json]
+```
+
+- `archive`: 정본의 읽기 스냅샷 안에서 모든 사용자 표를 `tables/<표>.jsonl`(행마다 JSON 객체, NULL 은 null, BLOB 은 `{"$hex": ...}`: 값을 그대로 보존)과 `tables/<표>.csv`(스프레드시트용, NULL 은 빈 칸이라 빈 문자열과 구분 못 함)로 쓴다. 위치점이 있는 물건은 `assets.geojson`, 필지가 있으면 `parcels.geojson`(폰 번들 형식). 표·인덱스·트리거 정의 `schema.sql`, 저장소 JSON Schema 사본 `schemas/`, 설명 `README.txt`, 목록·해시·버전 `archive_manifest.json`(`schemas/archive_manifest.schema.json`). `--photos` 면 첨부가 참조한 사진을 해시 검증하며 복사한다(하나라도 없으면 실패). 임시 폴더에 전량 쓰고 디스크에서 다시 읽어 검증한 뒤에만 `J5_DATA_HOME/exports/private/archives/<YYYYMMDD-HHMMSS>-ds<버전>-<run8>/` 로 게시한다(`--dest` 로 외장 위치). 실패하면 `failed-<run8>/` 에 남긴다. `logs/archive.log` 기록. 정본·백업·파생본은 바꾸지 않는다.
+- 보존본은 SQLite·j5 도구 없이 읽는 스냅샷이다. 백업이 아니며 `restore` 의 입력이 아니다(복구는 백업 폴더로). 실데이터·사진이 든 보존본은 공개 저장소·배포에 올리지 않는다.
+- `archive-verify`: 파일 해시·누락·여분, 표별 jsonl·csv 행 수와 열, 사진 연결(포함 시), GeoJSON 버전·점 수를 다시 확인한다. 정본 연결이 필요 없다.
+- 운영 주기(릴리스 계획 §12): 연간 보존본은 `backup` 과 별개로 만든다. 순서는 `ops-check` → `backup` → `archive --photos --dest <외장>` → `archive-verify`.
+
 ## 조사 경로·점포·표본틀·세션 (R2, J5-013A)
 
 ```text

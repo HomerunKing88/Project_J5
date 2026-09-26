@@ -1,4 +1,4 @@
-"""j5 명령줄. inspect(패키지 검사), copy(독립 사본), db(정본 SQLite: init/status/load-seed/import/project/backup/restore/check-photos/ops-check/survey-*),
+"""j5 명령줄. inspect(패키지 검사), copy(독립 사본), db(정본 SQLite: init/status/load-seed/import/project/backup/restore/check-photos/ops-check/archive/survey-*),
 parcels(연속지적도 SHP → 필지 번들: inspect/convert), collect(공식 API 수집: rt-sample/rt-report).
 
 종료 코드: 0 ok·반영·중복 / 1 reject·실패 / 2 hold·보류 / 3 사용 오류.
@@ -33,6 +33,7 @@ from j5.db.photos import export_series, photo_series, photo_tags, series_text
 from j5.db.recheck import apply_recheck_input, load_recheck_input, recheck_add_text, recheck_status, recheck_text
 from j5.db.plans import apply_plan_input, load_plan_input, plan_add_text, plan_overview, plan_overview_text
 from j5.db.ops import EXIT_BY_OK as OPS_EXIT, ops_check, ops_text
+from j5.db.archive import EXIT_BY_OUTCOME as ARCHIVE_EXIT, ArchiveError, create_archive, verify_archive_dir
 from j5.calc.inputs import calc_text, load_calc_input, run_calc
 from j5.calc.plans import plans_csv
 from j5.parcels.convert import Clip, ConvertError, ConvertOptions, convert, convert_text, inspect_source, inspect_text, write_bundle
@@ -95,6 +96,14 @@ def _build_parser() -> argparse.ArgumentParser:
     do = dsub.add_parser("ops-check", help="운영 점검·휴면 재개 (R6, J5-017A): 정본을 읽기 전용으로 열어(마이그레이션 없음) 도구·정본 스키마 버전, 무결성·외래키, 백업·파생본 상태, 사진·수집 원본 대사, 마지막 활동을 확인하고 할 일을 순서대로 낸다. 통과하면 ops/last_known_good.json 에 마지막 정상 버전을 기록한다")
     do.add_argument("--data-home", type=Path, help="실데이터 홈. 생략 시 J5_DATA_HOME")
     do.add_argument("--json", action="store_true")
+    da = dsub.add_parser("archive", help="연말 개방형 포맷 보존본 (R6, J5-017B): 모든 표를 tables/<표>.jsonl·.csv 로, 위치점·필지를 GeoJSON 으로, 표 정의 schema.sql·JSON Schema 사본·README·manifest 와 함께 쓰고 다시 읽어 검증한다 (exports/private/archives 또는 --dest). 백업이 아니다")
+    da.add_argument("--data-home", type=Path, help="실데이터 홈. 생략 시 J5_DATA_HOME")
+    da.add_argument("--dest", type=Path, help="보존본을 둘 상위 폴더 (예: 외장 드라이브). 생략 시 J5_DATA_HOME/exports/private/archives")
+    da.add_argument("--photos", action="store_true", help="첨부가 참조한 사진도 해시 검증하며 복사한다")
+    da.add_argument("--json", action="store_true")
+    dav = dsub.add_parser("archive-verify", help="보존본 폴더를 전부 다시 읽어 검증한다 (정본 불필요: 파일 해시·표별 행 수·열·사진 연결)")
+    dav.add_argument("archive_dir", type=Path)
+    dav.add_argument("--json", action="store_true")
     dk.add_argument("--data-home", type=Path)
     dk.add_argument("--json", action="store_true")
     sa = dsub.add_parser("survey-apply", help="조사 입력 파일(route_version / units / frame_version / session, schemas/survey_input.schema.json)을 정본에 반영한다")
@@ -276,7 +285,7 @@ def _db_path(args) -> Path | None:
 
 
 def _db_main(args) -> int:
-    if args.db_command in ("restore", "backup-verify", "ops-check"):
+    if args.db_command in ("restore", "backup-verify", "ops-check", "archive-verify"):
         return _db_offline(args)
     path = _db_path(args)
     if path is None:
@@ -367,6 +376,13 @@ def _db_main(args) -> int:
                 r = create_backup(db, home, dest_root=args.dest)
                 sys.stdout.write(r.to_json() if args.json else r.to_text())
                 return BACKUP_EXIT[r.outcome]
+            if args.db_command == "archive":
+                home = _data_home(args)
+                if home is None:
+                    return USAGE_ERROR
+                r = create_archive(db, home, dest_root=args.dest, photos=args.photos)
+                sys.stdout.write(r.to_json() if args.json else r.to_text())
+                return ARCHIVE_EXIT[r.outcome]
             if args.db_command == "check-photos":
                 home = _data_home(args)
                 if home is None:
@@ -557,6 +573,22 @@ def _db_offline(args) -> int:
         r = ops_check(home, db_path=args.db)
         sys.stdout.write(json.dumps(r, ensure_ascii=True, sort_keys=True, indent=2) + "\n" if args.json else ops_text(r))
         return OPS_EXIT[r["ok"]]
+    if args.db_command == "archive-verify":
+        if not args.archive_dir.is_dir():
+            print(f"보존본 폴더가 없음: {args.archive_dir}", file=sys.stderr)
+            return USAGE_ERROR
+        try:
+            v = verify_archive_dir(args.archive_dir)
+        except (ArchiveError, OSError, ValueError) as e:
+            print(f"보존본 검증 실패 [{getattr(e, 'code', type(e).__name__)}]: {getattr(e, 'message', e)}", file=sys.stderr)
+            return 1
+        m = v["manifest"]
+        if args.json:
+            print(json.dumps({"ok": True, "manifest_sha256": v["manifest_sha256"], "dataset_version": m["dataset_version"], "db_schema_version": m["db_schema_version"],
+                              "generated_at": m["generated_at"], "tables": v["tables"], "rows": v["rows"], "photos": v["photos"]}, ensure_ascii=True, sort_keys=True, indent=2))
+        else:
+            print(f"보존본 검증 통과: {args.archive_dir} · 정본 v{m['dataset_version']} (db_schema {m['db_schema_version']}, {m['generated_at']}) · 표 {v['tables']}개 · 행 {v['rows']}개 · 사진 {v['photos']}장")
+        return 0
     if not args.backup_dir.is_dir():
         print(f"백업 폴더가 없음: {args.backup_dir}", file=sys.stderr)
         return USAGE_ERROR
