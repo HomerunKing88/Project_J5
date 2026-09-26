@@ -353,6 +353,10 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     assert.doesNotMatch(await cdp.eval("document.getElementById('map-note').textContent"), /필지/);
     await cdp.eval("document.getElementById('load-synthetic-parcels').click(); 'ok'");
     await cdp.waitFor("document.querySelectorAll('#map-svg path.parcel').length === 6");
+    // 이전 준비(J5-017D): 내보내지 않은 기록이 있으면 '내보내기 필요', origin·지속 저장 표시
+    assert.match(await cdp.eval("document.getElementById('migrate-note').textContent"), /내보내기 필요: 1건/);
+    assert.equal(await cdp.eval("document.getElementById('migrate-origin').textContent"), await cdp.eval("location.origin"));
+    assert.match(await cdp.eval("document.getElementById('migrate-storage').textContent"), /지속 저장/);
     // 내보내기: 묶음 준비 → 파일 저장(다운로드) → j5 inspect ok → 저장 확인 → 내보냄 표시
     const dl = join(tmp, "dl"); mkdirSync(dl);
     await cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: dl, eventsEnabled: true });
@@ -378,6 +382,7 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.waitFor("document.getElementById('export-note').textContent.includes('모두 확인됨')");
     assert.ok((await cdp.eval("document.getElementById('record-list').textContent")).includes("내보냄"));
     assert.match(await cdp.eval("document.getElementById('export-history').textContent"), /저장 확인/);
+    assert.match(await cdp.eval("document.getElementById('migrate-note').textContent"), /이전 준비 완료: 기록 1건/, "모두 내보내면 이전 준비 완료");
     // 다시 내보내기(내보낸 기록 포함): observations.jsonl 바이트가 같다
     await cdp.eval("document.getElementById('include-exported').click(); document.getElementById('export-prepare').click(); 'ok'");
     await cdp.waitFor("!document.getElementById('export-save').disabled");
