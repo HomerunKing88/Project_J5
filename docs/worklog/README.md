@@ -31,8 +31,9 @@
 ## 운영 순서 요약
 
 - 임장 뒤: 폰 내보내기 → PC `j5 db import` → `backup` → `project` → 폰에 파생본 시드.
-- 정기: 월별 `collect rt-fetch` + `db rt-load` → `rt-candidates`/`rt-link`; 분기 관찰목록·표본 점검; 반기 `db ops-check`; 연말 `db archive --photos --dest <외장>`.
+- 정기: 월 1회 `collect rt-recheck --recent 6` → `db rt-load` → `db rt-changes`(취소·정정 점검) → `rt-candidates`/`rt-link`; 새 기간 확장은 `collect rt-fetch`(이미 받은 달은 건너뜀); 분기 `rt-recheck --failed` 와 관찰목록·표본 점검; 반기 `db ops-check`; 연 1회 전 기간 `rt-fetch --refresh` 와 연말 `db archive --photos --dest <외장>`.
 - 매입 검토: `plan-add`/`record-add` → `case-add` → `readiness` → `readiness-approve` → 계약·잔금 직전 `case-recheck` → `case-export`.
-- 새 기기·휴면 재개: `db restore` → `ops-check` → `backup` → `project`; 폰은 이전 준비 절을 보고 내보낸 뒤 옮긴다.
+- 휴면 재개(기존 정본이 그대로 있을 때): `db ops-check` → 백업이 최신·접근 가능인지 확인 → 마이그레이션이 대기 중이면 `db status` 로 열어 적용 → `backup` → `project` → `ops-check` 통과. `restore` 는 쓰지 않는다(빈 폴더에만 복구한다).
+- 새 PC 이전(정본이 없는 폴더): 백업 폴더 → `db restore <백업> <빈 폴더>` → `ops-check`("백업 필요" 표시) → `backup` → `project` → `ops-check` 통과. 폰은 이전 준비 절을 보고 내보낸 뒤 옮긴다.
 
 각 명령의 세부는 `j5/README.md`, 폰 앱은 `web/README.md`.
