@@ -193,6 +193,28 @@ def test_new_pc_restore_then_resume_backups(db, home, tmp_path):
     assert read_last_good(home)[0]["checked_at"] == "2026-01-01T00:00:00Z", "옛 PC 의 파일은 그대로"
 
 
+def test_empty_store_without_assets_can_pass(home):
+    """물건이 없는 정본: `project` 는 빈 파생본을 거절하므로 파생본 없음은 조치 항목이 아니라 표시다 (첫 실사용 2026-09-26). 물건을 넣으면 다시 조치 항목이 된다."""
+    d = Db.create(home / "db" / "j5.sqlite3", study_id=STUDY, data_mode="synthetic")
+    try:
+        r = ops_check(home)
+        assert [a["code"] for a in r["actions"]] == ["backup_stale"], "파생본 없음은 조치 항목이 아니다"
+        assert r["projection"]["not_applicable"] is True and "대상 없음" in r["projection"]["state"]
+        assert any("파생본 대상 없음" in w for w in r["warnings"])
+        assert create_backup(d, home).outcome == "completed"
+        pr = build_projection(d, home)
+        assert pr.outcome == "failed" and any(f["code"] == "no_assets" for f in pr.findings), "빈 파생본은 만들지 않는다"
+        r = ops_check(home)
+        assert r["ok"] is True and r["last_good_updated"] is True and r["last_good"]["projection"] == {"dir": None, "published_at": None, "dataset_version": None}
+        assert "대상 없음" in ops_text(r) and "점검 통과" in ops_text(r)
+        # 물건을 넣으면 파생본이 필요해진다
+        d.load_seed(json.loads(SEED_PATH.read_text(encoding="utf-8")))
+        r = ops_check(home)
+        assert [a["code"] for a in r["actions"]] == ["backup_stale", "projection_stale"] and r["projection"].get("not_applicable") is None
+    finally:
+        d.close()
+
+
 def test_overdue_by_last_good_or_backup(db, home):
     create_backup(db, home)
     build_projection(db, home)
