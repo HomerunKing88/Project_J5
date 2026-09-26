@@ -54,9 +54,9 @@ def case_bundle(db: Db, asset_id: str, *, today: str | None = None) -> dict:
     # 검토가 참조한 기록을 우선하고, 없으면 현재 기록
     target = _by_id(db, refs.get("target_price_id")) or _latest(db, asset_id, "target_price")
     judgment = _by_id(db, refs.get("investment_judgment_id")) or _latest(db, asset_id, "investment_judgment")
-    financing = _by_id(db, refs.get("financing_plan_id"))
-    development = _by_id(db, refs.get("development_plan_id"))
-    regulation = _by_id(db, refs.get("regulation_review_id"))
+    financing = _by_id(db, refs.get("financing_plan_id")) or _latest(db, asset_id, "financing_plan")
+    development = _by_id(db, refs.get("development_plan_id")) or _latest(db, asset_id, "development_plan")
+    regulation = _by_id(db, refs.get("regulation_review_id")) or _latest(db, asset_id, "regulation_review")
     decisions = [dict(r) for r in db.conn.execute("SELECT decision_id, decision, decided_on, previous_status, new_status, reason, recorded_at FROM readiness_decisions WHERE asset_id = ? ORDER BY recorded_at, rowid", (asset_id,))]
     return {"asset": {k: asset[k] for k in ("asset_id", "label", "tracking_status", "address", "lon", "lat")}, "case": case, "evaluation": e,
             "target_price": target, "investment_judgment": judgment, "financing_plan": financing, "development_plan": development, "regulation_review": regulation,
@@ -118,24 +118,29 @@ def _readme(n: int, generated_at: str, dataset_version: int) -> str:
 
 
 def export_cases(db: Db, data_home: Path, *, asset_ids: list[str] | None = None, out_root: Path | None = None, today: str | None = None) -> dict:
+    """모든 읽기를 한 스냅샷(읽기 트랜잭션) 안에서 해 정본 버전과 묶음이 같은 상태를 본다. 파일은 스냅샷을 닫은 뒤 쓴다."""
     data_home = Path(data_home)
     generated_at = db.now()
-    version = int(db.meta("dataset_version") or 0)
-    if asset_ids:
-        ids = list(asset_ids)
-    else:
-        ids = [r[0] for r in db.conn.execute("SELECT DISTINCT subject_id FROM records r WHERE record_type = 'acquisition_review'"
-                                             " AND NOT EXISTS (SELECT 1 FROM records n WHERE n.supersedes_id = r.record_id) ORDER BY subject_id")]
-    if not ids:
-        raise ValidationError(["내보낼 매입 검토 사건이 없다 (현재 검토 기록이 있는 물건이 없음). --asset 으로 지정하거나 `j5 db case-add` 로 검토를 남긴다"])
-    bundles = [case_bundle(db, a, today=today) for a in ids]
+    with db.snapshot():
+        version = int(db.meta("dataset_version") or 0)
+        study_id, data_mode = db.meta("study_id"), db.data_mode
+        if asset_ids:
+            ids = list(asset_ids)
+        else:
+            ids = [r[0] for r in db.conn.execute("SELECT DISTINCT subject_id FROM records r WHERE record_type = 'acquisition_review'"
+                                                 " AND NOT EXISTS (SELECT 1 FROM records n WHERE n.supersedes_id = r.record_id) ORDER BY subject_id")]
+        if not ids:
+            raise ValidationError(["내보낼 매입 검토 사건이 없다 (현재 검토 기록이 있는 물건이 없음). --asset 으로 지정하거나 `j5 db case-add` 로 검토를 남긴다"])
+        bundles = [case_bundle(db, a, today=today) for a in ids]
+        if int(db.meta("dataset_version") or 0) != version:
+            raise ValidationError(["내보내는 중에 정본 dataset_version 이 바뀌었다. 다시 실행한다"])
     run_id = str(uuid.uuid4())
     root = Path(out_root) if out_root is not None else data_home / EXPORT_DIR
     stamp = generated_at.replace("-", "").replace(":", "").replace("T", "-").rstrip("Z")
     dest = root / f"{stamp}-{run_id[:8]}"
     dest.mkdir(parents=True, exist_ok=False)
     (dest / "cases.json").write_text(json.dumps({"format": "j5cases", "cases_schema_version": "1.0.0", "generated_at": generated_at, "run_id": run_id, "dataset_version": version,
-                                                 "study_id": db.meta("study_id"), "data_mode": db.data_mode, "today": bundles[0]["evaluation"]["today"], "count": len(bundles), "cases": bundles},
+                                                 "study_id": study_id, "data_mode": data_mode, "today": bundles[0]["evaluation"]["today"], "count": len(bundles), "cases": bundles},
                                                 ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (dest / "cases.csv").write_text(cases_csv(bundles, generated_at, version), encoding="utf-8")
     (dest / "README.txt").write_text(_readme(len(bundles), generated_at, version), encoding="utf-8")

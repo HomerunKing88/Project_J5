@@ -150,6 +150,14 @@ def test_stage_flow_withdraws_on_issues_and_blocks_readiness(db):
     assert any(st["outcome"] == "issues_found" for st in snap["stage_rechecks"])
     with pytest.raises(ValidationError):
         approve(db, A[0], TODAY)
+    # 같은 검토 기록에 '이상 없음' 재확인을 다시 넣어 문제를 덮을 수 없다 (뒤늦은 날짜든 앞선 날짜든)
+    with pytest.raises(ValidationError) as ex:
+        apply_stage_recheck(db, recheck(stage="pre_settlement", on="2026-09-27"))
+    assert "덮지 않는다" in str(ex.value)
+    with pytest.raises(ValidationError):
+        apply_stage_recheck(db, recheck(stage="pre_contract", on="2026-09-23"))
+    e = evaluate(db, A[0], today=TODAY)
+    assert not e["ready"] and any("잔금 직전 재확인에서 문제 확인" in b for b in e["blockers"])
     with pytest.raises(sqlite3.IntegrityError):
         with db.transaction():
             db.conn.execute("UPDATE readiness_rechecks SET outcome = 'cleared'")
@@ -199,6 +207,20 @@ def test_case_export_csv_json_readme_no_overwrite(db, home, tmp_path):
     assert rows2[1]["asset_id"] == A[1] and rows2[1]["case_record_id"] == "" and rows2[1]["ready"] == "False"
     with pytest.raises(ValidationError):
         export_cases(db, home, asset_ids=["7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a99"])
+    # 검토가 참조를 비워 두면 현재 규제·개발안·자금안 기록으로 채운다 (문서와 같게)
+    cur = current_case(db, A[0])
+    apply_case_input(db, case(on=TODAY, supersedes_id=cur["record_id"], checks=[check(k) for k in CHECK_KEYS], refs={"target_price_id": refs["target_price_id"]}))
+    b2 = case_bundle(db, A[0], today=TODAY)
+    assert b2["financing_plan"]["record_id"] == refs["financing_plan_id"] and b2["development_plan"]["record_id"] == refs["development_plan_id"] and b2["regulation_review"]["record_id"] == refs["regulation_review_id"]
+    r3 = export_cases(db, home, asset_ids=[A[0]], out_root=tmp_path / "ext2", today=TODAY)
+    with open(Path(r3["dest"]) / "cases.csv", encoding="utf-8", newline="") as f:
+        row3 = list(csv.DictReader(f))[0]
+    assert row3["required_equity_krw"] == "1700000000" and row3["far_headroom_m2"] == "360.0" and row3["regulation_status"] == "효력 확인"
+    # 모든 읽기는 한 스냅샷 안에서 한다: 쓰기 트랜잭션 안에서는 열지 않는다
+    from j5.db.store import DbError
+    with pytest.raises(DbError):
+        with db.transaction():
+            export_cases(db, home, asset_ids=[A[0]], out_root=tmp_path / "ext3", today=TODAY)
 
 
 def test_cli_case_recheck_and_export(db, tmp_path, capsys, monkeypatch):

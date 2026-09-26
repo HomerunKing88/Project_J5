@@ -278,9 +278,9 @@ def evaluate(db: Db, asset_id: str, *, today: str | None = None) -> dict:
     for u in unknown:
         out["blockers"].append(f"중요 미확인: {u}")
     out["stage_rechecks"] = stage_rechecks(db, asset_id, case["record_id"])
-    for st in out["stage_rechecks"]:
-        if st["outcome"] == "issues_found":
-            out["blockers"].append(f"{STAGE_LABEL[st['stage']]} 재확인에서 문제 확인 ({st['reviewed_on']}): " + "; ".join(st["issues"][:3]))
+    # 문제 확인 재확인은 같은 검토 기록에 뒤에 '이상 없음' 이 들어와도 지워지지 않는다. 새 검토 기록으로 변경을 반영해야 풀린다
+    for st in issue_rechecks(db, asset_id, case["record_id"]):
+        out["blockers"].append(f"{STAGE_LABEL[st['stage']]} 재확인에서 문제 확인 ({st['reviewed_on']}): " + "; ".join(st["issues"][:3]))
     out["ready"] = not out["blockers"]
     if asset["tracking_status"] == "purchase_ready":
         # 승인과 같은 초에 들어온 변경도 승인 뒤로 본다(안전한 쪽). 승인 전에 들어온 변경은 승인 자체를 막았을 것이다
@@ -419,6 +419,18 @@ def stage_rechecks(db: Db, asset_id: str, record_id: str) -> list[dict]:
     return out
 
 
+def issue_rechecks(db: Db, asset_id: str, record_id: str) -> list[dict]:
+    """현재 검토 기록에 남은 문제 확인 재확인 전부 (재확인일·반영 순)."""
+    if not db._has_table("readiness_rechecks"):
+        return []
+    out = []
+    for r in db.conn.execute("SELECT recheck_id, stage, reviewed_on, issues_json, items_json, recorded_at FROM readiness_rechecks WHERE asset_id = ? AND record_id = ? AND outcome = 'issues_found'"
+                             " ORDER BY reviewed_on, recorded_at, rowid", (asset_id, record_id)):
+        issues = json.loads(r["issues_json"]) or [f"{CHECK_LABEL[it['key']]} {RESULT_LABEL[it['result']]}" for it in json.loads(r["items_json"]) if it["result"] != "confirmed"]
+        out.append({"recheck_id": r["recheck_id"], "stage": r["stage"], "reviewed_on": r["reviewed_on"], "issues": issues, "recorded_at": r["recorded_at"]})
+    return out
+
+
 def load_stage_recheck_input(path: Path) -> dict:
     try:
         doc = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -452,6 +464,9 @@ def apply_stage_recheck(db: Db, doc: dict) -> dict:
             raise ValidationError(["매입 준비 검토 기록이 없다. 먼저 `j5 db case-add` 로 검토를 남긴다"])
         if doc["reviewed_on"] < case["observed_at"]:
             raise ValidationError([f"재확인일({doc['reviewed_on']})이 검토일({case['observed_at']})보다 앞선다"])
+        open_issues = issue_rechecks(db, doc["asset_id"], case["record_id"])
+        if open_issues and doc["outcome"] == "cleared":
+            raise ValidationError([f"이 검토 기록에는 문제 확인 재확인이 {len(open_issues)}건 있다. '이상 없음' 으로 덮지 않는다. 변경을 반영한 새 검토 기록(`case-add` + supersedes_id)을 넣은 뒤 다시 재확인한다"])
         for it in doc["items"]:
             for did in it["evidence_ids"]:
                 if db.conn.execute("SELECT 1 FROM source_documents WHERE document_id = ?", (did,)).fetchone() is None:
