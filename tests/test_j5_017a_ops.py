@@ -19,7 +19,7 @@ from j5.db import schema as S
 from j5.db.backup import create_backup, restore_backup
 from j5.db.importer import import_package
 from j5.db.ops import CHECK_INTERVAL_DAYS, LAST_GOOD, OPS_DIR, OPS_LOG, ops_check, ops_text, read_last_good
-from j5.db.projection import build_projection
+from j5.db.projection import LATEST_POINTER, PROJECTIONS_DIR, build_projection
 from j5.db.store import Db, DbError
 from tests.conftest import PACKAGES
 
@@ -207,6 +207,13 @@ def test_empty_store_without_assets_can_pass(home):
         r = ops_check(home)
         assert r["ok"] is True and r["last_good_updated"] is True and r["last_good"]["projection"] == {"dir": None, "published_at": None, "dataset_version": None}
         assert "대상 없음" in ops_text(r) and "점검 통과" in ops_text(r)
+        # 물건이 없어도 포인터가 남아 있으면(다른 정본의 파생본·손상) 조치 항목이다 (리뷰 반영)
+        pdir = home / PROJECTIONS_DIR
+        pdir.mkdir(parents=True, exist_ok=True)
+        (pdir / LATEST_POINTER).write_text(json.dumps({"dir": "exports/private/projections/ds9-deadbeef", "zip": "x.j5view.zip", "zip_sha256": "0" * 64, "source_dataset_version": 9}), encoding="utf-8")
+        r = ops_check(home)
+        assert [a["code"] for a in r["actions"]] == ["projection_stale"] and r["projection"].get("not_applicable") is None and "zip_missing" in r["projection"]["state"]
+        (pdir / LATEST_POINTER).unlink()
         # 물건을 넣으면 파생본이 필요해진다
         d.load_seed(json.loads(SEED_PATH.read_text(encoding="utf-8")))
         r = ops_check(home)
