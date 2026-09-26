@@ -1,7 +1,7 @@
 // 최소 앱 캐시 (ADR-01: 서비스 워커에는 앱 실행 파일만 캐시한다). 사진·관측·시드 파일은 캐시하지 않는다.
 // 버전을 올리면 이전 캐시를 지운다. 네트워크 없이도 아래 파일로 앱이 뜬다.
 const CACHE_PREFIX = "j5-app-";
-const CACHE = CACHE_PREFIX + "v0.1.0";
+const CACHE = CACHE_PREFIX + "v0.1.1"; // 캐시한 앱 파일이 바뀌면 올린다 (J5-019: 화면 정리)
 const APP_FILES = [
   "./",
   "./index.html",

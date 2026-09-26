@@ -31,7 +31,7 @@
   <ol>
     <li>조사 설정을 저장합니다.</li>
     <li>물건 목록을 불러옵니다. 처음이면 연습용 목록으로 해 보세요.</li>
-    <li>지도의 점이나 목록에서 물건을 눌러 기록하고, 임장을 마치면 내보냅니다.</li>
+    <li>지도의 점이나 그 아래 목록에서 물건을 눌러 기록하고, 임장을 마치면 내보냅니다.</li>
   </ol>
 </section>
 
@@ -67,12 +67,11 @@
     <label class="row"><span class="field-name">PC 에서 만든 목록 파일</span> <input id="seed-file" type="file" accept="application/json,.json"></label>
   </div>
   <p id="seed-note" class="muted"></p>
-  <ul id="asset-list" class="plain"></ul>
 </section>
 
 <section id="sec-map">
   <div class="sec-head"><span class="step">3단계</span><h2>지도에서 고르기</h2></div>
-  <p class="help">점을 누르면 그 물건의 기록 화면이 열립니다. 필지 경계 파일을 넣었으면 필지를 눌러 그 안의 물건을 볼 수 있습니다. 배경 지도는 없고 북쪽이 위입니다.</p>
+  <p class="help">점을 누르면 그 물건의 기록 화면이 열립니다. 필지 경계 파일을 넣었으면 필지를 눌러 그 안의 물건을 볼 수 있습니다. 배경 지도는 없고 북쪽이 위입니다. 지도에 없는 물건은 아래 목록에서 고릅니다.</p>
   <div class="map-wrap">
     <svg id="map-svg" role="img" aria-label="물건 위치와 필지 경계 지도"></svg>
     <div id="map-empty" class="map-empty"><div><strong>아직 표시할 물건이 없습니다</strong>2단계에서 물건 목록을 불러오면 위치가 여기에 표시됩니다.</div></div>
@@ -101,6 +100,12 @@
     </div>
     <p id="parcels-note" class="muted"></p>
   </details>
+</section>
+
+<section id="sec-assets">
+  <div class="sec-head"><h2>목록에서 고르기</h2></div>
+  <p class="help">불러온 물건 전부입니다. 위치가 없어 지도에 나오지 않는 물건도 여기서 기록할 수 있습니다.</p>
+  <ul id="asset-list" class="plain"></ul>
 </section>
 
 <section id="sec-observe" hidden>

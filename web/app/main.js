@@ -11,7 +11,7 @@ import { selectRecords, planBatches, buildPackage, hasRemainingBatches, studyIdE
 import { migrationReadiness, migrationText, persistenceText } from "./migrate.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.1.0";
+export const APP_VERSION = "0.1.1";
 const MODE_LABEL = { synthetic: "연습용", private_real: "실제" };
 const $ = (id) => document.getElementById(id);
 const state = { store: null, assets: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, seedLoadedAt: null };
