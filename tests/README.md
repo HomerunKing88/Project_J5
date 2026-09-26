@@ -19,6 +19,6 @@
 - `test_j5_010_import.py`: 단방향 반영. 정상·같은 파일 두 번·재내보내기·일부 겹침·같은 ID 다른 내용(패키지 안·정본)·거절·정정 대상·사진 복사 후 DB 실패(정리대기)·파일 실패·CLI.
 - `test_j5_009_db.py`: 정본 SQLite. 생성·열기·마이그레이션, 시드 승계(멱등·전체 거절), 복합 외래키·STRICT 타입·열거값, 시점(오프셋·정밀도·UTC), JSON payload·스키마, records 불변·정정 연결, 근거·첨부, fixture 이벤트 → 기록 매핑, CLI.
 - `test_web_static.py`: web/ 정적 앱 규칙(외부 URL·인라인 스크립트·네트워크 API 금지, CSP).
-- `web/*.test.mjs`: 웹 모듈 단위 테스트(ZIP 작성기·내보내기는 Python zipfile·j5 inspect 를 오라클로 씀, 지도 투영·맞춤·축척, 필지 검증·라벨 위치·점 포함·경로 문자열, 이전 준비 판정 `migrate.test.mjs`)와 브라우저 e2e(`app.e2e.test.mjs`, 헤드리스 Chromium + CDP, 지도 마커 탭·필지 경계·지번·필지 탭·재접속 유지·지도 실패 시 목록·이전 준비 표시, 다운로드한 ZIP 을 j5 inspect 로 검사. 브라우저 없으면 건너뜀). `node --test "tests/web/**/*.test.mjs"` (Node는 테스트 전용).
+- `web/*.test.mjs`: 웹 모듈 단위 테스트(ZIP 작성기·내보내기는 Python zipfile·j5 inspect 를 오라클로 씀, 지도 투영·맞춤·축척, 필지 검증·라벨 위치·점 포함·경로 문자열, 이전 준비 판정 `migrate.test.mjs`, 화면 요약·전환 `ui.test.mjs`)와 브라우저 e2e 두 개(`app.e2e.test.mjs`: 지도 마커 탭·필지 경계·지번·필지 탭·재접속 유지·지도 실패 시 목록·이전 준비 표시, 다운로드한 ZIP 을 j5 inspect 로 검사. `ux.e2e.test.mjs`: 빈 상태·대상 카드·관측 화면·저장 실패/성공·내보내기 단계·새로고침·오프라인 배너·모바일 내비게이션·접근성 속성. 헬퍼 `web/cdp.mjs`. 브라우저 없으면 건너뜀). `node --test tests/web/*.test.mjs` (Node는 테스트 전용).
 - `conftest.py`: fixture 폴더를 결정적으로 ZIP으로 묶는 헬퍼.
 - `fixtures/`: 정상·중복·손상·미지원 입력 예제. 목록과 기대 결과는 `fixtures/README.md`.
