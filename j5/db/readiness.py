@@ -8,6 +8,9 @@
   중요 미확인(계약 총액·보증금 명세·필요자기자본·여유면적·규제 효력·참조 기록 수정)을 모으고, 검토 기록이 정본에 들어온 뒤의 변경(가격·대출·전략·규제·구성·실사)을 신호로 잡아
   그 변경을 재검토 조건으로 둔 항목을 `recheck` 로 바꾼다. ready 는 모든 항목이 ok 또는 사유 있는 not_applicable 이고 미확인·변경 신호가 없을 때다.
   이미 purchase_ready 인 물건에 준비가 아닌 상태나 승인 뒤 변경이 있으면 `release_required`(해제 필요)다.
+- `apply_stage_recheck`(J5-018B): 계약 직전(pre_contract)·잔금 직전(pre_settlement) 재확인을 불변 기록(readiness_rechecks)으로 남긴다. 권리·임대차와 세무·법적·규제 항목은 필수이고
+  confirmed 는 근거 문서가 있어야 한다. changed·unconfirmed 항목이나 issues 가 있으면 outcome 은 issues_found 여야 하며, purchase_ready 면 그 자리에서 철회 이력을 남긴다.
+  현재 검토 기록의 마지막 재확인이 issues_found 면 판정은 준비 아님이다(새 검토 기록으로 반영한 뒤 재승인).
 - `enforce_release` / `enforce_all`: 해제가 필요한 물건의 준비 상태를 자동으로 철회한다(사유 "[자동 해제] ..." 와 판정 스냅샷을 남기는 감사 가능한 철회). `j5 db readiness` 와 파생본 생성(`db project`)이
   먼저 이를 실행하므로 게시되는 관심 단계는 유효하지 않은 purchase_ready 를 담지 않는다.
 - `approve` / `withdraw`: purchase_ready 전환은 사용자 승인이며 ready 가 아니면 거절한다. 철회는 사유와 함께 남긴다. 둘 다 assets.tracking_status 를 바꾸고 readiness_decisions 에
@@ -27,6 +30,10 @@ from j5.db.validate import RECORD_PAYLOAD_SCHEMAS, ValidationError, now_utc, par
 from j5.schemas_loader import schema_errors
 
 INPUT_SCHEMA = "acquisition_review.schema.json"
+RECHECK_SCHEMA = "readiness_recheck.schema.json"
+STAGE_LABEL = {"pre_contract": "계약 직전", "pre_settlement": "잔금 직전"}
+RESULT_LABEL = {"confirmed": "유효 확인", "changed": "변경 확인", "unconfirmed": "확인 못 함"}
+RECHECK_PREFIX = "[재확인 문제] "
 RECORD_TYPE = "acquisition_review"
 CHECK_KEYS = ("scope_price", "financing", "tax_legal", "rights_tenancy", "building_land", "business_funding", "negotiation", "final_decision")
 CHECK_LABEL = {"scope_price": "매입 범위·가격", "financing": "금융", "tax_legal": "세무·법적 검토", "rights_tenancy": "권리·임대차", "building_land": "건축·토지",
@@ -229,7 +236,7 @@ def evaluate(db: Db, asset_id: str, *, today: str | None = None) -> dict:
         raise ValidationError([f"기준일이 달력상 존재하지 않는다: {today}"])
     dec = last_decision(db, asset_id)
     out = {"asset_id": asset_id, "label": asset["label"], "today": today, "tracking_status": asset["tracking_status"], "case": None, "checks": [], "unknown": [], "signals": [], "ref_changes": [],
-           "ready": False, "blockers": [], "release_required": False, "last_decision": dec, "decisions": db.conn.execute("SELECT COUNT(*) FROM readiness_decisions WHERE asset_id = ?", (asset_id,)).fetchone()[0]}
+           "stage_rechecks": [], "ready": False, "blockers": [], "release_required": False, "last_decision": dec, "decisions": db.conn.execute("SELECT COUNT(*) FROM readiness_decisions WHERE asset_id = ?", (asset_id,)).fetchone()[0]}
     case = current_case(db, asset_id)
     if case is None:
         out["blockers"].append("매입 준비 검토 기록이 없다 (`j5 db case-add`)")
@@ -270,6 +277,10 @@ def evaluate(db: Db, asset_id: str, *, today: str | None = None) -> dict:
                                    + (f" · 미해결 {len(c['open_issues'])}건" if c["open_issues"] else ""))
     for u in unknown:
         out["blockers"].append(f"중요 미확인: {u}")
+    out["stage_rechecks"] = stage_rechecks(db, asset_id, case["record_id"])
+    # 문제 확인 재확인은 같은 검토 기록에 뒤에 '이상 없음' 이 들어와도 지워지지 않는다. 새 검토 기록으로 변경을 반영해야 풀린다
+    for st in issue_rechecks(db, asset_id, case["record_id"]):
+        out["blockers"].append(f"{STAGE_LABEL[st['stage']]} 재확인에서 문제 확인 ({st['reviewed_on']}): " + "; ".join(st["issues"][:3]))
     out["ready"] = not out["blockers"]
     if asset["tracking_status"] == "purchase_ready":
         # 승인과 같은 초에 들어온 변경도 승인 뒤로 본다(안전한 쪽). 승인 전에 들어온 변경은 승인 자체를 막았을 것이다
@@ -305,6 +316,11 @@ def readiness_text(e: dict) -> str:
             lines.append(f"  중요 미확인: {u}")
         if e["signals"]:
             lines.append(f"  검토 뒤 변경 {len(e['signals'])}건: " + ", ".join(f"{TRIGGER_LABEL[s['trigger']]}({s['kind']})" for s in e["signals"]))
+    for st in e.get("stage_rechecks", []):
+        lines.append(f"재확인 [{STAGE_LABEL[st['stage']]}] {st['reviewed_on']} · {'문제 확인' if st['outcome'] == 'issues_found' else '이상 없음'} · 항목 {st['item_count']}건"
+                     + (f" · 문제: {'; '.join(st['issues'][:3])}" if st["issues"] else ""))
+    if e["case"] is not None and not e.get("stage_rechecks"):
+        lines.append("재확인: 없음 (계약 직전·잔금 직전에 `j5 db case-recheck` 로 권리·규제·임대차를 다시 점검한다)")
     if e["last_decision"]:
         d = e["last_decision"]
         lines.append(f"마지막 결정: {d['decision']} {d['decided_on']} ({d['previous_status']} → {d['new_status']})" + (f" · {d['reason']}" if d["reason"] else ""))
@@ -384,6 +400,109 @@ def enforce_all(db: Db, *, today: str | None = None) -> list[dict]:
         if d is not None:
             out.append(d)
     return out
+
+
+# ---- 계약 직전·잔금 직전 재확인 (J5-018B) ----
+
+def stage_rechecks(db: Db, asset_id: str, record_id: str) -> list[dict]:
+    """현재 검토 기록에 대한 단계별 마지막 재확인 (단계 순)."""
+    if not db._has_table("readiness_rechecks"):
+        return []
+    out = []
+    for stage in ("pre_contract", "pre_settlement"):
+        r = db.conn.execute("SELECT * FROM readiness_rechecks WHERE asset_id = ? AND record_id = ? AND stage = ? ORDER BY recorded_at DESC, rowid DESC LIMIT 1", (asset_id, record_id, stage)).fetchone()
+        if r is None:
+            continue
+        items = json.loads(r["items_json"])
+        out.append({"recheck_id": r["recheck_id"], "stage": stage, "reviewed_on": r["reviewed_on"], "outcome": r["outcome"], "items": items, "item_count": len(items),
+                    "issues": json.loads(r["issues_json"]), "recorded_at": r["recorded_at"], "note": r["note"]})
+    return out
+
+
+def issue_rechecks(db: Db, asset_id: str, record_id: str) -> list[dict]:
+    """현재 검토 기록에 남은 문제 확인 재확인 전부 (재확인일·반영 순)."""
+    if not db._has_table("readiness_rechecks"):
+        return []
+    out = []
+    for r in db.conn.execute("SELECT recheck_id, stage, reviewed_on, issues_json, items_json, recorded_at FROM readiness_rechecks WHERE asset_id = ? AND record_id = ? AND outcome = 'issues_found'"
+                             " ORDER BY reviewed_on, recorded_at, rowid", (asset_id, record_id)):
+        issues = json.loads(r["issues_json"]) or [f"{CHECK_LABEL[it['key']]} {RESULT_LABEL[it['result']]}" for it in json.loads(r["items_json"]) if it["result"] != "confirmed"]
+        out.append({"recheck_id": r["recheck_id"], "stage": r["stage"], "reviewed_on": r["reviewed_on"], "issues": issues, "recorded_at": r["recorded_at"]})
+    return out
+
+
+def load_stage_recheck_input(path: Path) -> dict:
+    try:
+        doc = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as e:
+        raise ValidationError([f"입력 파일을 읽을 수 없다: {e}"]) from e
+    errs = schema_errors(RECHECK_SCHEMA, doc)
+    if errs:
+        raise ValidationError([f"입력이 {RECHECK_SCHEMA} 에 맞지 않는다"] + errs[:10])
+    if parse_date(doc["reviewed_on"]) is None:
+        raise ValidationError([f"재확인일이 달력상 존재하지 않는다: {doc['reviewed_on']}"])
+    keys = [it["key"] for it in doc["items"]]
+    if len(keys) != len(set(keys)):
+        raise ValidationError([f"재확인 항목이 중복됐다: {keys}"])
+    problems = [it["key"] for it in doc["items"] if it["result"] != "confirmed"]
+    if (problems or doc["issues"]) and doc["outcome"] != "issues_found":
+        raise ValidationError([f"변경·미확인 항목({', '.join(problems) or '없음'})이나 문제 목록이 있으면 outcome 은 issues_found 여야 한다"])
+    if doc["outcome"] == "issues_found" and not problems and not doc["issues"]:
+        raise ValidationError(["issues_found 면 변경·미확인 항목 또는 문제 목록이 하나 이상 있어야 한다"])
+    return doc
+
+
+def apply_stage_recheck(db: Db, doc: dict) -> dict:
+    """한 트랜잭션으로 재확인을 남기고 dataset_version 을 올린다. 현재 검토 기록이 있어야 하며 재확인일은 검토일보다 앞설 수 없다.
+    문제가 확인됐고 purchase_ready 면 그 자리에서 철회 이력을 남긴다(사유 "[재확인 문제] ...")."""
+    with db.transaction():
+        asset = db.conn.execute("SELECT asset_id, label, tracking_status FROM assets WHERE asset_id = ?", (doc["asset_id"],)).fetchone()
+        if asset is None:
+            raise ValidationError([f"물건 {doc['asset_id']} 이 정본에 없다"])
+        case = current_case(db, doc["asset_id"])
+        if case is None:
+            raise ValidationError(["매입 준비 검토 기록이 없다. 먼저 `j5 db case-add` 로 검토를 남긴다"])
+        if doc["reviewed_on"] < case["observed_at"]:
+            raise ValidationError([f"재확인일({doc['reviewed_on']})이 검토일({case['observed_at']})보다 앞선다"])
+        open_issues = issue_rechecks(db, doc["asset_id"], case["record_id"])
+        if open_issues and doc["outcome"] == "cleared":
+            raise ValidationError([f"이 검토 기록에는 문제 확인 재확인이 {len(open_issues)}건 있다. '이상 없음' 으로 덮지 않는다. 변경을 반영한 새 검토 기록(`case-add` + supersedes_id)을 넣은 뒤 다시 재확인한다"])
+        for it in doc["items"]:
+            for did in it["evidence_ids"]:
+                if db.conn.execute("SELECT 1 FROM source_documents WHERE document_id = ?", (did,)).fetchone() is None:
+                    raise ValidationError([f"근거 문서 {did} 가 정본에 없다 (source_documents 에 먼저 둔다)"])
+        e = evaluate(db, doc["asset_id"], today=doc["reviewed_on"])
+        snapshot = {"today": e["today"], "ready": e["ready"], "blockers": e["blockers"], "signals": len(e["signals"]), "tracking_status": e["tracking_status"]}
+        rid = str(uuid.uuid4())
+        db.conn.execute("INSERT INTO readiness_rechecks (recheck_id, asset_id, record_id, stage, reviewed_on, outcome, items_json, issues_json, signals_json, note, recorded_at)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (rid, doc["asset_id"], case["record_id"], doc["stage"], doc["reviewed_on"], doc["outcome"], json.dumps(doc["items"], ensure_ascii=False),
+                         json.dumps(doc["issues"], ensure_ascii=False), json.dumps(snapshot, ensure_ascii=False, sort_keys=True), doc.get("note"), db.now()))
+        withdrawn = None
+        if doc["outcome"] == "issues_found" and asset["tracking_status"] == "purchase_ready":
+            problems = [f"{CHECK_LABEL[it['key']]} {RESULT_LABEL[it['result']]}" for it in doc["items"] if it["result"] != "confirmed"]
+            reason = RECHECK_PREFIX + STAGE_LABEL[doc["stage"]] + ": " + "; ".join(problems + doc["issues"])
+            e2 = evaluate(db, doc["asset_id"], today=doc["reviewed_on"])
+            snap2 = {k: e2[k] for k in ("today", "checks", "unknown", "signals", "ref_changes", "ready", "blockers", "release_required", "stage_rechecks")}
+            did = _record_decision(db, doc["asset_id"], case["record_id"], "withdraw", doc["reviewed_on"], "purchase_ready", WITHDRAWN_STATUS, reason[:2000], snap2)
+            withdrawn = {"decision_id": did, "reason": reason[:2000], "new_status": WITHDRAWN_STATUS}
+        version = db.bump_dataset_version()
+    return {"recheck_id": rid, "asset_id": doc["asset_id"], "label": asset["label"], "record_id": case["record_id"], "stage": doc["stage"], "reviewed_on": doc["reviewed_on"], "outcome": doc["outcome"],
+            "items": {it["key"]: it["result"] for it in doc["items"]}, "issues": doc["issues"], "withdrawn": withdrawn, "tracking_status": withdrawn["new_status"] if withdrawn else asset["tracking_status"],
+            "dataset_version": version}
+
+
+def stage_recheck_text(r: dict) -> str:
+    lines = [f"재확인 기록 [{STAGE_LABEL[r['stage']]}] {r['recheck_id']} · 물건 {r['label']} ({r['asset_id']}) · 재확인일 {r['reviewed_on']} · {'문제 확인' if r['outcome'] == 'issues_found' else '이상 없음'} · dataset_version {r['dataset_version']}",
+             "항목: " + ", ".join(f"{CHECK_LABEL[k]} {RESULT_LABEL[v]}" for k, v in r["items"].items())]
+    for i in r["issues"]:
+        lines.append(f"  문제: {i}")
+    if r["withdrawn"]:
+        lines.append(f"purchase_ready 를 철회했다 (→ {r['withdrawn']['new_status']}, 결정 {r['withdrawn']['decision_id']}). 새 검토 기록으로 변경을 반영한 뒤 다시 승인한다")
+    else:
+        lines.append(f"관심 단계 {r['tracking_status']} 그대로다" + ("" if r["outcome"] == "cleared" else " (purchase_ready 가 아니어서 철회할 것이 없다. 검토 기록을 갱신한다)"))
+    lines.append("재확인은 계약·대출·납세의 법적 판단을 대신하지 않는다. 확인한 근거 문서를 source_documents 에 둔다")
+    return "\n".join(lines) + "\n"
 
 
 def decision_text(r: dict) -> str:

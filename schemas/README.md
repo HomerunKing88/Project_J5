@@ -44,6 +44,10 @@
 
 - `judgment_recheck.schema.json`: 재확인 입력(`j5 db recheck-add`)과 `judgment_rechecks` 행. 현재 목표 매수가·투자판단 기록을 가리키고 결과(`reconfirmed` / `revision_needed`)·재확인일·조건 대조(`condition`, `holds` true/false/null, `note`)·반대 증거(`note`, 선택 `document_id`·`observed_on`)·메모를 둔다. 재확인 시점의 신호 요약은 저장소가 붙인다. 판단 자체는 바꾸지 않는다(데이터 사전 §8, 릴리스 계획 §8·§9).
 
+## 파일 (readiness_recheck 1.0.0, R7 J5-018B)
+
+- `readiness_recheck.schema.json`: 계약 직전·잔금 직전 재확인 입력(`j5 db case-recheck`, `kind: stage_recheck`)과 `readiness_rechecks` 행(db_schema 14). 단계, 재확인일, 결과(`cleared`/`issues_found`), 항목(권리·임대차와 세무·법적·규제 필수; `confirmed` 는 근거 문서 1건 이상, `changed`/`unconfirmed` 는 문제), 문제 목록. 문제가 있으면 purchase_ready 철회 이력이 뒤따른다(데이터 사전 §11).
+
 ## 파일 (acquisition_review 1.0.0, R7 J5-018A)
 
 - `acquisition_review.schema.json`: 매입 준비 검토 기록 입력(`j5 db case-add`, `kind: acquisition_review`)과 저장 payload(`$defs/acquisition_review_payload`). 전략·범위·가격(미확인은 null 과 사유)·참조 기록·매물 사건·체크리스트 8항목(`$defs/check`: 상태 6종, 근거 문서, 검토자, 검토일, 유효기한, 재검토 조건 8종, 미해결 사항, 해당 없음 사유). `verified` 는 검토일, `not_applicable` 은 사유, `conditional`/`blocked` 는 미해결 사항이 필수(데이터 사전 §11). purchase_ready 전환은 이 기록이 아니라 `readiness_decisions`(db_schema 13)에 남는다.

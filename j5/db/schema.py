@@ -720,6 +720,33 @@ CREATE TRIGGER readiness_decisions_no_delete BEFORE DELETE ON readiness_decision
 END;
 """
 
+# J5-018B 계약 직전·잔금 직전 재확인 (데이터 사전 §11 "권리·규제·임대차 확인은 계약 직전과 잔금 직전 다시 점검한다", ADR-07 "계약 직전과 잔금 직전 재확인은 별도로 둔다").
+# 재확인은 불변 기록이며 현재 매입 준비 검토 기록을 가리킨다. 문제가 확인되면 준비 상태 철회(readiness_decisions)가 뒤따른다.
+RECHECK_STAGES = ("pre_contract", "pre_settlement")
+STAGE_OUTCOMES = ("cleared", "issues_found")
+MIGRATION_0014 = f"""
+CREATE TABLE readiness_rechecks (
+  recheck_id   TEXT NOT NULL PRIMARY KEY CHECK (recheck_id GLOB '{UUID_GLOB}'),
+  asset_id     TEXT NOT NULL REFERENCES assets (asset_id),
+  record_id    TEXT NOT NULL REFERENCES records (record_id),
+  stage        TEXT NOT NULL CHECK (stage {_in(RECHECK_STAGES)}),
+  reviewed_on  TEXT NOT NULL CHECK (reviewed_on GLOB '{DATE_GLOB}'),
+  outcome      TEXT NOT NULL CHECK (outcome {_in(STAGE_OUTCOMES)}),
+  items_json   TEXT NOT NULL CHECK (json_valid(items_json) AND json_type(items_json) = 'array'),
+  issues_json  TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(issues_json) AND json_type(issues_json) = 'array'),
+  signals_json TEXT NOT NULL CHECK (json_valid(signals_json) AND json_type(signals_json) = 'object'),
+  note         TEXT,
+  recorded_at  TEXT NOT NULL CHECK (recorded_at GLOB '{UTC_GLOB}')
+) STRICT;
+CREATE INDEX readiness_rechecks_by_asset ON readiness_rechecks (asset_id, stage, recorded_at);
+CREATE TRIGGER readiness_rechecks_no_update BEFORE UPDATE ON readiness_rechecks BEGIN
+  SELECT RAISE(ABORT, 'readiness_rechecks 는 불변이다');
+END;
+CREATE TRIGGER readiness_rechecks_no_delete BEFORE DELETE ON readiness_rechecks BEGIN
+  SELECT RAISE(ABORT, 'readiness_rechecks 는 삭제하지 않는다');
+END;
+"""
+
 # (버전, 이름, SQL). 새 릴리스의 테이블은 새 항목으로 추가하고 기존 항목은 고치지 않는다.
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "r1b_minimum", MIGRATION_0001),
@@ -735,6 +762,7 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (11, "r4_rechecks", MIGRATION_0011),
     (12, "r5_plan_records", MIGRATION_0012),
     (13, "r7_acquisition_review", MIGRATION_0013),
+    (14, "r7_stage_rechecks", MIGRATION_0014),
 )
 # 표 재작성이 필요한 마이그레이션: 외래키 검사를 끈 채 한 트랜잭션으로 실행하고 foreign_key_check 가 비어야 커밋한다 (store._migrate).
 FK_OFF_MIGRATIONS = frozenset({9, 12, 13})
