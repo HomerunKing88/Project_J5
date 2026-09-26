@@ -52,6 +52,7 @@ async function saveSettings() {
   await state.store.setMeta("data_mode", $("data-mode").value);
   await state.store.setMeta("route_version_id", route || null);
   text($("settings-note"), "저장됨", "ok");
+  await renderMigrate(await state.store.listEvents());  // 설정(study_id·모드)이 바뀌면 '현재 설정' 기준이 바뀐다
   await refreshStatus();
 }
 
