@@ -136,6 +136,10 @@ async function renderAssets() {
   if (!state.assets.length) list.append(el("li", { class: "empty", text: "아직 대상이 없습니다. 설정의 자료 관리에서 물건 목록을 가져오세요." }));
   // 목록을 먼저 채운 뒤 지도를 갱신한다. 지도 실패는 목록에 영향을 주지 않는다.
   mapCall((m) => mapNote(m.setAssets(state.assets)));
+  // 지도 선택 카드는 현재 목록의 물건 객체에 다시 묶는다. 목록 교체로 사라진 물건이면 카드를 닫는다 (리뷰 반영: 옛 물건으로 기록되지 않게)
+  const selected = state.mapSelected ? state.assets.find((a) => a.asset_id === state.mapSelected) : null;
+  if (state.mapSelected && !selected) clearMapSelection();
+  else if (selected) selectOnMap(selected, { focus: false });
   renderSeedStatus();
   await refreshStatus();
 }
@@ -278,7 +282,7 @@ function mapNote(c) {
 }
 
 /** 지도의 점을 탭하면 바로 기록 화면을 열지 않고 대상 요약과 '기록 시작' 을 보여 준다. */
-function selectOnMap(asset) {
+function selectOnMap(asset, { focus = true } = {}) {
   state.mapSelected = asset.asset_id;
   mapCall((m) => m.select(asset.asset_id));
   const s = assetSummary(asset.asset_id, state.events);
@@ -287,7 +291,15 @@ function selectOnMap(asset) {
   $("map-selected").hidden = false;
   $("map-selected-start").onclick = () => startObservation(asset);
   for (const li of $("asset-list").children) li.classList.toggle("selected", li.dataset.assetId === asset.asset_id);
-  $("map-selected-start").focus();
+  if (focus) $("map-selected-start").focus();
+}
+
+function clearMapSelection() {
+  state.mapSelected = null;
+  $("map-selected").hidden = true;
+  $("map-selected-start").onclick = null;
+  mapCall((m) => m.select(null));
+  for (const li of $("asset-list").children) li.classList.remove("selected");
 }
 
 // ---- 관측 ----
@@ -303,7 +315,8 @@ function startObservation(asset) {
   state.target = asset;
   state.photos = [];
   state.prevPhotos = [];
-  state.returnFocus = document.activeElement;
+  // 되돌릴 포커스는 처음 열 때의 요소다. '다음 대상 기록' 으로 이어서 열 때는 유지한다 (리뷰 반영)
+  if ($("sec-observe").hidden) state.returnFocus = document.activeElement;
   loadPrevPhotos(asset.asset_id);
   mapCall((m) => m.select(asset.asset_id));
   $("target-label").textContent = asset.label;
@@ -332,7 +345,14 @@ function closeObservation({ toView = null } = {}) {
   if (toView) state.nav.show(toView);
   const back = state.returnFocus;
   state.returnFocus = null;
-  if (!toView && back && back.isConnected && typeof back.focus === "function") back.focus();
+  if (toView) return;
+  // 처음 연 요소로 되돌린다. 그 요소가 없거나 본문(body)이면 현재 화면의 제목으로 옮겨 숨은 대화상자에 포커스가 남지 않게 한다
+  const usable = back && back !== document.body && back.isConnected && !back.hidden && !back.closest("[hidden]") && typeof back.focus === "function";
+  if (usable) back.focus();
+  else {
+    const h = document.querySelector("section.view:not([hidden]) h2");
+    if (h) { h.setAttribute("tabindex", "-1"); h.focus(); }
+  }
 }
 
 function updateObservedSummary() {

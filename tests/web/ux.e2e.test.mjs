@@ -3,7 +3,7 @@
 //       미내보냄 수 → 내보내기 4단계(저장 확인 전/후) → 새로고침 유지 → 해시 이동 → 오프라인 배너 → 지도 실패 시 목록 → 모바일 내비게이션·접근성 속성.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Cdp, WEB, findChrome, png1x1, serve, waitForDownloads } from "./cdp.mjs";
@@ -55,7 +55,7 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     assert.deepEqual(smallTargets, [], "터치 대상 44px 이상");
 
     // 3. 관측 시작: 첫 대상, 작업 화면에 포커스, dialog 속성
-    await cdp.eval("document.getElementById('start-observing').click(); 'ok'");
+    await cdp.eval("const b = document.getElementById('start-observing'); b.focus(); b.click(); 'ok'");
     await cdp.waitFor(visible("sec-observe"));
     assert.equal(await cdp.eval(txt("target-label")), "가상 물건 1");
     assert.equal(await cdp.eval("document.activeElement.id"), "observe-title", "열리면 제목으로 포커스");
@@ -98,6 +98,7 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
     await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
     await cdp.waitFor("document.getElementById('sec-observe').hidden");
+    assert.equal(await cdp.eval("document.activeElement.id"), "start-observing", "이어서 열었다 닫아도 처음 연 버튼으로 포커스가 돌아온다");
     assert.match(await cdp.eval("document.querySelector('#asset-list li .meta').textContent"), /변화 확인.*기록 1건 · 사진 1장.*안 내보냄 1건/);
     assert.match(await cdp.eval(txt("home-last")), /최근 저장: 오늘 .* 가상 물건 1 · 이 기기에 저장됨 \(아직 안 내보냄\)/);
     assert.equal(await cdp.eval(txt("start-observing")), "관측 계속하기");
@@ -154,6 +155,7 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     await cdp.waitFor(`${visible("sec-observe")} && ${txt("target-label")} === '가상 물건 3'`);
     await cdp.eval("document.getElementById('cancel-observation').click(); 'ok'");
     await cdp.waitFor("document.getElementById('sec-observe').hidden");
+    assert.equal(await cdp.eval("document.activeElement.id"), "home-title", "되돌릴 요소가 없으면 현재 화면 제목으로 (숨은 대화상자에 포커스가 남지 않음)");
     assert.deepEqual(cdp.errors, [], "지도 실패 경로에서 콘솔 오류 없음");
     await cdp.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: svgStub });
 
@@ -171,6 +173,17 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
       const lastBottom = await cdp.eval(`(() => { window.scrollTo(0, document.body.scrollHeight); const s = document.getElementById('view-${v}'); return s.getBoundingClientRect().bottom; })()`);
       assert.ok(lastBottom <= nav.top + 1, `${v}: 끝까지 내려도 내비게이션에 가려지지 않음 (${lastBottom} vs ${nav.top})`);
     }
+    // 13b. 지도 선택 뒤 물건 목록을 교체하면 선택 카드가 닫힌다 (옛 물건으로 기록하지 않는다)
+    await go(cdp, "map");
+    await cdp.waitFor("document.querySelectorAll('#map-svg g.pt').length === 4");
+    await cdp.clickRect('#map-svg g.pt[data-asset-id="7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a51"] .hit');
+    await cdp.waitFor(visible("map-selected"));
+    const seed2 = join(tmp, "seed2.json");
+    writeFileSync(seed2, JSON.stringify(JSON.parse(readFileSync(join(WEB, "data/assets.seed.synthetic.json"), "utf8")).slice(3)));
+    await cdp.setFiles("#seed-file", [seed2]);
+    await cdp.waitFor("document.querySelectorAll('#asset-list li button').length === 2");
+    assert.ok(await cdp.eval("document.getElementById('map-selected').hidden"), "사라진 물건의 선택 카드는 닫힌다");
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.pt.sel').length"), 0);
     // 14. 접근성 속성: 입력마다 label, 아이콘 버튼 aria-label, 상태 메시지 live, 제목 순서
     const a11y = await cdp.eval(`(() => {
       const unlabeled = Array.from(document.querySelectorAll('input:not([type=hidden]), select, textarea')).filter(i => !(i.labels && i.labels.length) && !i.getAttribute('aria-label') && !i.getAttribute('aria-labelledby')).map(i => i.id || i.name);
