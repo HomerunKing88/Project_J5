@@ -7,8 +7,19 @@ from functools import lru_cache
 from pathlib import Path
 
 from jsonschema import Draft202012Validator, FormatChecker
+from referencing import Registry, Resource
 
 SCHEMAS_DIR = Path(__file__).resolve().parents[1] / "schemas"
+
+
+@lru_cache(maxsize=None)
+def schema_registry() -> Registry:
+    """schemas/ 의 모든 스키마를 $id 로 등록한 registry. 스키마끼리의 상대 $ref(예: plan_records → calc_inputs.schema.json#/$defs/far)를 푼다."""
+    reg = Registry()
+    for path in sorted(SCHEMAS_DIR.glob("*.schema.json")):
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        reg = reg.with_resource(doc["$id"], Resource.from_contents(doc))
+    return reg
 
 
 class SchemaNotFound(RuntimeError):
@@ -22,7 +33,7 @@ def get_validator(name: str) -> Draft202012Validator:
         raise SchemaNotFound(f"스키마 파일이 없다: {path}")
     schema = json.loads(path.read_text(encoding="utf-8"))
     Draft202012Validator.check_schema(schema)
-    return Draft202012Validator(schema, format_checker=FormatChecker())
+    return Draft202012Validator(schema, format_checker=FormatChecker(), registry=schema_registry())
 
 
 def schema_errors(name: str, doc) -> list[str]:
