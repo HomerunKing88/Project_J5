@@ -290,7 +290,7 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.setFiles("#seed-file", [seed2]);
     await cdp.waitFor("document.querySelectorAll('#asset-list li button').length === 2");
     await cdp.waitFor("document.querySelectorAll('#record-list li').length === 1");
-    assert.ok((await cdp.eval("document.getElementById('record-list').textContent")).includes("현재 시드에 없는 물건"));
+    assert.ok((await cdp.eval("document.getElementById('record-list').textContent")).includes("현재 목록에 없는 물건"));
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.pt').length"), 2, "시드 교체 후 지도도 2개");
     // 시드가 바뀌면 번들의 정본 연결은 확인되지 않은 것으로 본다: 필지 4-2 의 "가상 물건 3" 연결을 보여 주지 않는다 (J5-013B-2 리뷰 반영)
     assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /시드가 바뀐 뒤라 표시하지 않음/);
@@ -312,7 +312,7 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     const seedBad = join(tmp, "seed-bad.json");
     writeFileSync(seedBad, JSON.stringify([{ ...seedAll[0], extra: 1 }]));
     await cdp.setFiles("#seed-file", [seedBad]);
-    await cdp.waitFor("document.getElementById('seed-note').textContent.includes('시드 오류')");
+    await cdp.waitFor("document.getElementById('seed-note').textContent.includes('물건 목록 파일 오류')");
     assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li button').length"), 2);
     await cdp.eval("document.getElementById('load-synthetic').click(); 'ok'");
     await cdp.waitFor("document.querySelectorAll('#asset-list li button').length === 5");
