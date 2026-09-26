@@ -1,7 +1,8 @@
 """J5-017A: 운영 점검·휴면 재개. 릴리스 계획 §8 R6 (반기 운영 점검, 정본·사진 복구, 새 PC 이전, 마지막 정상 앱·DB·스키마·도구 버전 저장),
 §10 J5-017 완료 조건 "새 기기·구버전·백업 재개", 데이터 사전 §12.
 
-시험: 할 일 목록과 통과 판정(백업·파생본 없음 → 있음), 마지막 정상 상태 파일은 통과할 때만 쓰고 실패 시 이전 것을 유지, 읽기 전용 열기가
+시험: 할 일 목록과 통과 판정(백업·파생본 없음 → 있음), 마지막 정상 상태 파일은 통과할 때만 쓰고 실패 시 이전 것을 유지, 결과가 새로 쓴 파일을 돌려줌,
+백업 내용 검증(manifest 만 남고 사진이 지워진 백업은 정상이 아님), 마지막 정상 파일을 쓸 수 없을 때의 조치 항목(트레이스백 없음), 읽기 전용 열기가
 마이그레이션을 적용하지 않음(구버전 정본: 대기 목록만 보고, 열면 적용), 도구보다 새로운 정본 거절, 사진 누락, 새 PC 이전(빈 폴더 복구 → 점검 → 백업 재개),
 반기 점검 기한 초과, 정본 없음, CLI. 가상자료만 쓴다.
 """
@@ -58,22 +59,64 @@ def test_actions_then_pass_and_last_good_written_only_on_pass(db, home):
     b = create_backup(db, home)
     assert b.outcome == "completed" and build_projection(db, home).outcome == "published"
     r2 = ops_check(home, now="2026-09-26T00:00:00Z")
-    assert r2["ok"] and r2["actions"] == [] and r2["last_good_updated"] is True
+    assert r2["ok"] and r2["actions"] == [] and r2["last_good_updated"] is True and r2["backup"]["verified"] is True
     lg, problem = read_last_good(home)
     assert problem is None and lg["format"] == "j5lastgood" and lg["checked_at"] == "2026-09-26T00:00:00Z"
+    assert r2["last_good"] == lg and r2["previous_last_good_at"] is None, "결과는 이번에 쓴 파일을 돌려준다"
     assert lg["db_schema_version"] == S.DB_SCHEMA_VERSION == lg["db_schema_version_of_store"] and lg["dataset_version"] == 2 and lg["study_id"] == STUDY
     assert lg["backup"]["dir"] == b.backup_dir and lg["backup"]["dataset_version"] == 2 and lg["projection"]["dataset_version"] == 2
     for k in ("app_version", "package_schema_versions", "projection_schema_version", "backup_schema_version", "sqlite_version", "python_version", "platform"):
         assert lg[k]
-    assert "점검 통과" in ops_text(r2) and "이번 점검으로 처음 기록" in ops_text(r2)
+    assert "점검 통과" in ops_text(r2) and "마지막 정상 상태: 2026-09-26T00:00:00Z" in ops_text(r2) and "(이번 점검으로 갱신, 이전 없음)" in ops_text(r2) and "내용 검증 통과" in ops_text(r2)
+    r2b = ops_check(home, now="2026-09-26T01:00:00Z")
+    assert r2b["last_good"]["checked_at"] == "2026-09-26T01:00:00Z" and r2b["previous_last_good_at"] == "2026-09-26T00:00:00Z" and "이전 2026-09-26T00:00:00Z" in ops_text(r2b)
     # 정본이 바뀌면(반영) 백업 필요 → 실패하지만 이전 정상 상태는 그대로 보여 준다
     with db.transaction():
         db.bump_dataset_version()
     r3 = ops_check(home, now="2026-09-27T00:00:00Z")
     assert not r3["ok"] and r3["actions"][0]["code"] == "backup_stale" and "백업 필요 (정본 v3, 마지막 백업 v2)" in r3["actions"][0]["text"]
-    assert r3["last_good"]["checked_at"] == "2026-09-26T00:00:00Z" and r3["last_good_updated"] is False
-    assert read_last_good(home)[0]["checked_at"] == "2026-09-26T00:00:00Z"
-    assert "마지막 정상 상태: 2026-09-26T00:00:00Z" in ops_text(r3) and "갱신하지 않았다" in ops_text(r3)
+    assert r3["last_good"]["checked_at"] == "2026-09-26T01:00:00Z" and r3["last_good_updated"] is False
+    assert read_last_good(home)[0]["checked_at"] == "2026-09-26T01:00:00Z"
+    assert "마지막 정상 상태: 2026-09-26T01:00:00Z" in ops_text(r3) and "갱신하지 않았다" in ops_text(r3)
+
+
+def test_backup_contents_verified_not_just_manifest(db, home):
+    """포인터·manifest 가 그대로여도 백업 안의 사진·DB 사본이 지워지거나 바뀌면 정상이 아니다(backup-verify·restore 가 실패할 백업을 '최신' 이라 하지 않는다)."""
+    b = create_backup(db, home)
+    build_projection(db, home)
+    assert ops_check(home, now="2026-09-26T00:00:00Z")["ok"]
+    bdir = home / b.backup_dir
+    photo = next(p for p in (bdir / "photos").rglob("*") if p.is_file())
+    data = photo.read_bytes()
+    photo.unlink()
+    r = ops_check(home, now="2026-09-27T00:00:00Z")
+    assert not r["ok"] and [a["code"] for a in r["actions"]] == ["backup_verify_failed"] and r["backup"]["verify_problem"] == "file_missing"
+    assert r["backup"]["verified"] is False and r["backup"]["stale"] and r["backup"]["state"].startswith("손상")
+    assert read_last_good(home)[0]["checked_at"] == "2026-09-26T00:00:00Z" and r["last_good_updated"] is False
+    assert "[backup_verify_failed]" in ops_text(r) and "새 백업" in ops_text(r)
+    photo.write_bytes(data + b"x")  # 같은 이름, 다른 내용
+    assert ops_check(home)["backup"]["verify_problem"] == "file_hash"
+    photo.write_bytes(data)
+    assert ops_check(home, now="2026-09-28T00:00:00Z")["ok"]
+    # DB 사본 변조
+    dbcopy = bdir / "db" / "j5.sqlite3"
+    raw = dbcopy.read_bytes()
+    dbcopy.write_bytes(raw[:-1])
+    assert ops_check(home)["actions"][0]["code"] == "backup_verify_failed"
+    dbcopy.write_bytes(raw)
+    assert ops_check(home)["ok"]
+
+
+def test_last_good_write_failure_is_an_action_not_a_traceback(db, home):
+    create_backup(db, home)
+    build_projection(db, home)
+    (home / OPS_DIR).write_text("not a directory", encoding="utf-8")  # ops/ 자리를 파일이 차지: mkdir 이 OSError
+    r = ops_check(home)
+    assert not r["ok"] and [a["code"] for a in r["actions"]] == ["last_good_write_failed"] and r["last_good_updated"] is False and r["last_good"] is None
+    assert _log(home)[-1]["ok"] is False and _log(home)[-1]["actions"] == ["last_good_write_failed"]
+    assert "[last_good_write_failed]" in ops_text(r)
+    (home / OPS_DIR).unlink()
+    assert ops_check(home)["ok"]
 
 
 def test_readonly_open_does_not_migrate_old_store_and_rejects_newer(db, home):
@@ -156,7 +199,7 @@ def test_overdue_by_last_good_or_backup(db, home):
     r2 = ops_check(home, now=later)
     assert r2["overdue"]["basis"] == "마지막 통과 점검" and r2["overdue"]["days"] > CHECK_INTERVAL_DAYS and r2["overdue"]["overdue"] is True
     assert "반기 점검 기한 초과" in ops_text(r2)
-    assert r2["ok"] and read_last_good(home)[0]["checked_at"] == later, "기한 초과는 조치가 아니라 표시이며 통과하면 갱신된다"
+    assert r2["ok"] and read_last_good(home)[0]["checked_at"] == later == r2["last_good"]["checked_at"], "기한 초과는 조치가 아니라 표시이며 통과하면 갱신된다"
     # 손상된 마지막 정상 파일은 주의로 표시하고 통과 시 다시 쓴다
     (home / OPS_DIR / LAST_GOOD).write_text("{", encoding="utf-8")
     r3 = ops_check(home, now="2027-04-02T00:00:00Z")

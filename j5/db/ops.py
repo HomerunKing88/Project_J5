@@ -5,10 +5,12 @@ ops_check(data_home): 정본 파일을 읽기 전용으로 열어(마이그레�
     1. 버전: 정본 db_schema 와 도구 db_schema. 정본이 오래됐으면 대기 중인 마이그레이션 목록(적용은 `j5 db status` 등 쓰기 명령이 열 때 한다),
        정본이 도구보다 새로우면 이 도구로는 열지 않는다(도구 갱신).
     2. 정본 무결성·외래키 검사 (읽기 전용).
-    3. 백업 상태(포인터·manifest 실제 확인)와 마지막 백업 경과일. 파생본 상태. 사진 대사·수집 원본 대사.
+    3. 백업 상태(포인터·manifest 실제 확인)와 마지막 백업 경과일. 최신으로 보이면 백업 폴더를 전부 다시 읽어 검증한다(verify_backup_dir: 파일 해시·DB 사본·사진 연결).
+       manifest 만 남고 내용이 지워진 백업을 "최신" 이라 하지 않는다. 파생본 상태. 사진 대사·수집 원본 대사.
     4. 마지막 활동: 반영(import_runs)·수집 반영(collection_runs)·파생본 게시(projection_runs)·백업(포인터). 표가 없는 구버전 정본은 '표 없음'.
     5. 마지막 정상 상태 파일 `ops/last_known_good.json`: 점검을 통과했을 때만 갱신한다(앱·도구·db_schema·패키지·파생본·백업 스키마·SQLite·Python 버전,
-       dataset_version, 백업·파생본 위치). 통과하지 못하면 이전 파일을 그대로 두고 '마지막 정상' 으로 보여 준다. 매 실행은 logs/ops_check.log 에 남긴다.
+       dataset_version, 백업·파생본 위치). 통과하지 못하면 이전 파일을 그대로 두고 '마지막 정상' 으로 보여 준다. 파일을 쓸 수 없으면(디스크·권한) 조치 항목으로 낸다.
+       매 실행은 logs/ops_check.log 에 남긴다(로그 실패는 결과를 바꾸지 않는다).
     6. 반기 점검 기한: 마지막 통과 점검(또는 백업)이 CHECK_INTERVAL_DAYS 를 넘으면 기한 초과로 표시한다.
 
 통과(ok) = 할 일이 없음: 무결성·외래키 정상, 도구·정본 스키마 같음, 백업 최신·접근 가능, 파생본 최신, 참조 사진·원본 전부 확인.
@@ -27,7 +29,7 @@ from pathlib import Path
 
 from j5 import APP_VERSION, SUPPORTED_PACKAGE_SCHEMA_VERSIONS
 from j5.db import schema as S
-from j5.db.backup import BACKUP_SCHEMA_VERSION, _append_log, _table_counts, _write_atomic, backup_status, check_photos, check_raw_files
+from j5.db.backup import BACKUP_SCHEMA_VERSION, BackupError, _append_log, _table_counts, _write_atomic, backup_status, check_photos, check_raw_files, resolve_backup_dir, verify_backup_dir
 from j5.db.projection import PROJECTION_SCHEMA_VERSION, projection_status
 from j5.db.store import Db, DbError, default_db_path
 from j5.db.validate import now_utc
@@ -110,9 +112,10 @@ def ops_check(data_home: Path, *, db_path: Path | None = None, now: str | None =
     run_id = str(uuid.uuid4())
     r: dict = {"run_id": run_id, "checked_at": checked_at, "data_home": str(data_home), "db_path": str(path), "tool": tool_versions(),
                "ok": False, "actions": [], "warnings": [], "db": None, "schema": None, "backup": None, "projection": None, "photos": None, "raw": None,
-               "last_activity": None, "last_good": None, "last_good_problem": None, "last_good_updated": False, "overdue": None}
+               "last_activity": None, "last_good": None, "last_good_problem": None, "last_good_updated": False, "previous_last_good_at": None, "overdue": None}
     prev, prev_problem = read_last_good(data_home)
     r["last_good"], r["last_good_problem"] = prev, prev_problem
+    r["previous_last_good_at"] = (prev or {}).get("checked_at")
     if prev_problem:
         r["warnings"].append(f"마지막 정상 상태 파일을 읽을 수 없다 ({prev_problem}): 이번 점검이 통과하면 다시 쓴다")
     try:
@@ -129,14 +132,18 @@ def ops_check(data_home: Path, *, db_path: Path | None = None, now: str | None =
         msg = getattr(e, "message", str(e))
         r["db"] = {"ok": False, "problem": code, "message": msg}
         r["actions"].insert(0, {"code": code, "text": msg})
+    r["overdue"] = _overdue(r["previous_last_good_at"], r["backup"], now_dt)
+    if not r["actions"]:
+        # 통과: 마지막 정상 상태를 쓴다. 쓸 수 없으면(디스크 가득·권한) 조치 항목이며 이전 파일·값은 그대로 보여 준다
+        try:
+            r["last_good"] = _write_last_good(data_home, r)
+            r["last_good_updated"] = True
+        except OSError as e:
+            r["actions"].append({"code": "last_good_write_failed", "text": f"마지막 정상 상태 파일을 쓸 수 없다 ({type(e).__name__}: {e}). 디스크·권한을 확인한 뒤 다시 점검한다"})
     r["ok"] = not r["actions"]
-    lg_at = (prev or {}).get("checked_at")
-    r["overdue"] = _overdue(lg_at, r["backup"], now_dt)
-    if r["ok"]:
-        r["last_good_updated"] = _write_last_good(data_home, r)
     _append_log(data_home / OPS_LOG, {"checked_at": checked_at, "run_id": run_id, "ok": r["ok"], "actions": [a["code"] for a in r["actions"]],
                                       "db_schema_version": (r["schema"] or {}).get("db_schema_version"), "dataset_version": (r["db"] or {}).get("dataset_version"),
-                                      "app_version": APP_VERSION, "last_good_updated": r["last_good_updated"]})
+                                      "app_version": APP_VERSION, "last_good_updated": r["last_good_updated"]})  # 로그 실패는 결과를 바꾸지 않는다
     return r
 
 
@@ -164,9 +171,22 @@ def _check_db(db: Db, data_home: Path, r: dict, now_dt: datetime) -> None:
     # 백업·파생본 (기존 상태 함수. 읽기 전용 연결에서도 조회만 한다)
     bs = backup_status(db, data_home)
     bs["days_since"] = _days_since(bs.get("backup_at"), now_dt)
+    bs["verified"] = False
+    bs["verify_problem"] = None
     r["backup"] = bs
     if bs["stale"]:
         r["actions"].append({"code": "backup_" + (bs["problem"] or "stale"), "text": f"백업: {bs['state']}. `j5 db backup` (외장 위치면 --dest)"})
+    else:
+        # 포인터·manifest 가 맞아도 내용(DB 사본·사진·원본)이 지워지거나 바뀌었을 수 있다. 전부 다시 읽어 검증한 뒤에만 정상으로 본다
+        try:
+            verify_backup_dir(resolve_backup_dir(data_home, {"dir": bs["backup_dir"]}))
+            bs["verified"] = True
+        except (BackupError, DbError, OSError, ValueError, KeyError, sqlite3.Error) as e:
+            code = getattr(e, "code", type(e).__name__)
+            bs["verify_problem"] = code
+            bs["state"] = f"손상 (백업 필요: 내용 검증 실패 {code}, 기록상 v{bs['backup_version']})"
+            bs["stale"] = True
+            r["actions"].append({"code": "backup_verify_failed", "text": f"백업: {bs['state']}: {getattr(e, 'message', e)}. `j5 db backup` 으로 새 백업을 만든다 (옛 백업은 지우지 않는다)"})
     ps = projection_status(db, data_home) if db._has_table("projection_runs") else {"state": "표 없음 (db_schema < 3)", "stale": True, "published_at": None}
     r["projection"] = ps
     if ps["stale"]:
@@ -205,7 +225,7 @@ def _overdue(last_good_at: str | None, bs: dict | None, now_dt: datetime) -> dic
             "text": f"{basis} {ref} ({days}일 전){' · 반기 점검 기한 초과' if over else ''}"}
 
 
-def _write_last_good(data_home: Path, r: dict) -> bool:
+def _write_last_good(data_home: Path, r: dict) -> dict:
     d = {"format": LAST_GOOD_FORMAT, "last_good_schema_version": LAST_GOOD_SCHEMA_VERSION, "checked_at": r["checked_at"], "run_id": r["run_id"],
          **r["tool"], "study_id": r["db"]["study_id"], "data_mode": r["db"]["data_mode"], "dataset_version": r["db"]["dataset_version"],
          "db_schema_version_of_store": r["schema"]["db_schema_version"], "counts": r["db"]["counts"],
@@ -213,7 +233,7 @@ def _write_last_good(data_home: Path, r: dict) -> bool:
          "projection": {"dir": r["projection"].get("published_dir"), "published_at": r["projection"].get("published_at"), "dataset_version": r["projection"].get("published_version")}}
     (Path(data_home) / OPS_DIR).mkdir(parents=True, exist_ok=True)
     _write_atomic(Path(data_home) / OPS_DIR / LAST_GOOD, (json.dumps(d, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode("utf-8"))
-    return True
+    return d
 
 
 def ops_text(r: dict) -> str:
@@ -232,7 +252,7 @@ def ops_text(r: dict) -> str:
     if r["backup"]:
         b = r["backup"]
         extra = f" · 마지막 백업 {b['backup_at']} ({b['days_since']}일 전, {b.get('backup_dir')})" if b.get("backup_at") else ""
-        lines.append(f"백업: {b['state']}{extra}")
+        lines.append(f"백업: {b['state']}{' · 내용 검증 통과' if b.get('verified') else ''}{extra}")
     if r["projection"]:
         p = r["projection"]
         lines.append(f"파생본: {p['state']}" + (f" · 마지막 게시 {p['published_at']}" if p.get("published_at") else ""))
@@ -255,9 +275,8 @@ def ops_text(r: dict) -> str:
     lg = r["last_good"]
     if lg:
         lines.append(f"마지막 정상 상태: {lg['checked_at']} · j5 {lg['app_version']} · db_schema {lg['db_schema_version_of_store']} · dataset_version {lg['dataset_version']}"
-                     f" · SQLite {lg['sqlite_version']} · Python {lg['python_version']}" + (" (이번 점검으로 갱신)" if r["last_good_updated"] else ""))
-    elif r["last_good_updated"]:
-        lines.append("마지막 정상 상태: 이번 점검으로 처음 기록")
+                     f" · SQLite {lg['sqlite_version']} · Python {lg['python_version']}"
+                     + ((" (이번 점검으로 갱신, 이전 " + (r["previous_last_good_at"] or "없음") + ")") if r["last_good_updated"] else ""))
     else:
         lines.append("마지막 정상 상태: 기록 없음")
     for w in r["warnings"]:
