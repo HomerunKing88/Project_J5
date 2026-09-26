@@ -8,6 +8,7 @@ import { buildEvent, validateEvent, lineBytes, PHOTO_TAGS, PHOTO_TAG_LABEL, CHAN
 import { validateSeed } from "./seed.js";
 import { validateParcels, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea } from "./parcels.js";
 import { selectRecords, planBatches, buildPackage, hasRemainingBatches, studyIdError } from "./export.js";
+import { migrationReadiness, migrationText, persistenceText } from "./migrate.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
 export const APP_VERSION = "0.1.0";
@@ -51,6 +52,7 @@ async function saveSettings() {
   await state.store.setMeta("data_mode", $("data-mode").value);
   await state.store.setMeta("route_version_id", route || null);
   text($("settings-note"), "저장됨", "ok");
+  await renderMigrate(await state.store.listEvents());  // 설정(study_id·모드)이 바뀌면 '현재 설정' 기준이 바뀐다
   await refreshStatus();
 }
 
@@ -511,7 +513,22 @@ async function renderRecords() {
     el("div", { class: "muted", text: `event ${r.event_id.slice(0, 8)}… · 해시 ${(r.event_hash || "").slice(0, 12)}…` }),
   )));
   text($("record-count"), `(${events.length}건)`);
+  await renderMigrate(events);
   await refreshStatus();
+}
+
+// ---- 기기·도메인 이전 준비 (J5-017D) ----
+async function renderMigrate(events) {
+  const [studyId, dataMode] = await Promise.all([state.store.getMeta("study_id"), state.store.getMeta("data_mode")]);
+  const r = migrationReadiness(events, { studyId: studyId ?? null, dataMode: dataMode ?? "synthetic" });
+  const m = migrationText(r);
+  text($("migrate-note"), m.text, m.cls);
+  text($("migrate-origin"), location.origin);
+  let persisted = null;
+  try {
+    if (navigator.storage?.persisted) persisted = await navigator.storage.persisted();
+  } catch { persisted = null; }
+  text($("migrate-storage"), persistenceText(persisted));
 }
 
 async function refreshStatus() {

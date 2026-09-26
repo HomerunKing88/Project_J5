@@ -5,6 +5,7 @@
 ## 파일
 
 - `index.html` + `app/main.js`: R1a 현장 기록 앱 (J5-006). 설정(study_id·자료 모드·경로 버전 ID) → 시드 불러오기(가상 5개 또는 기기의 파일) → 필지 번들 불러오기(선택) → 물건 선택(목록, 지도의 점, 또는 필지 탭 → 그 안의 물건) → 관측 저장(상태·시각/날짜·설명·사진·태그, 선택으로 촬영 지점·방향·이전 사진: 반복 촬영의 연차 비교용, J5-015B) → 저장 목록. 목록이 주 화면이고 지도가 실패해도 목록으로 동작한다.
+- `app/migrate.js`: 기기·도메인 이전 준비(J5-017D, 데이터 사전 §12). 이 기기의 기록 중 내보내지 않은 수(현재 설정·다른 study/모드 구분)로 `이전 준비 완료 / 내보내기 필요` 를 판정하고, origin 과 지속 저장 여부(`navigator.storage.persisted`)를 표시한다. 내보냄은 PC 반영·백업이 아니며 앱은 기록을 지우지 않는다. 화면의 순서 안내: 내보내기 → PC 반영·백업 확인 → 새 기기에서 같은 설정 저장 → 파생본 시드·필지 불러오기 → 옛 기기 사이트 데이터는 확인 뒤 브라우저에서 삭제.
 - `app/map.js`: 최소 지도(J5-005, ADR-12). Web Mercator 투영으로 `location_point` 있는 물건만 SVG 점·라벨로 그린다(가상은 점선 빈 원, 실제·비공개는 채운 원). 드래그·핀치·휠·버튼으로 이동·확대, 점 탭으로 관측 시작, 축척 막대. 필지 번들이 있으면 점 아래 층에 경계 path(로컬 단위 + 그룹 transform, 가상은 점선)와 지번 라벨(픽셀 단위, 필지가 충분히 클 때만)을 그리고 필지 탭으로 필지 패널을 연다(J5-013B-1, ADR-13). 배경 타일·외부 통신 없음.
 - `app/parcels.js`: 필지 번들(`.j5parcels.json`, 파생본 `parcels.geojson`) 검증(`schemas/parcels_bundle.schema.json` 핵심 규칙), 라벨 위치, 점-필지 포함 판정(구멍 제외), 필지의 물건 찾기(정본 연결 `asset_ids` + 위치점 포함, 근거 표시). PNU 는 물건 ID 가 아니고 폰은 연결을 편집하지 않는다.
 - `app/db.js`: IndexedDB(`j5`, v2). 스토어 meta·assets·events(객체 + 고정 행 바이트 + 해시)·photos(sha256 → Blob)·parcels(필지 번들 한 벌). 관측과 사진은 한 트랜잭션으로 저장하고 실패 시 '저장됨'으로 표시하지 않는다. 자동 삭제 없음.
@@ -31,4 +32,4 @@ python -m http.server 8000 --directory web
 
 ## 테스트
 
-`node --test "tests/web/**/*.test.mjs"` (개발·CI 전용). 단위 테스트(sha256·정규화·검증·시각·지도 투영·필지 검증·기하)와 e2e(`app.e2e.test.mjs`: 헤드리스 Chromium 을 CDP 로 구동해 설정→시드→지도 마커 탭·확대→필지 경계·지번·필지 탭→관측 저장→재접속(필지 유지)→지도 실패 시 목록→내보내기→오프라인 재접속을 돌리고, IndexedDB 내용을 패키지 폴더로 꺼내 `python -m j5 inspect` 가 ok 를 내는지 확인. Chromium 이 없으면 건너뜀). `python -m pytest tests/test_web_static.py`는 외부 URL·인라인 스크립트·네트워크 API·HTML 문자열 삽입이 없고 서비스 워커가 앱 파일만 캐시하는지 검사한다.
+`node --test "tests/web/**/*.test.mjs"` (개발·CI 전용). 단위 테스트(sha256·정규화·검증·시각·지도 투영·필지 검증·기하·이전 준비 판정)와 e2e(`app.e2e.test.mjs`: 헤드리스 Chromium 을 CDP 로 구동해 설정→시드→지도 마커 탭·확대→필지 경계·지번·필지 탭→관측 저장→재접속(필지 유지)→지도 실패 시 목록→이전 준비 표시→내보내기(→이전 준비 완료)→오프라인 재접속을 돌리고, IndexedDB 내용을 패키지 폴더로 꺼내 `python -m j5 inspect` 가 ok 를 내는지 확인. Chromium 이 없으면 건너뜀). `python -m pytest tests/test_web_static.py`는 외부 URL·인라인 스크립트·네트워크 API·HTML 문자열 삽입이 없고 서비스 워커가 앱 파일만 캐시하는지 검사한다.
