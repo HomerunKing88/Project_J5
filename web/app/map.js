@@ -14,6 +14,7 @@ export const WORLD_METERS = 40075016.686; // WGS84 적도 둘레
 export const MIN_SCALE = 256; // z0: 세계 전체 = 256px
 export const MAX_SCALE = 256 * 2 ** 22; // z22
 export const FIT_MAX_SCALE = 256 * 2 ** 17; // 점 하나·극소 범위일 때의 기본 확대 (37.6° 에서 약 0.95 m/px)
+export const FOCUS_MAX_SCALE = 256 * 2 ** 19; // 필지 하나로 맞출 때의 상한 (약 0.24 m/px, J5-027)
 export const FIT_PAD = 40; // 전체 보기 여백(px). 라벨이 오른쪽으로 뻗는다.
 export const MAX_LAT = 85.05112878;
 export const SCALE_STEPS = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000];
@@ -141,12 +142,17 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}
   const layerShapes = node("g", { class: "layer-parcels" });
   const layerLabels = node("g", { class: "layer-parcel-labels" });
   const layerPts = node("g", { class: "layer-pts" });
+  const layerLocate = node("g", { class: "layer-locate" });   // 현재 위치 (J5-027): 정확도 원 + 점. 저장하지 않는다
+  const locateRing = node("circle", { class: "locate-ring", r: 0 });
+  const locateDot = node("circle", { class: "locate-dot", r: 6 });
+  layerLocate.append(locateRing, locateDot);
+  layerLocate.setAttribute("visibility", "hidden");
   const layerScale = node("g", { class: "layer-scale" });
   const scaleLine = node("line", { x1: 10, y1: 0, x2: 10, y2: 0 });
   const scaleText = node("text", { x: 10, y: 0 });
   layerScale.append(scaleLine, scaleText);
   const attribText = node("text", { class: "map-attrib", "text-anchor": "end" });
-  svgEl.replaceChildren(layerTiles, layerBase, layerRoadLabels, layerShapes, layerLabels, layerPts, layerScale, attribText);
+  svgEl.replaceChildren(layerTiles, layerBase, layerRoadLabels, layerShapes, layerLabels, layerPts, layerLocate, layerScale, attribText);
 
   let view = fitView([], 320, 280);
   let size = { w: 320, h: 280 };
@@ -156,6 +162,7 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}
   let parcelMode = "";
   let zoneColors = false;        // 용도지역 색 (J5-025): 필지 속성 use_zone_1 의 분류로 채움색
   const roads = []; // { id, name, mid, text, visible } (도로명 라벨 후보)
+  let location = null;           // { world:{x,y}, lat, accuracy } 또는 null
   let tiles = null;              // { url, minZoom, maxZoom, attribution } 또는 null (꺼짐)
   const tileNodes = new Map();   // key → image
   const tileStatus = { failed: 0, loaded: 0 };
@@ -227,6 +234,12 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}
     for (const m of markers.values()) {
       const p = toScreen(m.world, view);
       m.g.setAttribute("transform", `translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`);
+    }
+    if (location) {
+      const p = toScreen(location.world, view);
+      layerLocate.setAttribute("transform", `translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`);
+      const r = Number.isFinite(location.accuracy) ? location.accuracy / metersPerPixel(location.lat, view) : 0;
+      locateRing.setAttribute("r", Math.max(0, Math.min(r, 5000)).toFixed(1));
     }
     const lat = unmercator(toWorld(size.w / 2, size.h / 2, view))[1];
     const bar = scaleBar(lat, view);
@@ -369,6 +382,30 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}
       for (const pc of parcels.values()) setParcelClass(pc);
       render();
     },
+    /** 필지 하나로 화면을 맞춘다 (J5-027). 없는 PNU 면 false. 확대 상한은 FOCUS_MAX_SCALE. */
+    focusParcel(pnu) {
+      const pc = parcels.get(pnu);
+      if (!pc) return false;
+      measure();
+      const pad = 40, dx = Math.max(pc.wb.x1 - pc.wb.x0, 1e-12), dy = Math.max(pc.wb.y1 - pc.wb.y0, 1e-12);
+      const fit = Math.min((size.w - 2 * pad) / dx, (size.h - 2 * pad) / dy);   // fitView 의 FIT_MAX_SCALE 상한 대신 FOCUS_MAX_SCALE 까지 확대한다
+      const c = { x: (pc.wb.x0 + pc.wb.x1) / 2, y: (pc.wb.y0 + pc.wb.y1) / 2 };
+      const scale = clampScale(Math.min(Math.max(fit, view.scale), FOCUS_MAX_SCALE));   // 이미 더 확대돼 있으면 유지, 축소는 하지 않는다
+      view = { scale, tx: size.w / 2 - c.x * scale, ty: size.h / 2 - c.y * scale };
+      render();
+      return true;
+    },
+    /** 현재 위치 표시 (J5-027). {lon, lat, accuracy} 또는 null(지움). center 가 true 면 그 위치로 화면을 옮긴다(축척 유지). 위치는 그리기만 하고 저장하지 않는다. */
+    setLocation(loc, { center = true } = {}) {
+      if (!loc) { location = null; layerLocate.setAttribute("visibility", "hidden"); render(); return; }
+      location = { world: mercator([loc.lon, loc.lat]), lat: loc.lat, accuracy: loc.accuracy };
+      layerLocate.setAttribute("visibility", "visible");
+      if (center) {
+        measure();
+        view = { scale: view.scale, tx: size.w / 2 - location.world.x * view.scale, ty: size.h / 2 - location.world.y * view.scale };
+      }
+      render();
+    },
     /** 용도지역 색 켜기/끄기. 속성이 없는 필지는 그대로. 색이 칠해진 필지 수를 돌려준다. */
     setZoneColors(on) {
       zoneColors = !!on;
@@ -405,6 +442,7 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}
       parcels.clear();
       roads.length = 0;
       tileNodes.clear();
+      location = null;
     },
   };
 

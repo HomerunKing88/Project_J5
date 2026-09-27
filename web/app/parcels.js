@@ -257,3 +257,49 @@ export function parcelTitle(props) {
 export function fmtArea(m2, reason) {
   return Number.isFinite(m2) ? `${m2.toFixed(1)} ㎡` : `미확인 (${reason ?? "사유 없음"})`;
 }
+
+// ---- 필지 찾기 (J5-027): 지번·PNU 검색과 위치로 찾기. 순수 함수, 외부 통신 없음. ----
+
+/** 검색어 해석: "182-13", "산1-2", "종로5가 182-13", "가상동 1", 19자리 PNU. 못 읽으면 null. */
+export function parseParcelQuery(q) {
+  const s = String(q ?? "").trim().replace(/\s+/g, " ");
+  if (!s) return null;
+  if (/^\d{19}$/.test(s)) return { pnu: s };
+  const core = /^(산)?\s*(\d{1,4})(?:\s*-\s*(\d{1,4}))?(?:\s*[가-힣]{1,2})?$/;
+  let emd = null, m = core.exec(s);
+  if (!m) {   // 앞에 동 이름이 있으면 첫 공백에서 나눈다 (예: "종로5가 182-13", "가상동 산1-2")
+    const i = s.indexOf(" ");
+    if (i < 0) return null;
+    emd = s.slice(0, i);
+    m = core.exec(s.slice(i + 1).trim());
+    if (!m) return null;
+  }
+  return { emd, mountain: !!m[1], bon: Number(m[2]), bu: m[3] != null ? Number(m[3]) : null };
+}
+
+/** 검색어에 맞는 필지. 부번을 안 적으면 부번 0 을 먼저, 없으면 같은 본번 전체(부번 순). 동 이름은 앞부분 일치. 결과는 emd·bon·bu 순, 최대 limit. */
+export function findParcels(features, q, { limit = 20 } = {}) {
+  const query = parseParcelQuery(q);
+  if (!query || !Array.isArray(features)) return { query, matches: [] };
+  let matches;
+  if (query.pnu) matches = features.filter((f) => f.id === query.pnu);
+  else {
+    const emdOk = (p) => !query.emd || String(p.emd_name ?? "").startsWith(query.emd) || String(p.emd_code ?? "").startsWith(query.emd);
+    const base = features.filter((f) => { const p = f.properties ?? {}; return emdOk(p) && !!p.mountain === query.mountain && p.bon === query.bon; });
+    if (query.bu != null) matches = base.filter((f) => f.properties.bu === query.bu);
+    else {
+      const exact = base.filter((f) => f.properties.bu === 0);
+      matches = exact.length ? exact : base;
+    }
+  }
+  const key = (f) => [f.properties?.emd_name ?? "", f.properties?.bon ?? 0, f.properties?.bu ?? 0];
+  matches = [...matches].sort((a, b) => { const [ea, ba, ua] = key(a), [eb, bb, ub] = key(b); return ea.localeCompare(eb) || ba - bb || ua - ub; });
+  return { query, matches: matches.slice(0, limit), total: matches.length };
+}
+
+/** 위치(경도, 위도)가 들어 있는 필지 (첫 것). 없으면 null. */
+export function parcelAt(features, lonlat) {
+  if (!Array.isArray(features) || !Array.isArray(lonlat)) return null;
+  for (const f of features) if (pointInFeature(lonlat, f)) return f;
+  return null;
+}

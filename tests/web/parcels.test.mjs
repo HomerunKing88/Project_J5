@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { validateParcels, labelPoint, pointInFeature, assetsInParcel, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, polygonsOf, MAX_PARCELS, zoneCategory, ZONE_LABELS, fmtInt, attrLines, attrsSummary, fmtAttrValue, attrChangeText } from "../../web/app/parcels.js";
+import { validateParcels, labelPoint, pointInFeature, assetsInParcel, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, polygonsOf, MAX_PARCELS, zoneCategory, ZONE_LABELS, fmtInt, attrLines, attrsSummary, fmtAttrValue, attrChangeText, parseParcelQuery, findParcels, parcelAt } from "../../web/app/parcels.js";
 import { worldBbox, parcelPathD, parcelLabelVisible, mercator, fitView, FIT_MAX_SCALE, PARCEL_LOCAL_K } from "../../web/app/map.js";
 
 const bundle = () => JSON.parse(readFileSync(new URL("../fixtures/parcels/synthetic.j5parcels.json", import.meta.url), "utf8"));
@@ -194,4 +194,34 @@ test("attrs_history 검증·fmtAttrValue·attrChangeText (J5-026)", () => {
   assert.equal(attrChangeText({ first: false, changes: { ownership_kind: { from: "개인", to: "법인" }, ownership_changed_on: { from: "2017-01-01", to: "2026-09-24" } } }), "소유구분 개인 → 법인 · 소유 변동일 2017-01-01 → 2026-09-24");
   assert.equal(attrChangeText({ first: false, changes: {} }), "");
   assert.equal(attrChangeText({ first: false, changes: { ownership_kind_code: { from: "01", to: "06" }, price_base_year: { from: 2026, to: 2027 } } }), "", "코드·기준 연월만 바뀐 항목은 빈 글 (이력에 넣지 않음)");
+});
+
+test("parseParcelQuery·findParcels·parcelAt (J5-027)", () => {
+  assert.deepEqual(parseParcelQuery("182-13"), { emd: null, mountain: false, bon: 182, bu: 13 });
+  assert.deepEqual(parseParcelQuery(" 산1 - 2 "), { emd: null, mountain: true, bon: 1, bu: 2 });
+  assert.deepEqual(parseParcelQuery("종로5가 182-13대"), { emd: "종로5가", mountain: false, bon: 182, bu: 13 });
+  assert.deepEqual(parseParcelQuery("가상동 1"), { emd: "가상동", mountain: false, bon: 1, bu: null });
+  assert.deepEqual(parseParcelQuery("9999900100100010001"), { pnu: "9999900100100010001" });
+  assert.equal(parseParcelQuery(""), null);
+  assert.equal(parseParcelQuery("abc"), null);
+  assert.equal(parseParcelQuery(null), null);
+  const feats = bundle().features;
+  const ids = (r) => r.matches.map((f) => f.properties.label);
+  assert.deepEqual(ids(findParcels(feats, "1-1")), ["1-1"]);
+  assert.deepEqual(ids(findParcels(feats, "1")), ["1"], "부번을 안 적으면 부번 0 을 먼저");
+  assert.deepEqual(ids(findParcels(feats, "4")), ["4-2"], "부번 0 이 없으면 같은 본번 전체");
+  assert.deepEqual(ids(findParcels(feats, "산1-2")), ["산1-2"]);
+  assert.deepEqual(ids(findParcels(feats, "1-2")), [], "산 여부가 다르면 아님");
+  assert.deepEqual(ids(findParcels(feats, "가상동 2")), ["2"]);
+  assert.deepEqual(ids(findParcels(feats, "다른동 2")), []);
+  assert.deepEqual(ids(findParcels(feats, "9999900100100040002")), ["4-2"]);
+  assert.deepEqual(findParcels(feats, "?!").matches, []);
+  assert.equal(findParcels(feats, "?!").query, null);
+  const many = findParcels(feats.concat(feats.map((f) => ({ ...f, properties: { ...f.properties, bu: 9 } }))), "1", { limit: 1 });
+  assert.equal(many.total, 1, "부번 0 이 있으면 그것만");
+  assert.equal(findParcels(null, "1").matches.length, 0);
+  assert.equal(parcelAt(feats, [126.9996, 37.5705]).properties.label, "4-2");
+  assert.equal(parcelAt(feats, [126.9994, 37.5704]), null, "구멍 안은 밖");
+  assert.equal(parcelAt(feats, [127.1, 37.6]), null);
+  assert.equal(parcelAt(feats, null), null);
 });
