@@ -228,9 +228,10 @@ async function loadSeedObject(seed, source) {
   if (errs.length) return text($("seed-note"), "물건 목록 파일 오류: " + errs.slice(0, 5).join("; ") + (errs.length > 5 ? ` 외 ${errs.length - 5}건` : ""), "bad");
   await state.store.replaceAssets(seed, source);
   const from = source === "bundled_synthetic" ? "연습용" : source.replace(/^file:/, "");
-  text($("seed-note"), `물건 ${seed.length}개를 불러왔습니다 (${from}). 이전 목록은 교체됐고 저장된 기록은 그대로입니다.`, "ok");
   await renderAssets();
   await renderRecords();
+  // 안내는 목록·기록을 다 그린 뒤에 쓴다 (이 문구가 보이면 화면이 새 목록이다)
+  text($("seed-note"), `물건 ${seed.length}개를 불러왔습니다 (${from}). 이전 목록은 교체됐고 저장된 기록은 그대로입니다.`, "ok");
 }
 
 async function loadSyntheticSeed() {

@@ -219,7 +219,8 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     assert.equal(await cdp.eval("document.getElementById('parcel-new-asset').hidden"), true, "물건이 생기면 버튼은 숨는다");
     assert.match(await cdp.eval("document.getElementById('parcel-assets').textContent"), /가상동 산1-2.*위치점 포함/);
     await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
-    await cdp.eval("document.getElementById('load-synthetic').click(); 'ok'");
+    // 안내 문구를 비운 뒤 다시 넣는다 (앞선 적재의 같은 문구를 보고 지나치지 않게). 문구는 목록을 다 그린 뒤 쓰인다
+    await cdp.eval("document.getElementById('seed-note').textContent = ''; document.getElementById('load-synthetic').click(); 'ok'");
     await cdp.waitFor("document.getElementById('seed-note').textContent.includes('물건 5개를 불러왔습니다')");
     assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li > button').length"), 6, "시드를 다시 넣어도 기기 물건은 남는다");
     await cdp.eval(`${deviceLi}.querySelector('.meta button:last-child').click(); 'ok'`);
