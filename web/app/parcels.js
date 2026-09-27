@@ -189,8 +189,11 @@ export function priceTrend(attrs, history) {
       for (const k of PRICE_FIELDS) if (k in h.changes) before[k] = h.changes[k].from ?? null;
       state = before;
     }
-    // 가장 앞의 남은 항목이 '처음 확인' 이 아니면 파생본 이력 상한으로 앞부분이 잘린 것이다. 그 이전 값은 기준일을 모른다
-    if (!feats[0].first && PRICE_FIELDS.some((k) => k in feats[0].changes)) pts.push({ as_of: null, ...state, first: false, earlier: true });
+    // 남은 토지특성 항목에 '처음 확인' 이 없으면 파생본 이력 상한으로 앞부분이 잘린 것이다. 가격을 바꾼 항목이 하나라도 남아 있으면
+    // 거꾸로 짚은 끝의 값은 그 가장 이른 가격 변화의 이전 값이며 기준일을 모른다 (가장 앞 항목이 가격과 무관해도 마찬가지, 리뷰 반영 PR #76)
+    if (!feats.some((h) => h.first) && feats.some((h) => PRICE_FIELDS.some((k) => k in h.changes))) pts.push({ as_of: null, ...state, first: false, earlier: true });
+    // 잘린 이력에 가격 변화가 하나도 남지 않았으면 현재 값 하나 (이력 없는 번들과 같다)
+    if (!pts.length && Number.isFinite(attrs.official_land_price_krw_m2)) pts.push({ as_of: attrs.as_of ?? null, ...Object.fromEntries(PRICE_FIELDS.map((k) => [k, attrs[k] ?? null])), first: false, earlier: false });
   }
   const out = pts.reverse().filter((q) => Number.isFinite(q.official_land_price_krw_m2)).map((q) => ({
     as_of: q.as_of, price: q.official_land_price_krw_m2, year: q.price_base_year ?? null, month: q.price_base_month ?? null, first: q.first, earlier: q.earlier,
