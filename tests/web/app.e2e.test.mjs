@@ -334,16 +334,25 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       await cdp.eval("document.getElementById('nav-map').click(); 'ok'");
       await cdp.clickRect('#map-svg path.parcel[data-pnu="9999900100100010000"]');
       await cdp.waitFor("!document.getElementById('parcel-panel').hidden && document.getElementById('parcel-title').textContent === '가상동 1'");
+      assert.match(await cdp.eval("document.getElementById('parcel-attrs').textContent"), /공시지가13,000,000원\/㎡ .*소유구분법인 · 변동 2026-09-24.*속성 기준일2026-09-25/, "파생본의 현재 속성과 속성 기준일");
       await cdp.eval("document.getElementById('parcel-history').click(); 'ok'");
       await cdp.waitFor("!document.getElementById('sec-history').hidden");
       assert.equal(await cdp.eval("document.getElementById('history-title').textContent"), "가상동 1 필지");
-      const ph = await cdp.eval("Array.from(document.querySelectorAll('#history-list li')).map(li => [li.querySelector('.tl-date').textContent, li.querySelector('.tl-head').textContent, (li.querySelector('.tl-where') || {}).textContent || ''])");
+      const phAll = await cdp.eval("Array.from(document.querySelectorAll('#history-list li')).map(li => [li.querySelector('.tl-date').textContent, li.querySelector('.tl-head').textContent, (li.querySelector('.tl-where') || {}).textContent || '', li.querySelector('.tl-text').textContent])");
+      // 필지 속성 이력 (J5-026): 토지 자료의 처음 확인(2026-09-05, 자료 종류 3개)과 기준일 2026-09-25 의 변경(공시지가·소유)이 기준일 연도에 든다
+      const pa = phAll.filter((h) => h[1].includes("토지 자료"));
+      assert.deepEqual(pa.map((h) => [h[0], h[1].includes("처음 확인") ? "first" : "change"]), [["2026-09-25", "change"], ["2026-09-25", "change"], ["2026-09-05", "first"], ["2026-09-05", "first"], ["2026-09-05", "first"]], JSON.stringify(pa));
+      assert.ok(pa.some((h) => h[0] === "2026-09-25" && h[1].includes("토지특성") && h[3] === "공시지가 12,340,000원/㎡ → 13,000,000원/㎡"), JSON.stringify(pa));
+      assert.ok(pa.some((h) => h[0] === "2026-09-25" && h[1].includes("토지소유") && h[3].startsWith("소유구분 개인 → 법인") && h[3].includes("소유 변동일 2017-01-01 → 2026-09-24")), JSON.stringify(pa));
+      assert.ok(pa.some((h) => h[0] === "2026-09-05" && h[1].includes("토지특성") && h[3].startsWith("지목 대 · 공부면적 1770.5 ㎡ · 공시지가 12,340,000원/㎡")), JSON.stringify(pa));
+      const ph = phAll.filter((h) => !h[1].includes("토지 자료"));
       assert.deepEqual(ph.slice(1).map((h) => h[0]), ["2026-09-22", "2026-09-20", "2025-08-02", "2025-08-01"], JSON.stringify(ph));
       assert.ok(ph[0][1].includes("이 기기") && ph[0][1].includes("가상 물건 1"), "안의 물건의 이 기기 관측도 물건 이름과 함께");
       assert.ok(ph[3][1].includes("번지대") && ph[3][2] === "가상동 1-*", JSON.stringify(ph[3]));
       assert.ok(ph[4][1].includes("이 필지") && ph[4][2] === "가상동 1", JSON.stringify(ph[4]));
       assert.ok(ph.every((h) => !h[2].includes("가상동 *")), "동 전체 마스킹 거래는 필지에 붙지 않는다");
       assert.equal(await cdp.eval("document.getElementById('history-record').hidden"), true, "필지 이력에는 기록 시작 없음");
+      assert.deepEqual(await cdp.eval("Array.from(document.querySelectorAll('#history-list h3')).map(h => h.textContent)"), ["2026", "2025"]);
       await cdp.eval("document.getElementById('history-close').click(); 'ok'");
       await cdp.waitFor("document.getElementById('sec-history').hidden");
       // 재접속 뒤 유지

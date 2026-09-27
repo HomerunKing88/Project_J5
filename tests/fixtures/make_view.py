@@ -1,7 +1,7 @@
 """가상 조회 파생본(.j5view.zip) 생성기 (J5-023). 폰 앱의 "PC 자료 파일 가져오기" 와 이력 화면 시험용.
 
-임시 실데이터 홈에 가상 정본을 만들고(가상 시드 5개 → 관측 패키지 반영 → 가상 필지 6개 반영·위치점 연결 → 가상 실거래 2개년(로컬 가짜 서버) 반영·
-범위 규칙·거래 1건 확정 연결 → 목표 매수가 기록) `j5 db project` 로 파생본을 만들어 지정한 폴더에 복사한다. 생성 시각·run_id 가 들어가므로 바이트가
+임시 실데이터 홈에 가상 정본을 만들고(가상 시드 5개 → 관측 패키지 반영 → 가상 필지 6개 반영·위치점 연결 → 가상 VWorld 속성 번들 반영과 나중 기준일의
+공시지가·소유 변경(J5-026 속성 이력) → 가상 실거래 2개년(로컬 가짜 서버) 반영·범위 규칙·거래 1건 확정 연결 → 목표 매수가 기록) `j5 db project` 로 파생본을 만들어 지정한 폴더에 복사한다. 생성 시각·run_id 가 들어가므로 바이트가
 매번 다르다(저장소에 넣지 않고 시험 때 만든다). 가상자료만 쓰며 외부 통신은 없다(가짜 서버는 127.0.0.1).
 
     python tests/fixtures/make_view.py <출력 폴더> [--no-parcels]   → <출력 폴더>/synthetic.j5view.zip (--no-parcels 면 synthetic-noparcels.j5view.zip, 필지·연결 없음) 과 요약 JSON
@@ -37,6 +37,8 @@ STUDY = "j5-synthetic-study"
 SEED = ROOT / "assets.seed.synthetic.json"
 PACKAGE = ROOT / "packages" / "valid"
 PARCELS = ROOT / "parcels" / "synthetic.j5parcels.json"
+PARCELS_VW = ROOT / "parcels" / "synthetic_vworld.j5parcels.json"
+P1 = "9999900100100010000"
 A = [f"7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a5{i}" for i in range(5)]
 RULES = {"kind": "zone_rules", "name": "가상 범위", "core": ["가상동"], "comparison": ["가상2동"], "note": None}
 
@@ -69,6 +71,13 @@ def build(out_dir: Path, *, parcels: bool = True) -> dict:
             load_bundle(db, json.loads(PARCELS.read_text(encoding="utf-8")))
             sug = suggest_links(db, effective_from="2026-09-23")
             apply_links(db, {k: v for k, v in sug.items() if not k.startswith("_")})
+            # 필지 속성(J5-025)과 이력(J5-026): 가상 VWorld 번들(기준일 2026-09-05) 뒤에 기준일 2026-09-25 의 변형(필지 1 공시지가·소유 변경)을 넣는다
+            vw = json.loads(PARCELS_VW.read_text(encoding="utf-8"))
+            load_bundle(db, vw)
+            vw["source"]["geometry_version"] = "2026-09-25"
+            a1 = next(f for f in vw["features"] if f["id"] == P1)["properties"]["attrs"]
+            a1.update({"official_land_price_krw_m2": 13_000_000, "ownership_kind_code": "06", "ownership_kind": "법인", "ownership_changed_on": "2026-09-24", "ownership_change_cause_code": "04"})
+            load_bundle(db, vw)
         # 가짜 실거래 서버 (127.0.0.1) 로 2개년 수집 → 반영
         srv = HTTPServer(("127.0.0.1", 0), _Handler)
         t = threading.Thread(target=srv.serve_forever, daemon=True)

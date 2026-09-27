@@ -16,7 +16,7 @@ from pathlib import Path
 from j5 import APP_VERSION
 from j5.db.backup import EXIT_BY_OUTCOME as BACKUP_EXIT, BackupError, check_photos, check_photos_text, create_backup, restore_backup, verify_backup_dir
 from j5.db.importer import EXIT_BY_OUTCOME, import_package
-from j5.db.parcels import BUNDLE_SCHEMA as PARCELS_BUNDLE_SCHEMA, LINKS_SCHEMA as PARCELS_LINKS_SCHEMA, apply_links, load_bundle, load_json as load_parcels_json, suggest_links
+from j5.db.parcels import BUNDLE_SCHEMA as PARCELS_BUNDLE_SCHEMA, LINKS_SCHEMA as PARCELS_LINKS_SCHEMA, apply_links, attribute_history, history_text, load_bundle, load_json as load_parcels_json, suggest_links
 from j5.db.projection import EXIT_BY_OUTCOME as PROJECT_EXIT, ProjectionError, build_projection, copy_latest
 from j5.db.store import Db, DbError, default_db_path
 from j5.db.survey import apply_input, compare, compare_text, load_input, overview, overview_text, vacancy, vacancy_text
@@ -129,6 +129,9 @@ def _build_parser() -> argparse.ArgumentParser:
     ps_ = dsub.add_parser("parcels-suggest", help="위치점을 품는 필지를 물건마다 찾아 연결 제안 파일을 만든다 (정본에 쓰지 않음, 검토 후 parcels-link)")
     ps_.add_argument("--out", type=Path, help="제안을 쓸 JSON 파일 (덮어쓰지 않음). 생략하면 표준 출력")
     ps_.add_argument("--effective-from", help="연결 시작일 YYYY-MM-DD (기본 오늘, UTC)")
+    ph = dsub.add_parser("parcels-history", help="필지 하나의 속성 이력 (J5-026): 현재 값, 자료 종류·기준일별 스냅샷, 값이 바뀐 지점")
+    ph.add_argument("pnu", help="PNU 19자리")
+    ph.add_argument("--json", action="store_true")
     pk = dsub.add_parser("parcels-link", help="검토한 연결 파일(asset_components_input)을 정본 asset_components 에 반영한다")
     rl = dsub.add_parser("rt-load", help="실거래 수집 실행 기록(run-*.json)과 원본 XML 을 정본에 반영한다 (collection_runs / transaction_observations / transactions, db_schema 6). 같은 실행은 다시 반영하지 않는다")
     rl.add_argument("--lawd-cd", required=True, help="시군구 코드 5자리")
@@ -615,6 +618,10 @@ def _db_main(args) -> int:
                     return USAGE_ERROR
                 r = load_bundle(db, load_parcels_json(args.bundle, PARCELS_BUNDLE_SCHEMA))
                 sys.stdout.write(json.dumps(r.to_dict(), ensure_ascii=True, sort_keys=True, indent=2) + "\n" if args.json else r.to_text())
+                return 0
+            if args.db_command == "parcels-history":
+                h = attribute_history(db, args.pnu)
+                sys.stdout.write(json.dumps(h, ensure_ascii=False, indent=2) + "\n" if args.json else history_text(h))
                 return 0
             if args.db_command == "parcels-suggest":
                 eff = args.effective_from or db.now()[:10]

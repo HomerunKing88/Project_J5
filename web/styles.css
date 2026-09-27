@@ -158,6 +158,7 @@ textarea { resize: vertical; }
 .badge.match-exact { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
 .badge.match-prefix { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
 .badge.kind-transaction { background: var(--sel-soft); color: var(--sel); border-color: transparent; }
+.badge.kind-attrs { background: #fff3b0; color: #5c4a00; border-color: transparent; }
 .timeline { display: grid; gap: var(--space-4); }
 .timeline h3 { font-size: 1rem; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 4px; }
 .timeline ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }

@@ -38,6 +38,8 @@ class ParcelLoadResult:
     attrs_inserted: int = 0             # J5-025 필지 속성
     attrs_updated: int = 0
     attrs_unchanged: int = 0
+    snapshots_inserted: int = 0         # J5-026 기준일별 스냅샷 (자료 종류마다)
+    snapshots_replaced: int = 0         # 같은 (필지, 종류, 기준일) 에 다른 값 → 값 교체
     dataset_version: int = 0
     source_document_id: str | None = None
     source_name: str = ""
@@ -46,11 +48,14 @@ class ParcelLoadResult:
 
     def to_dict(self) -> dict:
         return {"outcome": self.outcome, "inserted": self.inserted, "updated": self.updated, "unchanged": self.unchanged,
-                "attrs_inserted": self.attrs_inserted, "attrs_updated": self.attrs_updated, "attrs_unchanged": self.attrs_unchanged, "dataset_version": self.dataset_version,
+                "attrs_inserted": self.attrs_inserted, "attrs_updated": self.attrs_updated, "attrs_unchanged": self.attrs_unchanged,
+                "snapshots_inserted": self.snapshots_inserted, "snapshots_replaced": self.snapshots_replaced, "dataset_version": self.dataset_version,
                 "source_document_id": self.source_document_id, "source_name": self.source_name, "geometry_version": self.geometry_version, "message": self.message}
 
     def to_text(self) -> str:
         attrs = f" · 필지 속성 신규 {self.attrs_inserted}, 갱신 {self.attrs_updated}, 변화 없음 {self.attrs_unchanged}" if (self.attrs_inserted or self.attrs_updated or self.attrs_unchanged) else ""
+        if self.snapshots_inserted or self.snapshots_replaced:
+            attrs += f" · 속성 스냅샷 신규 {self.snapshots_inserted}, 같은 기준일 교체 {self.snapshots_replaced}"
         return (f"필지 반영: {'반영됨' if self.outcome == 'applied' else '변화 없음'} · 신규 {self.inserted}, 갱신 {self.updated}, 변화 없음 {self.unchanged}{attrs}"
                 f" · dataset_version {self.dataset_version} · {self.source_name} (도형 기준일 {self.geometry_version})\n{self.message}\n")
 
@@ -238,7 +243,20 @@ def load_bundle(db: Db, doc: dict) -> ParcelLoadResult:
                 attrs_plan.append(("unchanged", feature["id"], content, h, sources))   # 같은 값이면 출처 파일이 달라도 변화 없음 (필지 규칙과 같다)
             else:
                 attrs_plan.append(("update", feature["id"], content, h, sources))
-        changed = any(a in ("insert", "update") for a, *_ in plan) or any(a in ("insert", "update") for a, *_ in attrs_plan)
+        # 1c) 속성 스냅샷(J5-026): 번들에 든 자료 종류마다 (필지, 종류, 기준일) 한 행. 없으면 신규, 같은 값이면 그대로, 같은 기준일에 다른 값이면 교체(같은 날짜의 재다운로드).
+        #     값이 안 바뀐 새 기준일도 신규 스냅샷이다("그 날짜에도 같았다" 는 기록). 현재 값(parcel_attributes)이 변화 없음이어도 스냅샷이 늘면 정본은 바뀐 것이다
+        source_by_kind = {a["kind"]: a for a in attrs_sources}
+        snap_plan = []
+        for _action, pnu, content, _h, _sources in attrs_plan:
+            for kind in sorted(kinds):
+                values = {k: content[k] for k in ATTR_GROUPS[kind]}
+                row = db.conn.execute("SELECT s.snapshot_id, s.values_json FROM parcel_attribute_snapshots s JOIN parcels p ON p.parcel_id = s.parcel_id WHERE p.pnu = ? AND s.kind = ? AND s.as_of = ?",
+                                      (pnu, kind, content["as_of"])).fetchone()
+                if row is None:
+                    snap_plan.append(("insert", pnu, kind, content["as_of"], values, None))
+                elif json.loads(row["values_json"]) != values:
+                    snap_plan.append(("replace", pnu, kind, content["as_of"], values, row["snapshot_id"]))
+        changed = any(a in ("insert", "update") for a, *_ in plan) or any(a in ("insert", "update") for a, *_ in attrs_plan) or bool(snap_plan)
         n_insert = sum(1 for a, *_ in plan if a == "insert")
         total_after = db.conn.execute("SELECT COUNT(*) FROM parcels").fetchone()[0] + n_insert
         if total_after > MAX_FEATURES:
@@ -291,6 +309,17 @@ def load_bundle(db: Db, doc: dict) -> ParcelLoadResult:
                 r.attrs_inserted += 1
             else:
                 r.attrs_updated += 1
+        for action, pnu, kind, as_of, values, sid in snap_plan:
+            pid = db.conn.execute("SELECT parcel_id FROM parcels WHERE pnu = ?", (pnu,)).fetchone()["parcel_id"]
+            src_json = _canon(source_by_kind[kind]) if kind in source_by_kind else None
+            if action == "insert":
+                db.conn.execute("INSERT INTO parcel_attribute_snapshots (snapshot_id, parcel_id, kind, as_of, values_json, source_json, source_document_id, recorded_at, updated_at)"
+                                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (str(uuid.uuid4()), pid, kind, as_of, _canon(values), src_json, doc_id, now, now))
+                r.snapshots_inserted += 1
+            else:
+                db.conn.execute("UPDATE parcel_attribute_snapshots SET values_json = ?, source_json = ?, source_document_id = ?, updated_at = ? WHERE snapshot_id = ?",
+                                (_canon(values), src_json, doc_id, now, sid))
+                r.snapshots_replaced += 1
         if changed:
             r.source_document_id = doc_id
             r.outcome = "applied"
@@ -410,6 +439,90 @@ def apply_links(db: Db, doc: dict) -> LinkResult:
     return r
 
 
+# ---------------------------------------------------------------- 필지 속성 이력 (J5-026)
+
+MAX_HISTORY_ENTRIES = 200   # 파생본 필지마다 싣는 변화 항목 상한 (스키마 계약과 같다). 넘으면 최근 것만
+
+
+def _snapshot_changes(snaps: list) -> list[dict]:
+    """한 필지의 스냅샷(kind, as_of 오름차순)에서 값이 바뀐 지점만 [{as_of, kind, changes:{field:{from,to}}}]. 종류마다 첫 스냅샷은 from=null 인 '처음 확인' 항목이다."""
+    out = []
+    prev: dict[str, dict] = {}
+    for s_ in sorted(snaps, key=lambda x: (x["as_of"], x["kind"])):
+        values = json.loads(s_["values_json"]) if isinstance(s_["values_json"], str) else s_["values_json"]
+        before = prev.get(s_["kind"])
+        if before is None:
+            changes = {k: {"from": None, "to": v} for k, v in values.items() if not (v is None or v is False or v == [])}   # 0 은 값이다 (리뷰 반영)
+        else:
+            changes = {k: {"from": before.get(k), "to": v} for k, v in values.items() if before.get(k) != v}
+        if changes:
+            out.append({"as_of": s_["as_of"], "kind": s_["kind"], "first": before is None, "changes": changes})
+        prev[s_["kind"]] = values
+    return out
+
+
+def _changes_by_parcel(db: Db) -> dict[str, list[dict]]:
+    rows = db.conn.execute("SELECT parcel_id, kind, as_of, values_json FROM parcel_attribute_snapshots ORDER BY parcel_id, as_of, kind").fetchall()
+    by: dict[str, list] = {}
+    for r_ in rows:
+        by.setdefault(r_["parcel_id"], []).append(dict(r_))
+    return {pid: _snapshot_changes(snaps) for pid, snaps in by.items()}
+
+
+def attribute_history(db: Db, pnu: str) -> dict:
+    """PNU 하나의 속성 이력: 현재 값, 스냅샷 목록(종류·기준일·값·출처), 변화 항목. 정본에 없으면 DbError."""
+    p = db.conn.execute("SELECT parcel_id, pnu, label, emd_name, emd_code, geometry_version FROM parcels WHERE pnu = ?", (pnu,)).fetchone()
+    if p is None:
+        raise DbError("parcel_missing", f"PNU {pnu} 가 정본 parcels 에 없다")
+    cur = db.conn.execute("SELECT * FROM parcel_attributes WHERE parcel_id = ?", (p["parcel_id"],)).fetchone()
+    current = None
+    if cur is not None:
+        current = _attrs_content_from_row(cur)
+        current["as_of"] = cur["as_of"]
+    snaps = [dict(r_) for r_ in db.conn.execute("SELECT kind, as_of, values_json, source_json, source_document_id, recorded_at FROM parcel_attribute_snapshots WHERE parcel_id = ? ORDER BY as_of, kind", (p["parcel_id"],))]
+    for s_ in snaps:
+        s_["values"] = json.loads(s_.pop("values_json"))
+        src_json = s_.pop("source_json")
+        s_["source"] = json.loads(src_json) if src_json else None
+    return {"pnu": pnu, "label": f"{p['emd_name'] or p['emd_code']} {p['label']}", "geometry_version": p["geometry_version"], "current": current,
+            "snapshots": snaps, "changes": _snapshot_changes([{"kind": s_["kind"], "as_of": s_["as_of"], "values_json": s_["values"]} for s_ in snaps])}
+
+
+ATTR_LABELS = {"jimok_name": "지목", "registered_area_m2": "공부면적(㎡)", "official_land_price_krw_m2": "공시지가(원/㎡)", "price_base_year": "공시 기준연도", "price_base_month": "공시 기준월",
+               "use_zone_1": "용도지역 1", "use_zone_2": "용도지역 2", "land_use_situation": "이용상황", "road_side": "도로접면", "terrain_height": "지형 높이", "terrain_form": "지형 형상",
+               "plan_zones": "규제·지역지구", "plan_zones_truncated": "이름 목록 잘림", "ownership_kind_code": "소유 구분 코드", "ownership_kind": "소유 구분", "co_owner_count": "공유인수",
+               "ownership_changed_on": "소유 변동일", "ownership_change_cause_code": "변동 원인 코드", "national_institution_code": "국가기관 구분"}
+KIND_LABELS = {"land_feature": "토지특성", "land_plan": "토지이용계획", "land_ownership": "토지소유"}
+
+
+def _fmt_attr_value(field: str, v) -> str:
+    if v is None:
+        return "없음"
+    if field == "plan_zones":
+        return ", ".join((z.get("name") or z.get("code")) + (f"({z['relation']})" if z.get("relation") and z["relation"] != "포함" else "") for z in v) or "없음"
+    if field == "official_land_price_krw_m2":
+        return f"{int(v):,}"
+    return str(v)
+
+
+def history_text(h: dict) -> str:
+    lines = [f"필지 {h['label']} (PNU {h['pnu']}, 도형 기준일 {h['geometry_version']})"]
+    if h["current"] is None:
+        lines.append("필지 속성 없음 (VWorld 묶음으로 변환한 번들을 parcels-load 로 넣는다)")
+    else:
+        c = h["current"]
+        lines.append(f"현재 (기준일 {c['as_of']}): 지목 {c['jimok_name'] or '없음'} · 공부면적 {c['registered_area_m2'] if c['registered_area_m2'] is not None else '없음'}㎡ · 공시지가 {_fmt_attr_value('official_land_price_krw_m2', c['official_land_price_krw_m2'])}원/㎡"
+                     f" ({c['price_base_year'] or '?'}년 {c['price_base_month'] or '?'}월) · 용도지역 {c['use_zone_1'] or '없음'} · 소유 {c['ownership_kind'] or '없음'}")
+    lines.append(f"스냅샷 {len(h['snapshots'])}건: " + ", ".join(f"{s_['as_of']} {KIND_LABELS.get(s_['kind'], s_['kind'])}" for s_ in h["snapshots"]) if h["snapshots"] else "스냅샷 없음")
+    for ch in h["changes"]:
+        head = f"{ch['as_of']} {KIND_LABELS.get(ch['kind'], ch['kind'])}" + (" (처음 확인)" if ch["first"] else "")
+        body = "; ".join(f"{ATTR_LABELS.get(k, k)}: {_fmt_attr_value(k, d['from'])} → {_fmt_attr_value(k, d['to'])}" if not ch["first"] else f"{ATTR_LABELS.get(k, k)} {_fmt_attr_value(k, d['to'])}"
+                         for k, d in ch["changes"].items())
+        lines.append(f"  {head}: {body}")
+    lines.append("값은 자료 표기 그대로이며 확인·판단이 아니다. 기준일은 자료를 내려받아 변환할 때 적은 도형 기준일이다.")
+    return "\n".join(lines) + "\n"
+
+
 # ---------------------------------------------------------------- 파생본용 조회
 
 def parcels_bundle_from_db(db: Db, *, generated_at: str, source_dataset_version: int | None = None) -> dict | None:
@@ -427,12 +540,17 @@ def parcels_bundle_from_db(db: Db, *, generated_at: str, source_dataset_version:
             attrs = _attrs_content_from_row(a)
             attrs["as_of"] = a["as_of"]   # 속성 기준일: 도형 기준일과 별개로 폰이 따로 보인다 (리뷰 반영)
             attrs_by_id[a["parcel_id"]] = attrs
-            for s_ in json.loads(a["sources_json"]):
+            for s_ in json.loads(a["sources_json"]):   # 출처는 모든 속성 행에서 모은다 (구역·부분 묶음마다 다르다, 리뷰 반영 PR #72)
                 key = (s_["kind"], s_["dbf_sha256"])
                 if key not in seen:
                     seen.add(key)
                     attrs_sources.append(s_)
         attrs_sources.sort(key=lambda s_: (s_["kind"], s_["dbf_sha256"]))
+    history_by_id: dict[str, list[dict]] = {}
+    if db._has_table("parcel_attribute_snapshots"):
+        for pid, entries in _changes_by_parcel(db).items():
+            if entries:
+                history_by_id[pid] = entries
     today = generated_at[:10]
     links: dict[str, list[str]] = {}
     for l in active_links(db, today):
@@ -445,6 +563,8 @@ def parcels_bundle_from_db(db: Db, *, generated_at: str, source_dataset_version:
                  "asset_ids": sorted(links.get(p["pnu"], []))}
         if p["parcel_id"] in attrs_by_id:
             props["attrs"] = attrs_by_id[p["parcel_id"]]
+        if p["parcel_id"] in history_by_id:
+            props["attrs_history"] = history_by_id[p["parcel_id"]][-MAX_HISTORY_ENTRIES:]
         features.append({"type": "Feature", "id": p["pnu"], "geometry": json.loads(p["geometry_json"]), "properties": props})
     latest = max(rows, key=lambda p: (p["geometry_version"], p["updated_at"]))
     sources = sorted({(p["source_name"], p["geometry_version"]) for p in rows})
