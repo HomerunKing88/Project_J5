@@ -469,6 +469,26 @@ def _changes_by_parcel(db: Db) -> dict[str, list[dict]]:
     return {pid: _snapshot_changes(snaps) for pid, snaps in by.items()}
 
 
+def price_series(snapshots: list[dict]) -> list[dict]:
+    """토지특성 스냅샷(기준일 오름차순)에서 공시지가가 바뀐 지점만 [{as_of, price_krw_m2, base_year, base_month, delta_pct, same_base}] (J5-030).
+    값이 없는 기준일은 건너뛰고, 같은 값·같은 기준연월이 이어지면 하나로 둔다. same_base 는 앞 점과 기준연월이 같은데 값이 다른 경우(정정 등, 확인 필요).
+    폰의 priceTrend(web/app/parcels.js)와 같은 규칙이다."""
+    out: list[dict] = []
+    for s_ in sorted((x for x in snapshots if x["kind"] == "land_feature"), key=lambda x: x["as_of"]):
+        v = s_["values"]
+        price = v.get("official_land_price_krw_m2")
+        if price is None:
+            continue
+        pt = {"as_of": s_["as_of"], "price_krw_m2": price, "base_year": v.get("price_base_year"), "base_month": v.get("price_base_month")}
+        prev = out[-1] if out else None
+        if prev and (prev["price_krw_m2"], prev["base_year"], prev["base_month"]) == (price, pt["base_year"], pt["base_month"]):
+            continue
+        pt["delta_pct"] = round((price - prev["price_krw_m2"]) / prev["price_krw_m2"] * 100, 2) if prev and prev["price_krw_m2"] > 0 else None
+        pt["same_base"] = bool(prev) and prev["base_year"] is not None and (prev["base_year"], prev["base_month"]) == (pt["base_year"], pt["base_month"])
+        out.append(pt)
+    return out
+
+
 def attribute_history(db: Db, pnu: str) -> dict:
     """PNU 하나의 속성 이력: 현재 값, 스냅샷 목록(종류·기준일·값·출처), 변화 항목. 정본에 없으면 DbError."""
     p = db.conn.execute("SELECT parcel_id, pnu, label, emd_name, emd_code, geometry_version FROM parcels WHERE pnu = ?", (pnu,)).fetchone()
@@ -485,7 +505,8 @@ def attribute_history(db: Db, pnu: str) -> dict:
         src_json = s_.pop("source_json")
         s_["source"] = json.loads(src_json) if src_json else None
     return {"pnu": pnu, "label": f"{p['emd_name'] or p['emd_code']} {p['label']}", "geometry_version": p["geometry_version"], "current": current,
-            "snapshots": snaps, "changes": _snapshot_changes([{"kind": s_["kind"], "as_of": s_["as_of"], "values_json": s_["values"]} for s_ in snaps])}
+            "snapshots": snaps, "changes": _snapshot_changes([{"kind": s_["kind"], "as_of": s_["as_of"], "values_json": s_["values"]} for s_ in snaps]),
+            "price_series": price_series(snaps)}
 
 
 ATTR_LABELS = {"jimok_name": "지목", "registered_area_m2": "공부면적(㎡)", "official_land_price_krw_m2": "공시지가(원/㎡)", "price_base_year": "공시 기준연도", "price_base_month": "공시 기준월",
@@ -519,6 +540,13 @@ def history_text(h: dict) -> str:
         body = "; ".join(f"{ATTR_LABELS.get(k, k)}: {_fmt_attr_value(k, d['from'])} → {_fmt_attr_value(k, d['to'])}" if not ch["first"] else f"{ATTR_LABELS.get(k, k)} {_fmt_attr_value(k, d['to'])}"
                          for k, d in ch["changes"].items())
         lines.append(f"  {head}: {body}")
+    ps = h.get("price_series") or []
+    if len(ps) >= 2:
+        lines.append("공시지가 추이 (원/㎡, 값이 바뀐 지점):")
+        for pt in ps:
+            base = f"{pt['base_year']}년" + (f" {pt['base_month']}월" if pt["base_month"] else "") + " 기준" if pt["base_year"] else "기준연월 미확인"
+            delta = "" if pt["delta_pct"] is None else f" ({pt['delta_pct']:+.1f}%)"
+            lines.append(f"  {base} {int(pt['price_krw_m2']):,}{delta} · 확인 {pt['as_of']}" + (" · 같은 기준연월의 값이 바뀜 (정정 여부 확인)" if pt["same_base"] else ""))
     lines.append("값은 자료 표기 그대로이며 확인·판단이 아니다. 기준일은 자료를 내려받아 변환할 때 적은 도형 기준일이다.")
     return "\n".join(lines) + "\n"
 
