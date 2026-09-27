@@ -274,6 +274,18 @@ test("공시지가 추이: 같은 기준연월의 값 변경·하락·잘린 이
   ]);
   assert.deepEqual(cut.map((q) => [q.as_of, q.price, q.earlier]), [[null, 10_000_000, true], ["2027-06-01", 11_000_000, false]]);
   assert.equal(priceTrendRow(cut[0])[3], "이전 자료 (기준일 모름)");
+  // 잘린 이력의 가장 앞 항목이 가격과 무관해도(이용상황만 바뀜) 뒤의 가격 변화에서 이전 값을 되살린다 (리뷰 반영 PR #76)
+  const cut2 = priceTrend({ official_land_price_krw_m2: 11_000_000, price_base_year: 2027 }, [
+    { as_of: "2026-12-01", kind: "land_feature", first: false, changes: { land_use_situation: { from: "상업용", to: "업무용" } } },
+    { as_of: "2027-06-01", kind: "land_feature", first: false, changes: { official_land_price_krw_m2: { from: 10_000_000, to: 11_000_000 }, price_base_year: { from: 2026, to: 2027 } } },
+  ]);
+  assert.deepEqual(cut2.map((q) => [q.as_of, q.price, q.year, q.earlier]), [[null, 10_000_000, 2026, true], ["2027-06-01", 11_000_000, 2027, false]]);
+  assert.equal(priceTrendRow(cut2[1])[2], "+10.0%");
+  // 잘렸지만 남은 항목에 가격 변화가 없으면 현재 값 하나뿐이다 (추이 표 없음)
+  const cut3 = priceTrend({ official_land_price_krw_m2: 11_000_000, price_base_year: 2027, as_of: "2027-09-01" }, [
+    { as_of: "2027-09-01", kind: "land_feature", first: false, changes: { road_side: { from: "세로한면", to: "광대로한면" } } },
+  ]);
+  assert.deepEqual(cut3.map((q) => [q.as_of, q.price, q.earlier]), [["2027-09-01", 11_000_000, false]]);
   // 이력 없는 번들(J5-025): 현재 값 하나. 공시지가 없는 필지: 점 없음. 속성 없음: 빈 목록
   assert.deepEqual(priceTrend({ official_land_price_krw_m2: 5_000_000, price_base_year: 2026, as_of: "2026-09-05" }, undefined).map((q) => [q.as_of, q.price]), [["2026-09-05", 5_000_000]]);
   assert.deepEqual(priceTrend({ official_land_price_krw_m2: null, jimok_name: "도" }, [{ as_of: "2026-09-05", kind: "land_feature", first: true, changes: { jimok_name: { from: null, to: "도" } } }]), []);
