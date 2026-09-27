@@ -131,6 +131,19 @@ python -m j5 db [--db 경로] case-export [--asset <asset_id> ...] [--data-home 
 - `case-recheck`: 계약 직전(`pre_contract`)·잔금 직전(`pre_settlement`) 재확인을 불변 기록(`readiness_rechecks`, db_schema 14)으로 남긴다(`schemas/readiness_recheck.schema.json`, `kind: stage_recheck`). 권리·임대차와 세무·법적·규제 항목은 필수이고 다른 항목은 선택이다. 항목 결과는 `confirmed`(근거 문서 1건 이상) / `changed` / `unconfirmed`. 변경·미확인 항목이나 문제 목록이 있으면 `outcome` 은 `issues_found` 여야 하며, 그때 purchase_ready 면 그 자리에서 `[재확인 문제] <단계>: ...` 사유로 철회 이력을 남기고 `detailed_review` 로 되돌린다. 현재 검토 기록의 마지막 재확인이 문제 확인이면 `readiness` 는 준비 아님이다. 변경을 새 검토 기록으로 반영한 뒤 다시 승인·재확인한다. 재확인은 법적 판단을 대신하지 않는다.
 - `case-export`: 매입 검토 사건 비교자료. 대상 물건(생략 시 현재 검토 기록이 있는 물건 전부)마다 검토 기록·진입조건 판정(항목별 verdict·미확인·변경·재확인)·참조 기록(목표 매수가·투자판단·자금안·개발안·규제 검토의 저장 payload)·규제·개발안·자금안 현황·결정 이력을 `cases.json` 으로, 물건당 한 행(범위·가격·전략·목표가·필요자기자본·최대 필요자기자본·여유면적·규제 상태·체크리스트 판정·재확인·결정)을 `cases.csv` 로, 설명을 `README.txt` 로 `J5_DATA_HOME/exports/private/cases/<YYYYMMDD-HHMMSS>-<run8>/` 에 쓴다(`--out` 으로 다른 상위 폴더). 매번 새 폴더이며 덮어쓰지 않는다. 값은 정본 그대로이고 계산을 다시 하지 않으며 빈 칸은 미확인이다(0 이 아니다). 실데이터가 들어가므로 저장소·공개 배포에 넣지 않는다.
 
+## 관심 단계·관찰목록 (R2, J5-029, ADR-22)
+
+```text
+python -m j5 db [--db 경로] asset-track <asset_id> [단계] [--reason 사유] [--on YYYY-MM-DD] [--json]
+python -m j5 db [--db 경로] watchlist [--json]
+```
+
+- `asset-track <asset_id> <단계>`: `assets.tracking_status` 를 바꾸고 `tracking_changes`(db_schema 17, 불변)에 이전·새 단계·변경일(생략 시 오늘)·사유를 남기며 dataset_version 을 올린다. 단계는 `unreviewed / background / watch / detailed_review / hold / excluded / archived`. `hold`·`excluded`·`archived` 로 옮길 때는 `--reason` 이 필요하다. 같은 단계면 변경 없음. `purchase_ready` 로의 전환은 `readiness-approve`, 그 물건의 단계 변경은 `readiness-withdraw` 로 철회한 뒤 한다(둘 다 거절). 준비 결정(승인·철회)도 같은 이력 표에 `decision_id` 와 함께 남고, 마이그레이션 17 이 기존 결정을 백필한다.
+- `asset-track <asset_id>`(단계 생략): 현재 단계·관찰목록 여부·확인 전(pending) 여부와 변경 이력.
+- `watchlist`: 단계별 물건 수, 확인 전 물건 수, 관찰목록(`watch`·`detailed_review`·`purchase_ready`)과 마지막 변경일. 50개를 넘으면 운영 목표를 넘는다고 적는다(막지 않는다).
+- 파생본 시드(`assets.seed.json`)에 물건마다 `tracking_status`·`resolution_status` 가 정본 출력값으로 붙어 폰이 배지·"관찰목록만" 필터로 쓴다. `load-seed` 는 이 필드가 든 시드를 거절한다(파생본 시드를 정본 입력으로 되돌리지 않는다). 폰은 단계를 바꾸지 못한다.
+- 단계는 분류이며 매입 판단·조건 충족이 아니다. 실제 정본에는 백업을 먼저 만든 뒤 `j5 db status` 로 버전 17·무결성을 확인한다.
+
 ## 조사 경로·점포·표본틀·세션 (R2, J5-013A)
 
 ```text
