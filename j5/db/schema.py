@@ -747,6 +747,42 @@ CREATE TRIGGER readiness_rechecks_no_delete BEFORE DELETE ON readiness_rechecks 
 END;
 """
 
+# J5-025 필지 속성 (ADR-19, 데이터 사전 §6). VWorld 토지특성·토지이용계획·토지소유공간정보에서 읽은 값을 필지(parcels)마다 한 행으로 둔다.
+# - 값은 자료 그대로이며 확인·판단이 아니다(근거는 sources_json·source_document_id, 시점은 as_of). 결측은 NULL.
+# - 소유는 구분 코드·구분명·공유인수·변동일·원인 코드·국가기관 구분뿐이며 이름·주소·연령대·거주 구분은 담지 않는다(AGENTS.md 보안).
+# - 공부면적(registered_area_m2)은 parcels.registered_area_m2 에도 채운다(사유 not_collected 해제). 도형면적과 혼용하지 않는다.
+MIGRATION_0015 = f"""
+CREATE TABLE parcel_attributes (
+  parcel_id                   TEXT NOT NULL PRIMARY KEY REFERENCES parcels (parcel_id),
+  as_of                       TEXT NOT NULL CHECK (as_of GLOB '{DATE_GLOB}'),
+  jimok_name                  TEXT,
+  registered_area_m2          REAL CHECK (registered_area_m2 IS NULL OR registered_area_m2 >= 0),
+  official_land_price_krw_m2  INTEGER CHECK (official_land_price_krw_m2 IS NULL OR official_land_price_krw_m2 >= 0),
+  price_base_year             INTEGER CHECK (price_base_year IS NULL OR price_base_year BETWEEN 1990 AND 2100),
+  price_base_month            INTEGER CHECK (price_base_month IS NULL OR price_base_month BETWEEN 1 AND 12),
+  use_zone_1                  TEXT,
+  use_zone_2                  TEXT,
+  land_use_situation          TEXT,
+  road_side                   TEXT,
+  terrain_height              TEXT,
+  terrain_form                TEXT,
+  plan_zones_json             TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(plan_zones_json) AND json_type(plan_zones_json) = 'array'),
+  plan_zones_truncated        INTEGER NOT NULL DEFAULT 0 CHECK (plan_zones_truncated IN (0, 1)),
+  ownership_kind_code         TEXT,
+  ownership_kind              TEXT,
+  co_owner_count              INTEGER CHECK (co_owner_count IS NULL OR co_owner_count >= 0),
+  ownership_changed_on        TEXT CHECK (ownership_changed_on IS NULL OR ownership_changed_on GLOB '{DATE_GLOB}'),
+  ownership_change_cause_code TEXT,
+  national_institution_code   TEXT,
+  sources_json                TEXT NOT NULL CHECK (json_valid(sources_json) AND json_type(sources_json) = 'array'),
+  source_document_id          TEXT REFERENCES source_documents (document_id),
+  content_hash                TEXT NOT NULL CHECK (content_hash GLOB '{SHA256_GLOB}'),
+  recorded_at                 TEXT NOT NULL CHECK (recorded_at GLOB '{UTC_GLOB}'),
+  updated_at                  TEXT NOT NULL CHECK (updated_at GLOB '{UTC_GLOB}')
+) STRICT;
+CREATE INDEX parcel_attributes_by_zone ON parcel_attributes (use_zone_1);
+"""
+
 # (버전, 이름, SQL). 새 릴리스의 테이블은 새 항목으로 추가하고 기존 항목은 고치지 않는다.
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "r1b_minimum", MIGRATION_0001),
@@ -763,6 +799,7 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (12, "r5_plan_records", MIGRATION_0012),
     (13, "r7_acquisition_review", MIGRATION_0013),
     (14, "r7_stage_rechecks", MIGRATION_0014),
+    (15, "r8_parcel_attributes", MIGRATION_0015),
 )
 # 표 재작성이 필요한 마이그레이션: 외래키 검사를 끈 채 한 트랜잭션으로 실행하고 foreign_key_check 가 비어야 커밋한다 (store._migrate).
 FK_OFF_MIGRATIONS = frozenset({9, 12, 13})
