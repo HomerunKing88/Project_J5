@@ -445,6 +445,21 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.clickRect("#map-zoom-in");
     await new Promise((r) => setTimeout(r, 300));
     assert.ok(tileReqs.length > reqBefore, "확대하면 다음 단계 타일을 받는다");
+    // 현재 위치 + 타일 켜짐 (J5-027 리뷰 반영): 화면을 옮기지 않아 현재 위치 주변 타일을 요청하지 않는다. 점·패널은 열린다
+    await cdp.send("Browser.grantPermissions", { origin: base, permissions: ["geolocation"] });
+    await cdp.send("Emulation.setGeolocationOverride", { latitude: 37.5705, longitude: 126.9996, accuracy: 9 });
+    const reqBeforeLocate = tileReqs.length;
+    const viewBefore = await cdp.eval("document.querySelector('#map-svg .layer-parcels').getAttribute('transform')");
+    await cdp.clickRect("#map-locate");
+    await cdp.waitFor("document.getElementById('parcel-search-note').textContent.includes('배경 타일이 켜져 있어 화면을 옮기지 않았습니다')");
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(tileReqs.length, reqBeforeLocate, "위치를 읽어도 타일 요청이 늘지 않는다");
+    assert.equal(await cdp.eval("document.querySelector('#map-svg .layer-parcels').getAttribute('transform')"), viewBefore, "화면이 그대로다");
+    assert.equal(await cdp.eval("document.querySelector('#map-svg .layer-locate').getAttribute('visibility')"), "visible");
+    assert.equal(await cdp.eval("document.getElementById('parcel-title').textContent"), "가상동 4-2");
+    await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
+    await cdp.send("Browser.resetPermissions", {});
+    await cdp.send("Emulation.clearGeolocationOverride", {});
     // 미리 받기: 대상·필지 범위를 14~18 단계로. 같은 출처라 서비스 워커가 저장한다
     await cdp.eval("document.getElementById('nav-settings').click(); 'ok'");
     await cdp.eval("document.getElementById('tiles-prefetch').click(); 'ok'");
@@ -483,6 +498,13 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel').length"), 0);
     assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /필지 6개/, "지도 실패해도 필지 안내는 남는다");
     assert.equal(await cdp.eval("document.querySelectorAll('#record-list li').length"), 1, "지도 실패해도 기록 목록 유지");
+    // 지도가 못 떠도 지번 찾기는 페이지 이동 없이 필지 패널을 연다 (J5-027 리뷰 반영)
+    await cdp.eval("document.getElementById('nav-map').click(); 'ok'");
+    assert.equal(await cdp.eval("document.getElementById('parcel-search-form').hidden"), false);
+    await cdp.eval("document.getElementById('parcel-search').value = '1-1'; document.getElementById('parcel-search-go').click(); 'ok'");
+    await cdp.waitFor("!document.getElementById('parcel-panel').hidden && document.getElementById('parcel-title').textContent === '가상동 1-1'");
+    assert.ok(!(await cdp.eval("location.href")).includes("?") && (await cdp.eval("location.pathname")).endsWith("/index.html"), "폼 제출이 페이지 이동(GET ?…)으로 이어지지 않는다");
+    await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
     await cdp.eval("document.querySelectorAll('#asset-list li > button')[2].click(); 'ok'");
     await cdp.waitFor("!document.getElementById('sec-observe').hidden");
     assert.equal(await cdp.eval("document.getElementById('target-label').textContent"), "가상 물건 3", "지도 없이 목록으로 선택");

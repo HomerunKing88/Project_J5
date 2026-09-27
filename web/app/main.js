@@ -343,8 +343,8 @@ function applySearchUi() {
   if (!has) { $("parcel-search-results").replaceChildren(); $("parcel-search-results").hidden = true; text($("parcel-search-note"), "", "muted"); }
 }
 
-function openParcel(feature, { focus = true } = {}) {
-  mapCall((m) => m.focusParcel(feature.id));
+function openParcel(feature, { focus = true, move = true } = {}) {
+  if (move) mapCall((m) => m.focusParcel(feature.id));
   showParcel(feature);
   if (focus) $("parcel-history").focus();
 }
@@ -377,14 +377,18 @@ function locateMe() {
   navigator.geolocation.getCurrentPosition((pos) => {
     btn.disabled = false;
     const { longitude: lon, latitude: lat, accuracy } = pos.coords;
-    mapCall((m) => m.setLocation({ lon, lat, accuracy }));
+    // 배경 타일이 켜져 있으면 화면을 옮기지 않는다: 옮기면 현재 위치 주변의 타일을 제공자에게 요청해 위치가 드러난다 (리뷰 반영 PR #73, ADR-20).
+    // 점·정확도 원은 지금 보이는 범위 안에서만 그리고, 필지 패널은 화면 이동 없이 연다. 화면을 옮길지는 사용자가 손으로 정한다.
+    const move = !state.tiles;
+    mapCall((m) => m.setLocation({ lon, lat, accuracy }, { center: move }));
     const acc = Number.isFinite(accuracy) ? ` (정확도 ±${Math.round(accuracy)} m)` : "";
+    const tileNote = move ? "" : " 배경 타일이 켜져 있어 화면을 옮기지 않았습니다(옮기면 그 주변 타일을 제공자에게 요청합니다).";
     const f = parcelAt(state.parcels?.features ?? [], [lon, lat]);
     if (f) {
-      openParcel(f, { focus: false });
-      text($("parcel-search-note"), `현재 위치는 ${parcelTitle(f.properties)} 필지 안${acc}. 위치는 저장하지 않습니다.`, "ok");
+      openParcel(f, { focus: false, move });
+      text($("parcel-search-note"), `현재 위치는 ${parcelTitle(f.properties)} 필지 안${acc}. 위치는 저장하지 않습니다.${tileNote}`, "ok");
     } else {
-      text($("parcel-search-note"), state.parcelsCount ? `현재 위치${acc}가 불러온 필지 범위 밖입니다. 위치는 저장하지 않습니다.` : `현재 위치를 표시했습니다${acc}. 필지 파일을 넣으면 그 자리의 필지를 엽니다.`, "muted");
+      text($("parcel-search-note"), (state.parcelsCount ? `현재 위치${acc}가 불러온 필지 범위 밖입니다. 위치는 저장하지 않습니다.` : `현재 위치를 표시했습니다${acc}. 필지 파일을 넣으면 그 자리의 필지를 엽니다.`) + tileNote, "muted");
     }
   }, (err) => {
     btn.disabled = false;
@@ -678,8 +682,6 @@ async function initMap() {
     $("map-zoom-out").addEventListener("click", () => mapCall((m) => m.zoomBy(0.5)));
     $("map-fit").addEventListener("click", () => mapCall((m) => m.fit()));
     $("map-zones").addEventListener("click", toggleZoneColors);
-    $("map-locate").addEventListener("click", locateMe);
-    $("parcel-search-form").addEventListener("submit", (e) => { e.preventDefault(); searchParcels($("parcel-search").value); });
   } catch (e) {
     mapFailed(e);
   }
@@ -1181,6 +1183,9 @@ async function main() {
   $("seed-file").addEventListener("change", (e) => loadSeedFile(e.target));
   $("load-synthetic-parcels").addEventListener("click", loadSyntheticParcels);
   $("parcels-file").addEventListener("change", (e) => loadParcelsFile(e.target));
+  // 필지 찾기·현재 위치는 지도가 못 떠도 동작한다 (검색·포함 판정은 순수 함수, 패널은 DOM). 지도 초기화와 무관하게 여기서 잇는다 (리뷰 반영 PR #73)
+  $("parcel-search-form").addEventListener("submit", (e) => { e.preventDefault(); searchParcels($("parcel-search").value); });
+  $("map-locate").addEventListener("click", locateMe);
   $("clear-parcels").addEventListener("click", clearParcels);
   $("load-synthetic-basemap").addEventListener("click", loadSyntheticBasemap);
   $("basemap-file").addEventListener("change", (e) => loadBasemapFile(e.target));
