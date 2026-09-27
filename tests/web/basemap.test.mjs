@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { validateBasemap, partsOf, lineMidpoint, pickRoadLabels, MAX_BASEMAP, LAYERS } from "../../web/app/basemap.js";
+import { validateBasemap, partsOf, lineMidpoint, pickRoadLabels, labelBox, MAX_BASEMAP, LAYERS } from "../../web/app/basemap.js";
 import { linePathD, mercator, PARCEL_LOCAL_K } from "../../web/app/map.js";
 
 const FIX = new URL("../fixtures/basemap/synthetic.j5basemap.json", import.meta.url);
@@ -62,4 +62,16 @@ test("pickRoadLabels: 같은 이름은 화면 안 가장 긴 것 하나, 짧으�
   ];
   assert.deepEqual([...pickRoadLabels(roads, view, 400, 300)], ["road:2"]);
   assert.deepEqual([...pickRoadLabels(roads, { scale: 100, tx: 0, ty: 0 }, 400, 300)], [], "축소하면 다 짧아진다");
+});
+
+test("pickRoadLabels: 다른 이름끼리 라벨 사각형이 겹치면 긴 쪽만 남긴다", () => {
+  const view = { scale: 1000, tx: 0, ty: 0 };
+  const roads = [
+    { id: "road:1", name: "가상로", mid: { x: 0.2, y: 0.1, angle: 90, length: 0.3 } },     // 세로 300px
+    { id: "road:2", name: "가상1길", mid: { x: 0.2, y: 0.1, angle: 0, length: 0.2 } },    // 같은 자리 가로 200px → 겹쳐서 제외
+    { id: "road:3", name: "가상2길", mid: { x: 0.2, y: 0.15, angle: 0, length: 0.2 } },   // 50px 아래: 세로 라벨(높이 30px)과 안 겹침
+  ];
+  assert.deepEqual([...pickRoadLabels(roads, view, 400, 300)].sort(), ["road:1", "road:3"]);
+  const b = labelBox(100, 100, 30, 14, 90);
+  assert.ok(Math.abs(b.x1 - b.x0 - 14) < 1e-9 && Math.abs(b.y1 - b.y0 - 30) < 1e-9, "90도 회전하면 폭·높이가 바뀐다");
 });

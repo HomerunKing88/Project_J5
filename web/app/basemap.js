@@ -110,20 +110,40 @@ export function lineMidpoint(parts) {
   return null;
 }
 
+export const ROAD_LABEL_H_PX = 14; // 라벨 높이(px), 겹침 판정용
+
+/** 회전한 라벨 사각형(중심 cx,cy, 폭 w, 높이 h, 각도 deg)의 화면 축 정렬 경계 상자. */
+export function labelBox(cx, cy, w, h, angleDeg = 0) {
+  const a = (angleDeg * Math.PI) / 180, c = Math.abs(Math.cos(a)), s = Math.abs(Math.sin(a));
+  const hw = (w * c + h * s) / 2, hh = (w * s + h * c) / 2;
+  return { x0: cx - hw, y0: cy - hh, x1: cx + hw, y1: cy + hh };
+}
+
+const boxesOverlap = (a, b) => !(a.x1 < b.x0 || b.x1 < a.x0 || a.y1 < b.y0 || b.y1 < a.y0);
+
 /**
  * 도로명 라벨을 붙일 도로 id 집합. 같은 이름은 화면 안에서 가장 긴 것 하나에만 붙이고,
- * 화면 길이가 라벨 폭 + 여백보다 짧으면 붙이지 않는다. roads: [{id, name, mid:{x,y,length}}] (세계 좌표), view: {scale,tx,ty}.
+ * 화면 길이가 라벨 폭 + 여백보다 짧으면 붙이지 않으며, 다른 이름끼리도 라벨 사각형이 겹치면 긴 쪽만 남긴다.
+ * roads: [{id, name, mid:{x,y,angle,length}}] (세계 좌표), view: {scale,tx,ty}.
  */
 export function pickRoadLabels(roads, view, w, h, margin = 0) {
   const byName = new Map();
   for (const r of roads) {
     if (!r.name || !r.mid) continue;
     const px = r.mid.length * view.scale;
-    if (px < Array.from(r.name).length * ROAD_LABEL_CHAR_PX + ROAD_LABEL_PAD_PX) continue;
+    const labelPx = Array.from(r.name).length * ROAD_LABEL_CHAR_PX;
+    if (px < labelPx + ROAD_LABEL_PAD_PX) continue;
     const sx = r.mid.x * view.scale + view.tx, sy = r.mid.y * view.scale + view.ty;
     if (sx < -margin || sx > w + margin || sy < -margin || sy > h + margin) continue;
     const cur = byName.get(r.name);
-    if (!cur || px > cur.px) byName.set(r.name, { id: r.id, px });
+    if (!cur || px > cur.px) byName.set(r.name, { id: r.id, px, box: labelBox(sx, sy, labelPx, ROAD_LABEL_H_PX, r.mid.angle ?? 0) });
   }
-  return new Set([...byName.values()].map((v) => v.id));
+  const placed = [];
+  const out = new Set();
+  for (const c of [...byName.values()].sort((a, b) => b.px - a.px || (a.id < b.id ? -1 : 1))) {
+    if (placed.some((b) => boxesOverlap(b, c.box))) continue;
+    placed.push(c.box);
+    out.add(c.id);
+  }
+  return out;
 }
