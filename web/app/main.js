@@ -7,7 +7,7 @@ import { uuid4, isUuid } from "./uuid.js";
 import { isoWithOffset, fromDatetimeLocal, toDatetimeLocal, localDate } from "./time.js";
 import { buildEvent, validateEvent, lineBytes, PHOTO_TAGS, PHOTO_TAG_LABEL, CHANGE_STATUS_LABEL, PHOTO_LIMIT, VIEWPOINT_MAX } from "./event.js";
 import { validateSeed } from "./seed.js";
-import { validateParcels, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea } from "./parcels.js";
+import { validateParcels, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, attrLines, attrsSummary, ZONE_LABELS } from "./parcels.js";
 import { selectRecords, planBatches, buildPackage, hasRemainingBatches, studyIdError } from "./export.js";
 import { migrationReadiness, migrationText, persistenceText } from "./migrate.js";
 import { createNavigator, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, MODE_LABEL, MODE_SHORT } from "./ui.js";
@@ -18,9 +18,9 @@ import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
 import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.4";
+export const APP_VERSION = "0.2.5";
 const $ = (id) => document.getElementById(id);
-const state = { store: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, seedLoadedAt: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
+const state = { store: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, zoneColors: false, seedLoadedAt: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
                 nav: null, returnFocus: null, mapSelected: null };
 
 function text(el, value, cls) {
@@ -327,8 +327,34 @@ function applyParcels(rec) {
   state.parcelsCount = state.parcels?.features.length ?? 0;
   closeParcelPanel();
   mapCall((m) => m.setParcels(state.parcels));
+  applyZoneColors();
   parcelsNote(rec);
   mapCall((m) => mapNote(m.setAssets(state.assets)));
+}
+
+// ---- 용도지역 색 (J5-025, ADR-19): 필지 속성이 있을 때만 켤 수 있고, 켬 여부는 이 기기에 저장한다 ----
+function applyZoneColors() {
+  const sm = attrsSummary(state.parcels);
+  const btn = $("map-zones");
+  btn.disabled = !sm.withAttrs;
+  btn.setAttribute("aria-pressed", state.zoneColors && sm.withAttrs ? "true" : "false");
+  btn.textContent = state.zoneColors && sm.withAttrs ? "용도지역 색 끄기" : "용도지역 색";
+  mapCall((m) => m.setZoneColors(state.zoneColors && sm.withAttrs));
+  const legend = $("zone-legend");
+  if (state.zoneColors && sm.withAttrs) {
+    legend.replaceChildren(...[...sm.byZone.entries()].filter(([k]) => k !== "none").sort((a, b) => b[1] - a[1])
+      .map(([k, n]) => el("span", {}, el("span", { class: `lg lg-zone zone-${k}` }), `${ZONE_LABELS[k] ?? k} ${n}`)));
+    legend.hidden = false;
+  } else {
+    legend.replaceChildren();
+    legend.hidden = true;
+  }
+}
+
+async function toggleZoneColors() {
+  state.zoneColors = !state.zoneColors;
+  try { await state.store.setMeta("zone_colors", state.zoneColors); } catch { /* 저장 실패해도 화면은 바꾼다 */ }
+  applyZoneColors();
 }
 
 function parcelsNote(rec) {
@@ -338,7 +364,9 @@ function parcelsNote(rec) {
   const hasLinks = b.features.some((f) => (f.properties.asset_ids ?? []).length);
   const linkNote = hasLinks ? (parcelLinksValid() ? " · 정본 연결 포함" : " · 정본 연결 포함 (시드가 바뀐 뒤라 표시하지 않음: 같은 파생본의 시드와 함께 다시 불러온다)") : "";
   const when = shortWhen(rec.loaded_at);
-  text($("parcels-note"), `필지 ${b.features.length}개 (${b.data_mode}) · ${s.name} · 도형 기준일 ${s.geometry_version} · ${crs} · 이용허락 ${s.license ?? "미확인"}` +
+  const sm = attrsSummary(b);
+  const attrsNote = sm.withAttrs ? ` · 필지 속성 ${sm.withAttrs}개 (${(b.attrs_sources ?? []).map((a) => a.name).join(", ") || "출처 미기재"})` : "";
+  text($("parcels-note"), `필지 ${b.features.length}개 (${b.data_mode}) · ${s.name} · 도형 기준일 ${s.geometry_version} · ${crs} · 이용허락 ${s.license ?? "미확인"}` + attrsNote +
     (b.source_dataset_version != null ? ` · 정본 v${b.source_dataset_version}` : " · 정본 버전 모름 (구본 여부 알 수 없음)") + ` · ${rec.source}` + (when ? ` · 가져오기 ${when}` : "") +
     (b.warnings?.length ? ` · 경고 ${b.warnings.length}건 (변환 로그 참조)` : "") + linkNote, b.data_mode === "synthetic" ? "muted" : "ok");
 }
@@ -557,6 +585,10 @@ function showParcel(feature) {
   $("parcel-meta").textContent = `도형면적 ${fmtArea(p.area_m2_geom, p.area_missing_reason)} (공부면적 아님)` + (p.jimok ? ` · 지목 ${p.jimok}` : "") + (p.jibun_mismatch ? " · 원본 지번과 PNU 불일치" : "") +
     (src ? ` · ${src.name} ${src.geometry_version}` : "");
   renderExtLinks($("parcel-ext"), bboxCenter(p.bbox));
+  const lines = attrLines(p.attrs);
+  $("parcel-attrs").replaceChildren(...lines.map(([k, v]) => el("li", {}, el("span", { class: "k", text: k }), el("span", { class: "v", text: v }))));
+  $("parcel-attrs").hidden = !lines.length;
+  $("parcel-attrs-note").hidden = !lines.length;
   const linksValid = parcelLinksValid();
   const inside = parcelAssets(feature, state.assets, { linksValid });
   $("parcel-assets").replaceChildren(...inside.map(({ asset: a, basis }) => el("li", {},
@@ -584,6 +616,7 @@ async function initMap() {
     $("map-zoom-in").addEventListener("click", () => mapCall((m) => m.zoomBy(2)));
     $("map-zoom-out").addEventListener("click", () => mapCall((m) => m.zoomBy(0.5)));
     $("map-fit").addEventListener("click", () => mapCall((m) => m.fit()));
+    $("map-zones").addEventListener("click", toggleZoneColors);
   } catch (e) {
     mapFailed(e);
   }
@@ -1129,6 +1162,8 @@ async function main() {
     const rec = await state.store.getParcels();
     state.seedLoadedAt = (await state.store.getMeta("seed_loaded_at")) ?? null;
     if (rec) { state.parcelsRec = rec; state.parcels = rec.bundle; state.parcelsCount = rec.bundle.features.length; mapCall((m) => m.setParcels(rec.bundle)); }
+    state.zoneColors = (await state.store.getMeta("zone_colors")) === true;
+    applyZoneColors();
     parcelsNote(rec ?? null);
   } catch (e) {
     text($("parcels-note"), "저장된 필지를 읽지 못함: " + (e?.message || e), "bad");
