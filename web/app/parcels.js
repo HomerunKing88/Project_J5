@@ -8,12 +8,12 @@ const TOP_ALLOWED = new Set(["type", "j5parcels", "data_mode", "generated_at", "
 /** 자료 종류별 허용 필드 (정본 ATTR_GROUPS 와 같다). 이력 항목의 바뀐 필드는 그 종류의 필드만 허용한다 (소유자 이름 같은 필드는 이력으로도 들어오지 못한다). */
 const ATTR_GROUP_KEYS = Object.freeze({
   land_feature: new Set(["jimok_name", "registered_area_m2", "official_land_price_krw_m2", "price_base_year", "price_base_month", "use_zone_1", "use_zone_2", "land_use_situation", "road_side", "terrain_height", "terrain_form"]),
-  land_plan: new Set(["plan_zones", "plan_zones_truncated"]),
+  land_plan: new Set(["plan_zones", "plan_zone_names", "plan_zones_truncated"]),
   land_ownership: new Set(["ownership_kind_code", "ownership_kind", "co_owner_count", "ownership_changed_on", "ownership_change_cause_code", "national_institution_code"]),
 });
 const ATTR_KINDS = new Set(Object.keys(ATTR_GROUP_KEYS));
 const ATTR_KEYS = new Set(["jimok_name", "registered_area_m2", "official_land_price_krw_m2", "price_base_year", "price_base_month", "use_zone_1", "use_zone_2", "land_use_situation", "road_side",
-  "terrain_height", "terrain_form", "plan_zones", "plan_zones_truncated", "ownership_kind_code", "ownership_kind", "co_owner_count", "ownership_changed_on", "ownership_change_cause_code", "national_institution_code", "as_of"]);
+  "terrain_height", "terrain_form", "plan_zones", "plan_zone_names", "plan_zones_truncated", "ownership_kind_code", "ownership_kind", "co_owner_count", "ownership_changed_on", "ownership_change_cause_code", "national_institution_code", "as_of"]);
 const PROP_REQUIRED = ["pnu", "label", "emd_code", "emd_name", "mountain", "bon", "bu", "jimok", "jibun_raw", "jibun_mismatch", "area_m2_geom", "area_missing_reason", "bbox"];
 
 const isLonLat = (p) => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite) && p[0] >= -180 && p[0] <= 180 && p[1] >= -90 && p[1] <= 90;
@@ -70,6 +70,7 @@ export function validateParcels(doc) {
       else {
         for (const k of Object.keys(a)) if (!ATTR_KEYS.has(k)) { errs.push(`${at} attrs.${k} 는 허용되지 않은 필드`); break; }
         if ("plan_zones" in a && !(Array.isArray(a.plan_zones) && a.plan_zones.every((z) => z && typeof z === "object" && typeof z.code === "string"))) errs.push(`${at} attrs.plan_zones 형식`);
+        if ("plan_zone_names" in a && !(Array.isArray(a.plan_zone_names) && a.plan_zone_names.length <= 100 && a.plan_zone_names.every((n) => typeof n === "string" && n.length > 0 && n.length <= 200))) errs.push(`${at} attrs.plan_zone_names 형식`);
         for (const k of ["registered_area_m2", "official_land_price_krw_m2", "co_owner_count"]) if (a[k] != null && !(typeof a[k] === "number" && a[k] >= 0)) errs.push(`${at} attrs.${k} 형식`);
         if ("as_of" in a && !(typeof a.as_of === "string" && /^\d{4}-\d{2}-\d{2}$/.test(a.as_of))) errs.push(`${at} attrs.as_of 는 YYYY-MM-DD`);
       }
@@ -119,8 +120,7 @@ export function attrLines(a, fallbackAsOf = null) {
   const miss = "미확인";
   const zone = [a.use_zone_1, a.use_zone_2].filter((z) => typeof z === "string" && z).join(" · ");
   const price = Number.isFinite(a.official_land_price_krw_m2) ? `${fmtInt(a.official_land_price_krw_m2)}원/㎡` + (a.price_base_year ? ` (${a.price_base_year}년${a.price_base_month ? ` ${a.price_base_month}월` : ""} 기준)` : "") : miss;
-  const zones = Array.isArray(a.plan_zones) ? a.plan_zones : [];
-  const planText = zones.length ? zones.map((z) => (z.name ? z.name : z.code) + (z.relation && z.relation !== "포함" ? `(${z.relation})` : "")).join(", ") + (a.plan_zones_truncated ? " … (이름 일부는 원본 열 길이에 잘림, 코드만 있음)" : "") : miss;
+  const planText = planZonesText(a) ?? miss;
   const own = a.ownership_kind ?? (a.ownership_kind_code ? `구분 코드 ${a.ownership_kind_code}` : null);
   return [
     ["지목", a.jimok_name ?? miss],
@@ -136,16 +136,33 @@ export function attrLines(a, fallbackAsOf = null) {
   ];
 }
 
+/**
+ * 규제·지역지구 한 줄 (J5-032 정정): 이름 목록은 자료에 적힌 순서 그대로 보이고 코드와 짝짓지 않는다(실측: 순서가 코드와 맞지 않는 행이 있다).
+ * 코드는 수와, 포함이 아닌 관계(저촉·접함)의 코드만 덧붙인다. J5-025 형식 번들(이름 목록 없음)은 코드에 붙은 이름을 순서대로 쓴다. 자료가 없으면 null.
+ */
+export function planZonesText(a) {
+  const zones = Array.isArray(a?.plan_zones) ? a.plan_zones : [];
+  const names = Array.isArray(a?.plan_zone_names) && a.plan_zone_names.length ? a.plan_zone_names : zones.map((z) => z?.name).filter((n) => typeof n === "string" && n);
+  if (!zones.length && !names.length) return null;
+  const byRel = new Map();
+  for (const z of zones) if (z.relation && z.relation !== "포함") byRel.set(z.relation, [...(byRel.get(z.relation) ?? []), z.code]);
+  const rel = [...byRel.entries()].map(([r, codes]) => `${r} ${codes.join(", ")}`).join(" · ");
+  const head = names.length ? names.join(", ") + (a.plan_zones_truncated ? " … (이름 목록은 원본 열 길이에서 잘림)" : "") : "이름 없음";
+  return head + (zones.length ? ` · 코드 ${zones.length}개` + (rel ? ` (${rel})` : "") : "");
+}
+
 export const ATTR_FIELD_LABELS = Object.freeze({ jimok_name: "지목", registered_area_m2: "공부면적", official_land_price_krw_m2: "공시지가", price_base_year: "공시 기준연도", price_base_month: "공시 기준월",
-  use_zone_1: "용도지역", use_zone_2: "용도지역 2", land_use_situation: "이용상황", road_side: "도로접면", terrain_height: "지형 높이", terrain_form: "지형 형상", plan_zones: "규제·지역지구",
+  use_zone_1: "용도지역", use_zone_2: "용도지역 2", land_use_situation: "이용상황", road_side: "도로접면", terrain_height: "지형 높이", terrain_form: "지형 형상", plan_zones: "지역지구 코드", plan_zone_names: "지역지구 이름 목록",
   plan_zones_truncated: "이름 목록 잘림", ownership_kind_code: "소유 구분 코드", ownership_kind: "소유구분", co_owner_count: "공유인수", ownership_changed_on: "소유 변동일",
   ownership_change_cause_code: "변동 원인 코드", national_institution_code: "국가기관 구분" });
 export const ATTR_KIND_LABELS = Object.freeze({ land_feature: "토지특성", land_plan: "토지이용계획", land_ownership: "토지소유" });
 
-/** 속성 값 하나를 글로. 규제 목록은 이름(없으면 코드)·관계, 공시지가는 원/㎡, 없음은 "없음". */
+/** 속성 값 하나를 글로. 지역지구 코드는 관계와, 이름 목록은 순서대로, 공시지가는 원/㎡, 없음은 "없음". */
 export function fmtAttrValue(field, v) {
   if (v == null) return "없음";
-  if (field === "plan_zones") return Array.isArray(v) && v.length ? v.map((z) => (z.name ?? z.code) + (z.relation && z.relation !== "포함" ? `(${z.relation})` : "")).join(", ") : "없음";
+  // 지역지구 코드는 관계와 함께 (J5-032: 이름은 코드와 짝짓지 않는다), 이름 목록은 적힌 순서 그대로
+  if (field === "plan_zones") return Array.isArray(v) && v.length ? v.map((z) => z.code + (z.relation && z.relation !== "포함" ? `(${z.relation})` : "")).join(", ") : "없음";
+  if (field === "plan_zone_names") return Array.isArray(v) && v.length ? v.join(", ") : "없음";
   if (field === "official_land_price_krw_m2") return `${fmtInt(v)}원/㎡`;
   if (field === "registered_area_m2") return `${v} ㎡`;
   if (typeof v === "boolean") return v ? "예" : "아니오";
