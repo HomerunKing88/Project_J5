@@ -23,14 +23,14 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     // 지도 모듈 로드 실패: map.js 요청을 막고 첫 접속 (서비스 워커가 아직 없을 때). 목록·설정은 그대로 동작하고 지도 절만 안내를 낸다.
     await cdp.send("Network.setBlockedURLs", { urls: ["*/app/map.js"] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.1')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.2')");
     await cdp.waitFor("document.getElementById('map-note').textContent.includes('지도 표시 불가')");
     assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li').length"), 1, "지도 모듈 없이도 목록 절이 그려진다");
     const blockedLogs = cdp.errors.splice(0);
     assert.ok(blockedLogs.every((e) => e.includes("ERR_BLOCKED_BY_CLIENT") || e.includes("Failed to load resource") || e.includes("map.js")), blockedLogs.join("; "));
     await cdp.send("Network.setBlockedURLs", { urls: [] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.1')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.2')");
     await cdp.waitFor("document.getElementById('map-note').textContent === ''");
     // 설정
     await cdp.eval("document.getElementById('study-id').value = 'e2e-study'; document.getElementById('save-settings').click(); 'ok'");
@@ -98,6 +98,23 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.waitFor("!document.getElementById('sec-observe').hidden");
     assert.equal(await cdp.eval("document.getElementById('target-label').textContent"), "가상 물건 1", "필지 패널에서 관측 시작");
     await cdp.eval("document.getElementById('cancel-observation').click(); 'ok'");
+    // 배경 도형 (J5-022, ADR-16): 연습용 배경 → 층별 path·도로명 라벨, 탭 대상 아님(필지 탭은 그대로), 안내 문구, 지우기
+    await cdp.eval("document.getElementById('load-synthetic-basemap').click(); 'ok'");
+    await cdp.waitFor("document.querySelectorAll('#map-svg .layer-base path').length === 11");
+    assert.deepEqual(await cdp.eval("['bm-building','bm-road-area','bm-road'].map(c => document.querySelectorAll('#map-svg path.' + c).length)"), [6, 2, 3]);
+    assert.match(await cdp.eval("document.getElementById('basemap-note').textContent"), /^배경 도형 11개 \(건물 6 · 실폭도로 2 · 도로 중심선 3\) · 연습용 · 도형 기준일 2026-09-01 · 이용허락 가상자료 \(이용허락 해당 없음\) · 가져오기 .+$/);
+    assert.match(await cdp.eval("document.getElementById('map-note').textContent"), /· 필지 6개 · 배경 11개$/);
+    assert.equal(await cdp.eval("document.querySelector('#map-svg .layer-base').compareDocumentPosition(document.querySelector('#map-svg .layer-parcels')) & Node.DOCUMENT_POSITION_FOLLOWING"), 4, "배경 층은 필지 층보다 앞(아래)에 있다");
+    await cdp.clickRect("#map-zoom-in");
+    await cdp.clickRect("#map-zoom-in");
+    const roadLabels = await cdp.eval("Array.from(document.querySelectorAll('#map-svg text.bm-road-label')).filter(t => t.getAttribute('visibility') === 'visible').map(t => t.textContent).sort()");
+    assert.ok(roadLabels.includes("가상로"), `확대하면 긴 도로의 이름이 보인다: ${roadLabels}`);
+    assert.equal(await cdp.eval("getComputedStyle(document.querySelector('#map-svg path.bm-building')).pointerEvents"), "none", "배경은 탭 대상이 아니다");
+    await cdp.clickRect("#map-fit");
+    await cdp.clickRect('#map-svg path.parcel[data-pnu="9999900100100010000"]');
+    await cdp.waitFor("!document.getElementById('parcel-panel').hidden && document.getElementById('parcel-title').textContent === '가상동 1'");
+    await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
+    await cdp.waitFor("document.getElementById('parcel-panel').hidden");
     await cdp.waitFor("document.getElementById('sec-observe').hidden");
     // 물건 없는 필지 (구멍 있는 4-2): 안내만
     await cdp.clickRect('#map-svg path.parcel[data-pnu="9999900100100040002"]');
@@ -217,6 +234,12 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.waitFor("document.querySelectorAll('#map-svg g.pt').length === 4");
     await cdp.waitFor("document.querySelectorAll('#map-svg path.parcel').length === 6");
     assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /필지 6개/, "재접속 후 필지 유지 (IndexedDB)");
+    assert.match(await cdp.eval("document.getElementById('basemap-note').textContent"), /배경 도형 11개/, "재접속 후 배경 유지 (IndexedDB v3)");
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg .layer-base path').length"), 11);
+    await cdp.eval("document.getElementById('clear-basemap').click(); 'ok'");
+    await cdp.waitFor("document.querySelectorAll('#map-svg .layer-base path').length === 0");
+    assert.match(await cdp.eval("document.getElementById('basemap-note').textContent"), /^배경 없음/);
+    assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /필지 6개/, "배경을 지워도 필지는 남는다");
     // 지도 실패 시 목록: SVG 요소 생성만 막아(저장소에서 createElementNS 는 map.js 만 쓴다) 지도가 못 뜨는 상황을 만든다.
     // 앱은 안내만 남기고 목록·기록은 그대로여야 하며 콘솔 오류를 내지 않아야 한다.
     const { identifier: stub } = await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `
