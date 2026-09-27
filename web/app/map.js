@@ -1,5 +1,6 @@
 // 최소 지도 (J5-005, ADR-12): 자체 SVG 점 지도. Web Mercator 투영으로 위치점(location_point)을 그린다.
 // J5-013B-1 (ADR-13): 필지 번들(.j5parcels.json)의 경계 폴리곤과 지번 라벨을 점 아래 층에 그린다.
+// J5-024 (ADR-18): 사용자가 설정에서 켠 타일 제공자의 XYZ 타일을 맨 아래 층에 <image> 로 그린다. 요청은 서비스 워커가 기기에 저장한다.
 // J5-022 (ADR-16): 배경 도형 번들(.j5basemap.json)의 실폭도로·건물 윤곽·도로 중심선과 도로명 라벨을 필지 아래 층에 그린다 (탭 대상 아님).
 // 배경 타일·외부 통신 없음. 위 순수 함수는 DOM 없이 단위 테스트하고, createMap 만 SVG 를 만진다.
 // 화면 좌표 = 세계 좌표(0~1) × scale + (tx, ty). 마커·라벨은 픽셀 단위라 확대해도 크기가 변하지 않는다.
@@ -7,6 +8,7 @@
 
 import { labelPoint as labelPointOf } from "./parcels.js";
 import { partsOf as basePartsOf, lineMidpoint, pickRoadLabels } from "./basemap.js";
+import { tileZoom, tilesFor, tileRect, tileUrl } from "./tiles.js";
 
 export const WORLD_METERS = 40075016.686; // WGS84 적도 둘레
 export const MIN_SCALE = 256; // z0: 세계 전체 = 256px
@@ -121,7 +123,7 @@ export function parcelLabelVisible(wb, label, view, w, h) {
  * SVG 점 지도. svgEl 은 index.html 의 정적 <svg>. onSelect(asset) 는 점을 탭했을 때.
  * 실패(예외)는 호출자가 잡아 목록만으로 동작하게 한다.
  */
-export function createMap(svgEl, { onSelect, onSelectParcel } = {}) {
+export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}) {
   if (!svgEl || svgEl.namespaceURI == null || svgEl.tagName?.toLowerCase() !== "svg") throw new Error("SVG 요소가 아님");
   const NS = svgEl.namespaceURI;
   const node = (tag, attrs = {}) => {
@@ -129,6 +131,7 @@ export function createMap(svgEl, { onSelect, onSelectParcel } = {}) {
     for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, String(v));
     return n;
   };
+  const layerTiles = node("g", { class: "layer-tiles" });        // 맨 아래: 배경 타일 (설정에서 켠 경우만)
   const layerBase = node("g", { class: "layer-base" });          // 배경: 실폭도로 → 건물 → 도로 중심선 (탭 대상 아님)
   const layerRoadAreas = node("g", { class: "layer-road-areas" });
   const layerBuildings = node("g", { class: "layer-buildings" });
@@ -142,7 +145,8 @@ export function createMap(svgEl, { onSelect, onSelectParcel } = {}) {
   const scaleLine = node("line", { x1: 10, y1: 0, x2: 10, y2: 0 });
   const scaleText = node("text", { x: 10, y: 0 });
   layerScale.append(scaleLine, scaleText);
-  svgEl.replaceChildren(layerBase, layerRoadLabels, layerShapes, layerLabels, layerPts, layerScale);
+  const attribText = node("text", { class: "map-attrib", "text-anchor": "end" });
+  svgEl.replaceChildren(layerTiles, layerBase, layerRoadLabels, layerShapes, layerLabels, layerPts, layerScale, attribText);
 
   let view = fitView([], 320, 280);
   let size = { w: 320, h: 280 };
@@ -151,6 +155,10 @@ export function createMap(svgEl, { onSelect, onSelectParcel } = {}) {
   let parcelOrigin = { x: 0, y: 0 };
   let parcelMode = "";
   const roads = []; // { id, name, mid, text, visible } (도로명 라벨 후보)
+  let tiles = null;              // { url, minZoom, maxZoom, attribution } 또는 null (꺼짐)
+  const tileNodes = new Map();   // key → image
+  const tileStatus = { failed: 0, loaded: 0 };
+  const dpr = typeof window !== "undefined" && window.devicePixelRatio >= 2 ? 2 : 1;
   let baseOrigin = { x: 0, y: 0 };
   let baseCount = 0, baseBbox = null;
   let selectedId = null, selectedPnu = null;
@@ -164,7 +172,32 @@ export function createMap(svgEl, { onSelect, onSelectParcel } = {}) {
   };
   const local = (e) => { const r = svgEl.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
 
+  const renderTiles = () => {
+    if (!tiles) return;
+    const z = tileZoom(view.scale, { minZoom: tiles.minZoom, maxZoom: tiles.maxZoom, dpr });
+    const want = tilesFor(view, size.w, size.h, z, 1);
+    const keep = new Set();
+    for (const t of want) {
+      keep.add(t.key);
+      let img = tileNodes.get(t.key);
+      if (!img) {
+        img = node("image", { "data-tile": t.key, preserveAspectRatio: "none" });
+        img.setAttribute("href", tileUrl(tiles.url, t.z, t.x, t.y));
+        img.addEventListener("error", () => { tileStatus.failed += 1; img.setAttribute("visibility", "hidden"); if (onTileStatus) onTileStatus({ ...tileStatus }); });
+        img.addEventListener("load", () => { tileStatus.loaded += 1; if (onTileStatus) onTileStatus({ ...tileStatus }); });
+        layerTiles.append(img);
+        tileNodes.set(t.key, img);
+      }
+      const r = tileRect(t, view);
+      img.setAttribute("x", r.x.toFixed(2)); img.setAttribute("y", r.y.toFixed(2));
+      img.setAttribute("width", (r.size + 0.5).toFixed(2)); img.setAttribute("height", (r.size + 0.5).toFixed(2));
+    }
+    for (const [key, img] of tileNodes) if (!keep.has(key)) { img.remove(); tileNodes.delete(key); }
+  };
+
   const render = () => {
+    renderTiles();
+    attribText.setAttribute("x", size.w - 6); attribText.setAttribute("y", size.h - 6);
     if (baseCount) {
       const o = toScreen(baseOrigin, view);
       layerBase.setAttribute("transform", `translate(${o.x.toFixed(2)},${o.y.toFixed(2)}) scale(${(view.scale / PARCEL_LOCAL_K).toPrecision(8)})`);
@@ -315,6 +348,18 @@ export function createMap(svgEl, { onSelect, onSelectParcel } = {}) {
       api.fit();
       return { count: feats.length, counts };
     },
+    /** 배경 타일 설정 {url, minZoom, maxZoom, attribution} 또는 null(끄기). 기존 타일 요소는 지우고 다시 그린다. */
+    setTiles(cfg) {
+      tiles = cfg ?? null;
+      for (const img of tileNodes.values()) img.remove();
+      tileNodes.clear();
+      tileStatus.failed = 0; tileStatus.loaded = 0;
+      attribText.textContent = tiles?.attribution ?? "";
+      svgEl.classList.toggle("has-tiles", !!tiles);
+      render();
+      return { enabled: !!tiles };
+    },
+    tileStatus() { return { ...tileStatus, shown: tileNodes.size }; },
     selectParcel(pnu) {
       selectedPnu = pnu ?? null;
       for (const pc of parcels.values()) setParcelClass(pc);
@@ -345,6 +390,7 @@ export function createMap(svgEl, { onSelect, onSelectParcel } = {}) {
       markers.clear();
       parcels.clear();
       roads.length = 0;
+      tileNodes.clear();
     },
   };
 

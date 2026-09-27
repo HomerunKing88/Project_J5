@@ -19,11 +19,36 @@ EXT_MAP_HOSTS = {"maps.apple.com", "map.naver.com", "map.kakao.com", "www.google
 HOST = re.compile(r"https://([a-z0-9.-]+)/", re.IGNORECASE)
 
 
+# ADR-18 (J5-024): 배경 타일 호스트. index.html 의 CSP img-src 와 app/tiles.js·sw.js 의 허용목록에만 나온다 (사용자가 설정에서 켠 경우만 요청).
+TILE_HOSTS = {"api.vworld.kr"}
+CSP_IMG_SRC = "img-src 'self' blob: " + " ".join(f"https://{h}" for h in sorted(TILE_HOSTS))
+
+
 def test_no_external_urls_in_app_code():
     for p in web_files(".html", ".js", ".css"):
-        if p.relative_to(WEB).as_posix() == EXT_MAP_FILE:
+        rel = p.relative_to(WEB).as_posix()
+        if rel == EXT_MAP_FILE:
             continue
-        assert not URL.search(p.read_text(encoding="utf-8")), f"{p}: 외부 URL 금지 (ADR-01 숨은 통신 차단, 외부 지도 링크는 {EXT_MAP_FILE} 에만)"
+        text = p.read_text(encoding="utf-8")
+        if rel == "index.html":
+            assert CSP_IMG_SRC in text, "index.html CSP 의 img-src 는 타일 허용 호스트만"
+            text = text.replace(CSP_IMG_SRC, "")
+        if rel == "app/tiles.js":
+            # 타일 모듈은 스킴 문자열("https://" 결합·검사)만 쓰고 호스트가 붙은 완성 URL 은 쓰지 않는다 (호스트는 TILE_HOSTS 허용목록에만)
+            assert not re.search(r"https?://[A-Za-z0-9]", text), f"{p}: 완성된 외부 URL 금지 (호스트는 TILE_HOSTS 에만)"
+            continue
+        assert not URL.search(text), f"{p}: 외부 URL 금지 (ADR-01 숨은 통신 차단, 외부 지도 링크는 {EXT_MAP_FILE} 에만, 타일 호스트는 CSP 에만)"
+
+
+def test_tile_hosts_allowlist_is_consistent():
+    """ADR-18: tiles.js·sw.js 의 허용 호스트가 CSP 와 같고, 타일 주소는 사용자 설정에서만 온다(코드에 완성된 타일 URL 없음)."""
+    tiles = (WEB / "app" / "tiles.js").read_text(encoding="utf-8")
+    sw = (WEB / "sw.js").read_text(encoding="utf-8")
+    hosts_js = set(re.findall(r'TILE_HOSTS = Object\.freeze\(\[([^\]]*)\]\)', tiles)[0].replace('"', "").replace(" ", "").split(","))
+    hosts_sw = set(re.findall(r'TILE_HOSTS = \[([^\]]*)\]', sw)[0].replace('"', "").replace(" ", "").split(","))
+    assert hosts_js == TILE_HOSTS == hosts_sw
+    for pat in (r"\bfetch\s*\(", r"^\s*import\b", r"\blocation\b", r"\bdocument\.", r"\bwindow\b", r"\bnavigator\b"):
+        assert not re.search(pat, tiles, re.MULTILINE), f"tiles.js: {pat} 사용 금지 (계산·URL 만)"
 
 
 def test_external_map_links_are_link_only():
