@@ -452,7 +452,7 @@ def _snapshot_changes(snaps: list) -> list[dict]:
         values = json.loads(s_["values_json"]) if isinstance(s_["values_json"], str) else s_["values_json"]
         before = prev.get(s_["kind"])
         if before is None:
-            changes = {k: {"from": None, "to": v} for k, v in values.items() if v not in (None, [], False)}
+            changes = {k: {"from": None, "to": v} for k, v in values.items() if not (v is None or v is False or v == [])}   # 0 은 값이다 (리뷰 반영)
         else:
             changes = {k: {"from": before.get(k), "to": v} for k, v in values.items() if before.get(k) != v}
         if changes:
@@ -540,17 +540,17 @@ def parcels_bundle_from_db(db: Db, *, generated_at: str, source_dataset_version:
             attrs = _attrs_content_from_row(a)
             attrs["as_of"] = a["as_of"]   # 속성 기준일: 도형 기준일과 별개로 폰이 따로 보인다 (리뷰 반영)
             attrs_by_id[a["parcel_id"]] = attrs
-    history_by_id: dict[str, list[dict]] = {}
-    if db._has_table("parcel_attribute_snapshots"):
-        for pid, entries in _changes_by_parcel(db).items():
-            if entries:
-                history_by_id[pid] = entries
-            for s_ in json.loads(a["sources_json"]):
+            for s_ in json.loads(a["sources_json"]):   # 출처는 모든 속성 행에서 모은다 (구역·부분 묶음마다 다르다, 리뷰 반영 PR #72)
                 key = (s_["kind"], s_["dbf_sha256"])
                 if key not in seen:
                     seen.add(key)
                     attrs_sources.append(s_)
         attrs_sources.sort(key=lambda s_: (s_["kind"], s_["dbf_sha256"]))
+    history_by_id: dict[str, list[dict]] = {}
+    if db._has_table("parcel_attribute_snapshots"):
+        for pid, entries in _changes_by_parcel(db).items():
+            if entries:
+                history_by_id[pid] = entries
     today = generated_at[:10]
     links: dict[str, list[str]] = {}
     for l in active_links(db, today):

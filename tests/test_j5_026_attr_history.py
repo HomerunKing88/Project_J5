@@ -135,6 +135,18 @@ def test_snapshot_changes_first_then_diffs():
     assert ch[2]["changes"]["official_land_price_krw_m2"] == {"from": 100, "to": 120}
     assert ch[0]["changes"]["jimok_name"] == {"from": None, "to": "대"} and "use_zone_2" not in ch[0]["changes"], "처음 확인은 값 있는 필드만"
     assert _snapshot_changes([]) == []
+    zero = _snapshot_changes([{"kind": "land_ownership", "as_of": "2026-09-05", "values_json": json.dumps({"co_owner_count": 0, "ownership_kind": None})},
+                              {"kind": "land_feature", "as_of": "2026-09-05", "values_json": json.dumps({"official_land_price_krw_m2": 0, "registered_area_m2": 0.0})}])
+    assert [c["changes"] for c in zero] == [{"official_land_price_krw_m2": {"from": None, "to": 0}, "registered_area_m2": {"from": None, "to": 0.0}}, {"co_owner_count": {"from": None, "to": 0}}], "0 은 값이다 (리뷰 반영)"
+    # 스키마: 바뀐 필드는 그 자료 종류의 허용 필드만
+    base = {"type": "FeatureCollection", "j5parcels": "1.0.0"}
+    good = {"as_of": "2026-09-05", "kind": "land_ownership", "first": True, "changes": {"ownership_kind": {"from": None, "to": "개인"}}}
+    bad_owner = {**good, "changes": {"owner_name": {"from": None, "to": "x"}}}
+    wrong_kind = {**good, "changes": {"jimok_name": {"from": None, "to": "대"}}}
+    for entry, ok in ((good, True), (bad_owner, False), (wrong_kind, False)):
+        b = vw_bundle()
+        b["features"][0]["properties"]["attrs_history"] = [entry]
+        assert (schema_errors("parcels_bundle.schema.json", b) == []) is ok, entry
 
 
 def test_projection_carries_history_and_cli_history(db, home, capsys, monkeypatch):
@@ -174,6 +186,16 @@ def test_projection_carries_history_and_cli_history(db, home, capsys, monkeypatc
     assert cli.main(["db", "parcels-history", "1" * 19]) == 1
     assert "parcel_missing" in capsys.readouterr().err
 
+    # 출처는 모든 속성 행에서 모은다: 필지 1 만 든 다른 파일(해시 다름)을 넣으면 출처 4개 (리뷰 반영)
+    one = later_bundle("2027-03-01", price=13_500_000, kinds=["land_feature"])
+    one["features"] = [f for f in one["features"] if f["id"] == P1]
+    one["count"] = 1
+    one["attrs_sources"][0]["dbf_sha256"] = "4" * 64
+    d3 = Db.open(home / "db" / "j5.sqlite3")
+    load_bundle(d3, one)
+    b2 = parcels_bundle_from_db(d3, generated_at="2027-03-02T00:00:00Z")
+    assert sorted((s_["kind"], s_["dbf_sha256"][:1]) for s_ in b2["attrs_sources"]) == [("land_feature", "4"), ("land_feature", vw_bundle()["attrs_sources"][0]["dbf_sha256"][:1]), ("land_ownership", vw_bundle()["attrs_sources"][2]["dbf_sha256"][:1]), ("land_plan", vw_bundle()["attrs_sources"][1]["dbf_sha256"][:1])]
+    d3.close()
 
 def test_history_cap_keeps_latest_entries(db, monkeypatch):
     load_bundle(db, vw_bundle())

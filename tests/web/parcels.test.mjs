@@ -183,6 +183,10 @@ test("attrs_history 검증·fmtAttrValue·attrChangeText (J5-026)", () => {
   assert.ok(validateParcels(bad2).some((e) => e.includes("attrs_history 항목")));
   const bad3 = vwBundle(); bad3.features[0].properties.attrs_history = {};
   assert.ok(validateParcels(bad3).some((e) => e.includes("attrs_history 형식")));
+  const owner = vwBundle(); owner.features[0].properties.attrs_history = [{ as_of: "2026-09-05", kind: "land_ownership", first: true, changes: { owner_name: { from: null, to: "x" } } }];
+  assert.ok(validateParcels(owner).some((e) => e.includes("허용되지 않은 필드 owner_name")), "소유자 이름 같은 필드는 이력으로도 거절");
+  const wrongKind = vwBundle(); wrongKind.features[0].properties.attrs_history = [{ as_of: "2026-09-05", kind: "land_plan", first: true, changes: { jimok_name: { from: null, to: "대" } } }];
+  assert.ok(validateParcels(wrongKind).some((e) => e.includes("허용되지 않은 필드 jimok_name")), "자료 종류에 없는 필드도 거절");
   assert.deepEqual([fmtAttrValue("official_land_price_krw_m2", 12340000), fmtAttrValue("registered_area_m2", 60.2), fmtAttrValue("jimok_name", null), fmtAttrValue("plan_zones_truncated", true), fmtAttrValue("plan_zones", []),
     fmtAttrValue("plan_zones", [{ code: "A", name: "도시지역", relation: "포함" }, { code: "ZA0014", name: null, relation: "저촉" }])],
     ["12,340,000원/㎡", "60.2 ㎡", "없음", "예", "없음", "도시지역, ZA0014(저촉)"]);

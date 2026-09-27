@@ -5,7 +5,13 @@ export const PARCELS_FORMAT = "1.0.0";
 export const MAX_PARCELS = 8000;
 const PNU_RE = /^[0-9]{19}$/;
 const TOP_ALLOWED = new Set(["type", "j5parcels", "data_mode", "generated_at", "source", "clip", "count", "bbox", "warnings", "features", "study_id", "source_dataset_version", "attrs_sources"]);
-const ATTR_KINDS = new Set(["land_feature", "land_plan", "land_ownership"]);
+/** 자료 종류별 허용 필드 (정본 ATTR_GROUPS 와 같다). 이력 항목의 바뀐 필드는 그 종류의 필드만 허용한다 (소유자 이름 같은 필드는 이력으로도 들어오지 못한다). */
+const ATTR_GROUP_KEYS = Object.freeze({
+  land_feature: new Set(["jimok_name", "registered_area_m2", "official_land_price_krw_m2", "price_base_year", "price_base_month", "use_zone_1", "use_zone_2", "land_use_situation", "road_side", "terrain_height", "terrain_form"]),
+  land_plan: new Set(["plan_zones", "plan_zones_truncated"]),
+  land_ownership: new Set(["ownership_kind_code", "ownership_kind", "co_owner_count", "ownership_changed_on", "ownership_change_cause_code", "national_institution_code"]),
+});
+const ATTR_KINDS = new Set(Object.keys(ATTR_GROUP_KEYS));
 const ATTR_KEYS = new Set(["jimok_name", "registered_area_m2", "official_land_price_krw_m2", "price_base_year", "price_base_month", "use_zone_1", "use_zone_2", "land_use_situation", "road_side",
   "terrain_height", "terrain_form", "plan_zones", "plan_zones_truncated", "ownership_kind_code", "ownership_kind", "co_owner_count", "ownership_changed_on", "ownership_change_cause_code", "national_institution_code", "as_of"]);
 const PROP_REQUIRED = ["pnu", "label", "emd_code", "emd_name", "mountain", "bon", "bu", "jimok", "jibun_raw", "jibun_mismatch", "area_m2_geom", "area_missing_reason", "bbox"];
@@ -73,6 +79,10 @@ export function validateParcels(doc) {
       if (!Array.isArray(h) || h.length > 200) errs.push(`${at} attrs_history 형식`);
       else if (!h.every((c) => c && typeof c === "object" && /^\d{4}-\d{2}-\d{2}$/.test(c.as_of) && ATTR_KINDS.has(c.kind) && typeof c.first === "boolean" && c.changes && typeof c.changes === "object" && !Array.isArray(c.changes)
         && Object.values(c.changes).every((d) => d && typeof d === "object" && "from" in d && "to" in d))) errs.push(`${at} attrs_history 항목 형식`);
+      else {
+        const bad = h.flatMap((c) => Object.keys(c.changes).filter((k) => !ATTR_GROUP_KEYS[c.kind].has(k)));
+        if (bad.length) errs.push(`${at} attrs_history 에 허용되지 않은 필드 ${bad[0]}`);
+      }
     }
   }
   return errs;

@@ -693,7 +693,7 @@
       }
     },
     "attrs_change": {
-      "description": "J5-026: 필지 속성이 바뀐 지점 (정본 parcel_attribute_snapshots 에서 계산). first 가 true 면 그 자료 종류의 처음 확인이며 from 은 null",
+      "description": "J5-026: 필지 속성이 바뀐 지점 (정본 parcel_attribute_snapshots 에서 계산). first 가 true 면 그 자료 종류의 처음 확인이며 from 은 null. 바뀐 필드는 그 자료 종류의 허용 필드만 (리뷰 반영)",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -749,9 +749,110 @@
                 ]
               }
             }
+          },
+          "propertyNames": {
+            "enum": [
+              "jimok_name",
+              "registered_area_m2",
+              "official_land_price_krw_m2",
+              "price_base_year",
+              "price_base_month",
+              "use_zone_1",
+              "use_zone_2",
+              "land_use_situation",
+              "road_side",
+              "terrain_height",
+              "terrain_form",
+              "plan_zones",
+              "plan_zones_truncated",
+              "ownership_kind_code",
+              "ownership_kind",
+              "co_owner_count",
+              "ownership_changed_on",
+              "ownership_change_cause_code",
+              "national_institution_code"
+            ]
           }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "land_feature"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "changes": {
+                "propertyNames": {
+                  "enum": [
+                    "jimok_name",
+                    "registered_area_m2",
+                    "official_land_price_krw_m2",
+                    "price_base_year",
+                    "price_base_month",
+                    "use_zone_1",
+                    "use_zone_2",
+                    "land_use_situation",
+                    "road_side",
+                    "terrain_height",
+                    "terrain_form"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "land_plan"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "changes": {
+                "propertyNames": {
+                  "enum": [
+                    "plan_zones",
+                    "plan_zones_truncated"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "land_ownership"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "changes": {
+                "propertyNames": {
+                  "enum": [
+                    "ownership_kind_code",
+                    "ownership_kind",
+                    "co_owner_count",
+                    "ownership_changed_on",
+                    "ownership_change_cause_code",
+                    "national_institution_code"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }
