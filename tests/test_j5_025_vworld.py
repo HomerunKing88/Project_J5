@@ -275,6 +275,54 @@ def test_load_bundle_updates_changed_attributes_same_as_of(db):
     assert r3.outcome == "unchanged" and db.status()["counts"]["parcel_attributes"] == 6
 
 
+def test_partial_bundle_keeps_fields_of_absent_datasets_and_null_area_clears_mirror(db):
+    """리뷰 반영(PR #71): 토지특성만 든 번들(소유·이용계획 없음)은 그 묶음만 갱신하고 나머지는 기존 값·출처를 유지한다. 면적 null 은 parcels 미러도 null 로."""
+    load_bundle(db, vw_bundle())
+    part = vw_bundle()
+    part["attrs_sources"] = [a for a in part["attrs_sources"] if a["kind"] == "land_feature"]
+    part["attrs_sources"][0]["dbf_sha256"] = "3" * 64
+    part["source"]["geometry_version"] = "2026-10-01"
+    keep = ("jimok_name", "registered_area_m2", "official_land_price_krw_m2", "price_base_year", "price_base_month", "use_zone_1", "use_zone_2", "land_use_situation", "road_side", "terrain_height", "terrain_form")
+    for f in part["features"]:
+        f["properties"]["attrs"] = {k: f["properties"]["attrs"].get(k) for k in keep}
+        f["properties"]["attrs"]["official_land_price_krw_m2"] = 55_000_000
+    p1 = next(f for f in part["features"] if f["id"] == P1)
+    p1["properties"]["attrs"]["registered_area_m2"] = None
+    r = load_bundle(db, part)
+    assert r.outcome == "applied" and r.updated == 6 and r.attrs_updated == 6
+    row = db.conn.execute("SELECT a.*, p.registered_area_m2 AS p_area, p.registered_area_missing_reason AS p_reason FROM parcel_attributes a JOIN parcels p USING (parcel_id) WHERE p.pnu = ?", (P1,)).fetchone()
+    assert row["official_land_price_krw_m2"] == 55_000_000 and row["as_of"] == "2026-10-01"
+    assert row["ownership_kind"] == "개인" and row["ownership_changed_on"] == "2017-01-01" and json.loads(row["plan_zones_json"])[1]["name"] == "일반상업지역", "번들에 없는 자료의 값은 지우지 않는다"
+    assert row["registered_area_m2"] is None and row["p_area"] is None and row["p_reason"] == "not_collected", "면적이 null 이면 parcels 미러도 null"
+    srcs = json.loads(row["sources_json"])
+    assert sorted(s_["kind"] for s_ in srcs) == ["land_feature", "land_ownership", "land_plan"] and next(s_ for s_ in srcs if s_["kind"] == "land_feature")["dbf_sha256"] == "3" * 64
+    row2 = db.conn.execute("SELECT a.registered_area_m2, p.registered_area_m2 AS p_area FROM parcel_attributes a JOIN parcels p USING (parcel_id) WHERE p.pnu = ?", (P11,)).fetchone()
+    assert row2["registered_area_m2"] == 980.0 and row2["p_area"] == 980.0
+    # 같은 부분 번들을 다시 넣으면 변화 없음. 소유 자료만 든 번들(as_of 같음)로 소유가 바뀌면 그 묶음만 갱신
+    assert load_bundle(db, part).outcome == "unchanged"
+    own = vw_bundle()
+    own["attrs_sources"] = [a for a in own["attrs_sources"] if a["kind"] == "land_ownership"]
+    own["source"]["geometry_version"] = "2026-10-01"
+    for f in own["features"]:
+        f["properties"]["attrs"] = {"ownership_kind_code": "06", "ownership_kind": "법인", "co_owner_count": 1, "ownership_changed_on": "2026-09-30", "ownership_change_cause_code": "04", "national_institution_code": "ZZ"}
+    r = load_bundle(db, own)
+    assert r.attrs_updated == 6
+    row = db.conn.execute("SELECT a.* FROM parcel_attributes a JOIN parcels p USING (parcel_id) WHERE p.pnu = ?", (P1,)).fetchone()
+    assert row["ownership_kind"] == "법인" and row["official_land_price_krw_m2"] == 55_000_000 and json.loads(row["plan_zones_json"])[1]["name"] == "일반상업지역"
+    # 파생본에는 필지마다 속성 기준일이 따로 실린다 (도형 기준일 2026-10-01 과 같지만 별도 필드)
+    b = parcels_bundle_from_db(db, generated_at="2026-10-02T00:00:00Z")
+    assert next(f for f in b["features"] if f["id"] == P1)["properties"]["attrs"]["as_of"] == "2026-10-01" and schema_errors("parcels_bundle.schema.json", b) == []
+    # 파생본을 다시 반영하면(다른 정본으로 옮길 때) attrs.as_of 를 기준일로 쓴다
+    b["source"]["geometry_version"] = "2026-10-01"
+    d2 = Db.create(db.path.parent / "other.sqlite3", study_id=STUDY, data_mode="synthetic")
+    try:
+        d2.load_seed(json.loads(SEED_PATH.read_text(encoding="utf-8")))
+        r2 = load_bundle(d2, b)
+        assert r2.attrs_inserted == 6 and d2.conn.execute("SELECT as_of FROM parcel_attributes").fetchone()[0] == "2026-10-01"
+    finally:
+        d2.close()
+
+
 def test_load_bundle_overlapping_zone_download_is_unchanged_but_geometry_change_conflicts(db):
     load_bundle(db, vw_bundle())
     other = vw_bundle()
@@ -296,7 +344,7 @@ def test_projection_carries_attrs_and_sources(db, home):
     b = parcels_bundle_from_db(db, generated_at="2026-09-27T00:00:00Z")
     assert schema_errors("parcels_bundle.schema.json", b) == []
     f1 = next(f for f in b["features"] if f["id"] == P1)
-    assert f1["properties"]["attrs"] == vw_bundle()["features"][0]["properties"]["attrs"] | {"plan_zones_truncated": False}
+    assert f1["properties"]["attrs"] == vw_bundle()["features"][0]["properties"]["attrs"] | {"plan_zones_truncated": False, "as_of": "2026-09-05"}, "파생본 속성에는 기준일이 따로 실린다"
     assert [s["kind"] for s in b["attrs_sources"]] == ["land_feature", "land_ownership", "land_plan"]
     proj = build_projection(db, home, photos=False)
     assert proj.outcome == "published", proj.message

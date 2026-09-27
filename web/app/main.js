@@ -585,7 +585,7 @@ function showParcel(feature) {
   $("parcel-meta").textContent = `도형면적 ${fmtArea(p.area_m2_geom, p.area_missing_reason)} (공부면적 아님)` + (p.jimok ? ` · 지목 ${p.jimok}` : "") + (p.jibun_mismatch ? " · 원본 지번과 PNU 불일치" : "") +
     (src ? ` · ${src.name} ${src.geometry_version}` : "");
   renderExtLinks($("parcel-ext"), bboxCenter(p.bbox));
-  const lines = attrLines(p.attrs);
+  const lines = attrLines(p.attrs, src?.geometry_version ?? null);
   $("parcel-attrs").replaceChildren(...lines.map(([k, v]) => el("li", {}, el("span", { class: "k", text: k }), el("span", { class: "v", text: v }))));
   $("parcel-attrs").hidden = !lines.length;
   $("parcel-attrs-note").hidden = !lines.length;

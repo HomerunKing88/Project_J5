@@ -6,7 +6,7 @@ export const MAX_PARCELS = 8000;
 const PNU_RE = /^[0-9]{19}$/;
 const TOP_ALLOWED = new Set(["type", "j5parcels", "data_mode", "generated_at", "source", "clip", "count", "bbox", "warnings", "features", "study_id", "source_dataset_version", "attrs_sources"]);
 const ATTR_KEYS = new Set(["jimok_name", "registered_area_m2", "official_land_price_krw_m2", "price_base_year", "price_base_month", "use_zone_1", "use_zone_2", "land_use_situation", "road_side",
-  "terrain_height", "terrain_form", "plan_zones", "plan_zones_truncated", "ownership_kind_code", "ownership_kind", "co_owner_count", "ownership_changed_on", "ownership_change_cause_code", "national_institution_code"]);
+  "terrain_height", "terrain_form", "plan_zones", "plan_zones_truncated", "ownership_kind_code", "ownership_kind", "co_owner_count", "ownership_changed_on", "ownership_change_cause_code", "national_institution_code", "as_of"]);
 const PROP_REQUIRED = ["pnu", "label", "emd_code", "emd_name", "mountain", "bon", "bu", "jimok", "jibun_raw", "jibun_mismatch", "area_m2_geom", "area_missing_reason", "bbox"];
 
 const isLonLat = (p) => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite) && p[0] >= -180 && p[0] <= 180 && p[1] >= -90 && p[1] <= 90;
@@ -64,6 +64,7 @@ export function validateParcels(doc) {
         for (const k of Object.keys(a)) if (!ATTR_KEYS.has(k)) { errs.push(`${at} attrs.${k} 는 허용되지 않은 필드`); break; }
         if ("plan_zones" in a && !(Array.isArray(a.plan_zones) && a.plan_zones.every((z) => z && typeof z === "object" && typeof z.code === "string"))) errs.push(`${at} attrs.plan_zones 형식`);
         for (const k of ["registered_area_m2", "official_land_price_krw_m2", "co_owner_count"]) if (a[k] != null && !(typeof a[k] === "number" && a[k] >= 0)) errs.push(`${at} attrs.${k} 형식`);
+        if ("as_of" in a && !(typeof a.as_of === "string" && /^\d{4}-\d{2}-\d{2}$/.test(a.as_of))) errs.push(`${at} attrs.as_of 는 YYYY-MM-DD`);
       }
     }
   }
@@ -93,9 +94,11 @@ export function fmtInt(n) {
   return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 
-/** 필지 패널에 보일 [항목, 값] 목록. 값이 없는 항목은 "미확인" 으로 두어 결측을 감추지 않는다. 소유는 구분·인수·변동일뿐이다. */
-export function attrLines(a) {
+/** 필지 패널에 보일 [항목, 값] 목록. 값이 없는 항목은 "미확인" 으로 두어 결측을 감추지 않는다. 소유는 구분·인수·변동일뿐이다.
+ *  기준일은 속성의 as_of(파생본) 이며 없으면 fallbackAsOf(변환 번들의 도형 기준일). 도형 기준일과 다를 수 있어 따로 보인다. */
+export function attrLines(a, fallbackAsOf = null) {
   if (!a || typeof a !== "object") return [];
+  const asOf = a.as_of ?? fallbackAsOf;
   const miss = "미확인";
   const zone = [a.use_zone_1, a.use_zone_2].filter((z) => typeof z === "string" && z).join(" · ");
   const price = Number.isFinite(a.official_land_price_krw_m2) ? `${fmtInt(a.official_land_price_krw_m2)}원/㎡` + (a.price_base_year ? ` (${a.price_base_year}년${a.price_base_month ? ` ${a.price_base_month}월` : ""} 기준)` : "") : miss;
@@ -112,6 +115,7 @@ export function attrLines(a) {
     ["지형", [a.terrain_height, a.terrain_form].filter(Boolean).join(" · ") || miss],
     ["규제·지역지구", planText],
     ["소유구분", (own ?? miss) + (Number.isFinite(a.co_owner_count) && a.co_owner_count > 1 ? ` · 공유 ${a.co_owner_count}인` : "") + (a.ownership_changed_on ? ` · 변동 ${a.ownership_changed_on}` : "")],
+    ["속성 기준일", asOf ? `${asOf} (토지 자료 기준, 도형 기준일과 다를 수 있음)` : miss],
   ];
 }
 

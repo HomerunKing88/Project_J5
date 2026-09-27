@@ -147,6 +147,11 @@ test("zoneCategory·fmtInt·attrLines·attrsSummary", () => {
   assert.equal(l1["용도지역"], "일반상업지역");
   assert.equal(l1["규제·지역지구"], "도시지역, 일반상업지역, 지구단위계획구역(가상)");
   assert.equal(l1["소유구분"], "개인 · 변동 2017-01-01");
+  assert.equal(l1["속성 기준일"], "미확인", "변환 번들에는 as_of 가 없고 fallback 도 안 주면 미확인");
+  assert.equal(Object.fromEntries(attrLines(by["1"].properties.attrs, "2026-09-05"))["속성 기준일"], "2026-09-05 (토지 자료 기준, 도형 기준일과 다를 수 있음)");
+  assert.equal(Object.fromEntries(attrLines({ ...by["1"].properties.attrs, as_of: "2026-08-01" }, "2026-09-05"))["속성 기준일"], "2026-08-01 (토지 자료 기준, 도형 기준일과 다를 수 있음)", "파생본의 as_of 가 우선");
+  const badAsOf = vwBundle(); badAsOf.features[0].properties.attrs.as_of = "2026/08/01";
+  assert.ok(validateParcels(badAsOf).some((e) => e.includes("as_of")));
   const l2 = Object.fromEntries(attrLines(by["2"].properties.attrs));
   assert.equal(l2["용도지역"], "제3종일반주거지역 · 준주거지역");
   assert.match(l2["규제·지역지구"], /ZA0014\(저촉\) … \(이름 일부는 원본 열 길이에 잘림/);

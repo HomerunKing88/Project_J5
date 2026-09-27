@@ -108,12 +108,39 @@ ATTR_FIELDS = ("jimok_name", "registered_area_m2", "official_land_price_krw_m2",
                "ownership_changed_on", "ownership_change_cause_code", "national_institution_code")
 
 
-def _attrs_content(attrs: dict, as_of: str) -> dict:
-    """번들 attrs → 정본 행 내용 (없는 필드는 null, plan_zones 는 빈 목록). 해시는 이 내용으로 계산한다."""
-    c = {k: attrs.get(k) for k in ATTR_FIELDS}
+# 자료 종류별 필드 묶음 (리뷰 반영, PR #71): 번들에 든 자료(attrs_sources.kind)의 묶음만 반영하고 없는 자료의 값은 기존 행을 유지한다.
+# 자료가 없는 것은 "값이 null 이라는 관측" 이 아니다. 자료가 있는데 그 필지의 행이 없으면 null 이다.
+ATTR_GROUPS = {
+    "land_feature": ("jimok_name", "registered_area_m2", "official_land_price_krw_m2", "price_base_year", "price_base_month", "use_zone_1", "use_zone_2", "land_use_situation",
+                     "road_side", "terrain_height", "terrain_form"),
+    "land_plan": ("plan_zones", "plan_zones_truncated"),
+    "land_ownership": ("ownership_kind_code", "ownership_kind", "co_owner_count", "ownership_changed_on", "ownership_change_cause_code", "national_institution_code"),
+}
+
+
+def _empty_attrs() -> dict:
+    c = {k: None for k in ATTR_FIELDS}
+    c["plan_zones"] = []
+    c["plan_zones_truncated"] = False
+    return c
+
+
+def _attrs_content(attrs: dict, as_of: str, kinds: set[str], base: dict | None = None) -> dict:
+    """번들 attrs → 정본 행 내용. kinds 에 든 자료 묶음의 필드만 번들 값으로 두고 나머지는 base(기존 행) 또는 null. 해시는 이 내용으로 계산한다."""
+    c = dict(base) if base else _empty_attrs()
+    for kind in kinds:
+        for k in ATTR_GROUPS[kind]:
+            c[k] = attrs.get(k)
     c["plan_zones"] = c["plan_zones"] or []
     c["plan_zones_truncated"] = bool(c["plan_zones_truncated"])
     c["as_of"] = as_of
+    return c
+
+
+def _attrs_content_from_row(row) -> dict:
+    c = {k: row[k] for k in ATTR_FIELDS if k not in ("plan_zones", "plan_zones_truncated")}
+    c["plan_zones"] = json.loads(row["plan_zones_json"])
+    c["plan_zones_truncated"] = bool(row["plan_zones_truncated"])
     return c
 
 
@@ -186,25 +213,31 @@ def load_bundle(db: Db, doc: dict) -> ParcelLoadResult:
                     raise DbError("parcel_conflict", f"PNU {feature['id']}: 같은 도형 기준일({cur['geometry_version']})인데 내용이 다르다. 새 기준일의 자료로 다시 변환하거나 원본을 확인한다")
             else:
                 raise DbError("parcel_older", f"PNU {feature['id']}: 번들 기준일 {content['geometry_version']} 이 정본의 {cur['geometry_version']} 보다 오래됐다. 반영하지 않는다")
-        # 1b) 필지 속성(J5-025): 필지마다 신규·변화 없음·갱신·거절. as_of 는 번들 도형 기준일. 정본 parcel_id 는 필지 반영 뒤에 정해지므로 PNU 로 둔다
+        # 1b) 필지 속성(J5-025): 필지마다 신규·변화 없음·갱신·거절. as_of 는 attrs.as_of(파생본) 또는 번들 도형 기준일. 정본 parcel_id 는 필지 반영 뒤에 정해지므로 PNU 로 둔다.
+        #     번들에 든 자료 묶음(attrs_sources.kind)만 반영하고, 없는 자료의 값과 출처는 기존 행을 유지한다 (attrs_sources 가 없는 번들은 세 묶음 모두로 본다)
         attrs_plan = []
         attrs_sources = doc.get("attrs_sources") or []
+        kinds = {a["kind"] for a in attrs_sources} or set(ATTR_GROUPS)
         for feature in doc["features"]:
             attrs = feature["properties"].get("attrs")
             if not attrs:
                 continue
-            content = _attrs_content(attrs, src["geometry_version"])
-            h = _hash(content)
-            cur = db.conn.execute("SELECT a.parcel_id, a.content_hash, a.as_of FROM parcel_attributes a JOIN parcels p ON p.parcel_id = a.parcel_id WHERE p.pnu = ?",
-                                  (feature["id"],)).fetchone()
+            as_of = attrs.get("as_of") or src["geometry_version"]
+            cur = db.conn.execute("SELECT a.* FROM parcel_attributes a JOIN parcels p ON p.parcel_id = a.parcel_id WHERE p.pnu = ?", (feature["id"],)).fetchone()
             if cur is None:
-                attrs_plan.append(("insert", feature["id"], content, h))
-            elif cur["content_hash"] == h:
-                attrs_plan.append(("unchanged", feature["id"], content, h))
-            elif content["as_of"] >= cur["as_of"]:
-                attrs_plan.append(("update", feature["id"], content, h))
+                content = _attrs_content(attrs, as_of, kinds)
+                sources = list(attrs_sources)
+                attrs_plan.append(("insert", feature["id"], content, _hash(content), sources))
+                continue
+            if as_of < cur["as_of"]:
+                raise DbError("parcel_attrs_older", f"PNU {feature['id']}: 속성 기준일 {as_of} 이 정본의 {cur['as_of']} 보다 오래됐다. 반영하지 않는다")
+            content = _attrs_content(attrs, as_of, kinds, base=_attrs_content_from_row(cur))
+            h = _hash(content)
+            sources = [s_ for s_ in json.loads(cur["sources_json"]) if s_["kind"] not in kinds] + list(attrs_sources)
+            if cur["content_hash"] == h:
+                attrs_plan.append(("unchanged", feature["id"], content, h, sources))   # 같은 값이면 출처 파일이 달라도 변화 없음 (필지 규칙과 같다)
             else:
-                raise DbError("parcel_attrs_older", f"PNU {feature['id']}: 속성 기준일 {content['as_of']} 이 정본의 {cur['as_of']} 보다 오래됐다. 반영하지 않는다")
+                attrs_plan.append(("update", feature["id"], content, h, sources))
         changed = any(a in ("insert", "update") for a, *_ in plan) or any(a in ("insert", "update") for a, *_ in attrs_plan)
         n_insert = sum(1 for a, *_ in plan if a == "insert")
         total_after = db.conn.execute("SELECT COUNT(*) FROM parcels").fetchone()[0] + n_insert
@@ -244,14 +277,16 @@ def load_bundle(db: Db, doc: dict) -> ParcelLoadResult:
                     " updated_at = :now WHERE pnu = :pnu", row)
                 r.updated += 1
         # 3) 필지 속성: 필지 행이 모두 있는 상태에서 넣는다. 공부면적이 있으면 parcels.registered_area_m2 도 채운다
-        for action, pnu, content, h in attrs_plan:
+        for action, pnu, content, h, sources in attrs_plan:
             if action == "unchanged":
                 r.attrs_unchanged += 1
                 continue
             pid = db.conn.execute("SELECT parcel_id FROM parcels WHERE pnu = ?", (pnu,)).fetchone()["parcel_id"]
-            db.conn.execute(_ATTR_INSERT if action == "insert" else _ATTR_UPDATE, _attrs_row(pid, content, h, attrs_sources, doc_id, now))
-            if content["registered_area_m2"] is not None:
-                db.conn.execute("UPDATE parcels SET registered_area_m2 = ?, registered_area_missing_reason = NULL, updated_at = ? WHERE parcel_id = ?", (content["registered_area_m2"], now, pid))
+            db.conn.execute(_ATTR_INSERT if action == "insert" else _ATTR_UPDATE, _attrs_row(pid, content, h, sources, doc_id, now))
+            if "land_feature" in kinds:   # 공부면적 미러: 토지특성 자료가 든 번들만 바꾼다. 값이 없으면 null + not_collected 로 되돌린다 (리뷰 반영)
+                area = content["registered_area_m2"]
+                db.conn.execute("UPDATE parcels SET registered_area_m2 = ?, registered_area_missing_reason = ?, updated_at = ? WHERE parcel_id = ?",
+                                (area, None if area is not None else "not_collected", now, pid))
             if action == "insert":
                 r.attrs_inserted += 1
             else:
@@ -389,9 +424,8 @@ def parcels_bundle_from_db(db: Db, *, generated_at: str, source_dataset_version:
         seen = set()
         for a in db.conn.execute("SELECT * FROM parcel_attributes"):
             a = dict(a)
-            attrs = {k: a[k] for k in ATTR_FIELDS if k not in ("plan_zones", "plan_zones_truncated")}
-            attrs["plan_zones"] = json.loads(a["plan_zones_json"])
-            attrs["plan_zones_truncated"] = bool(a["plan_zones_truncated"])
+            attrs = _attrs_content_from_row(a)
+            attrs["as_of"] = a["as_of"]   # 속성 기준일: 도형 기준일과 별개로 폰이 따로 보인다 (리뷰 반영)
             attrs_by_id[a["parcel_id"]] = attrs
             for s_ in json.loads(a["sources_json"]):
                 key = (s_["kind"], s_["dbf_sha256"])

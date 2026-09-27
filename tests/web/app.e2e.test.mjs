@@ -197,6 +197,7 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     assert.deepEqual(await cdp.eval("Array.from(document.querySelectorAll('#parcel-attrs li')).slice(0, 4).map(li => [li.querySelector('.k').textContent, li.querySelector('.v').textContent])"),
       [["지목", "대"], ["공부면적", "1770.5 ㎡ (토지대장)"], ["공시지가", "12,340,000원/㎡ (2026년 1월 기준)"], ["용도지역", "일반상업지역"]]);
     assert.match(await cdp.eval("document.getElementById('parcel-attrs').textContent"), /소유구분개인 · 변동 2017-01-01/);
+    assert.match(await cdp.eval("document.getElementById('parcel-attrs').textContent"), /속성 기준일2026-09-05 \(토지 자료 기준/);
     assert.ok(!(await cdp.eval("document.getElementById('parcel-panel').textContent")).includes("agrde"));
     await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
     // 재접속 뒤에도 색이 켜져 있다 (IndexedDB meta). 그 뒤 속성 없는 번들로 돌아가면 버튼이 꺼지고 색이 없다

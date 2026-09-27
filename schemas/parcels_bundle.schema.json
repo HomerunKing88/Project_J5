@@ -676,6 +676,11 @@
             "null"
           ],
           "maxLength": 10
+        },
+        "as_of": {
+          "description": "속성 기준일 (파생본에만: 정본 parcel_attributes.as_of). 변환 번들에는 없고 번들의 도형 기준일이 기준일이다",
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
         }
       }
     }
