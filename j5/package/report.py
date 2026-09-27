@@ -32,6 +32,7 @@ class Report:
     counts: dict[str, int] = field(default_factory=dict)
     findings: list[Finding] = field(default_factory=list)
     file_digests: dict[str, str] = field(default_factory=dict)  # 검사에서 실제로 읽은 항목의 sha256 (반영기가 같은 스냅샷인지 대조)
+    new_assets: list[dict] = field(default_factory=list)   # assets.new.json 의 기기 생성 물건 (J5-028). 스키마를 통과한 것만
 
     def add(self, level: str, code: str, path: str, message: str) -> None:
         self.findings.append(Finding(level, code, path, message))

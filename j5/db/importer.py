@@ -38,6 +38,7 @@ class ImportResult:
     package_id: str | None = None
     events_total: int = 0
     events_new: int = 0
+    assets_created: int = 0   # J5-028: 기기가 만든 임시 매입 단위를 pending 으로 새로 만든 수
     events_skipped: int = 0
     photos_stored: int = 0
     photos_reused: int = 0
@@ -65,6 +66,8 @@ class ImportResult:
         lines = [f"패키지: {self.package}", f"sha256: {self.package_sha256}", f"판정: {self.outcome} - {label}",
                  f"이벤트 {self.events_total} (신규 {self.events_new}, 건너뜀 {self.events_skipped}) · 사진 보관 {self.photos_stored}, 재사용 {self.photos_reused}",
                  f"dataset_version {self.dataset_version_before} → {self.dataset_version_after}"]
+        if self.assets_created:
+            lines.append(f"기기가 만든 물건 {self.assets_created}개를 임시 매입 단위(resolution_status=pending)로 만들었다. `db parcels-suggest` 로 필지 연결을 검토하고 확인 뒤 `db asset-confirm` 으로 확정한다")
         if self.run_id:
             lines.append(f"run_id: {self.run_id}")
         if self.message:
@@ -239,8 +242,8 @@ def _import_open(db: Db, src, path: Path, data_home: Path, limits: Limits, resul
             result.add(f.level, f.code, f.path, f.message)
         result.events_total = report.counts.get("events", 0)
         result.events_skipped = report.counts.get("duplicates", 0)
-        if not seed:
-            result.add("reject", "no_assets_in_db", "assets", "정본에 물건이 없다. 시드를 먼저 승계한다 (j5 db load-seed)")
+        if not seed and not report.new_assets:
+            result.add("reject", "no_assets_in_db", "assets", "정본에 물건이 없다. 시드를 먼저 승계한다 (j5 db load-seed). 기기가 만든 물건(assets.new.json)만 든 패키지는 빈 정본에도 반영된다")
         if report.data_mode is not None and report.data_mode != db.data_mode:
             result.add("reject", "data_mode_mismatch", "manifest.json", f"패키지 data_mode {report.data_mode}, 정본 {db.data_mode}")
         verdict = report.verdict()
@@ -325,6 +328,18 @@ def _import_open(db: Db, src, path: Path, data_home: Path, limits: Limits, resul
                     "location": location, "sha256": result.package_sha256 if path.is_file() else None,
                     "collected_at": manifest["created_at"], "notes": f"package_id {manifest['package_id']}, study_id {manifest['study_id']}",
                 })
+                # J5-028: 기기가 만든 임시 매입 단위를 먼저 만든다 (기록의 subject 가 되므로). 이미 있으면 그대로 둔다 (시드·이전 패키지가 먼저 만든 것)
+                for a in report.new_assets:
+                    if db.conn.execute("SELECT 1 FROM assets WHERE asset_id = ?", (a["asset_id"],)).fetchone() is not None:
+                        continue
+                    if db.conn.execute("SELECT 1 FROM subjects WHERE subject_id = ?", (a["asset_id"],)).fetchone() is None:
+                        db.conn.execute("INSERT INTO subjects (subject_id, subject_type, recorded_at) VALUES (?, 'asset', ?)", (a["asset_id"], db.now()))
+                    note = f"기기에서 만든 임시 매입 단위 (필지 PNU {a['pnu'] or '미지정'}, 기기 시각 {a['created_at']}, 패키지 {manifest['package_id']})" + (f" · {a['notes']}" if a.get("notes") else "")
+                    db.conn.execute(
+                        "INSERT INTO assets (asset_id, label, resolution_status, lon, lat, address, data_mode, seed_created_at, notes, recorded_at, updated_at)"
+                        " VALUES (?, ?, 'pending', ?, ?, NULL, ?, ?, ?, ?, ?)",
+                        (a["asset_id"], a["label"], a["location_point"][0], a["location_point"][1], db.data_mode, a["created_at"][:10], note, db.now(), db.now()))
+                    result.assets_created += 1
                 for e in new_events:
                     ev = e["ev"]
                     rt = ev["record_type"]

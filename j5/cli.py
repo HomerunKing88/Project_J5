@@ -74,7 +74,10 @@ def _build_parser() -> argparse.ArgumentParser:
     ds.add_argument("--json", action="store_true")
     dl = dsub.add_parser("load-seed", help="assets.seed.json 의 물건을 asset_id 그대로 승계해 반영한다")
     dl.add_argument("seed", type=Path)
-    dm = dsub.add_parser("import", help="관측 패키지(.j5field.zip 또는 폴더)를 정본에 반영한다. 사진은 J5_DATA_HOME/photos 에 보관")
+    ac_ = dsub.add_parser("asset-confirm", help="기기가 만든 임시 매입 단위(resolution_status=pending)를 확인된 물건으로 바꾼다 (J5-028). 필지 연결은 parcels-suggest/link 로 따로 한다")
+    ac_.add_argument("asset_id")
+    ac_.add_argument("--label", help="확인하며 이름을 바꿀 때")
+    dm = dsub.add_parser("import", help="관측 패키지(.j5field.zip 또는 폴더)를 정본에 반영한다. 사진은 J5_DATA_HOME/photos 에 보관. 기기가 만든 물건(assets.new.json)은 임시 매입 단위(pending)로 만든다")
     dm.add_argument("package", type=Path)
     dm.add_argument("--data-home", type=Path, help="사진·로그를 둘 실데이터 홈. 생략 시 J5_DATA_HOME")
     dm.add_argument("--json", action="store_true")
@@ -400,6 +403,20 @@ def _db_main(args) -> int:
                 r = db.load_seed(seed)
                 changed = "정본이 바뀌어 올렸다" if (r.inserted or r.updated) else "변화 없음이라 유지"
                 print(f"시드 반영: 신규 {r.inserted}, 갱신 {r.updated}, 변화 없음 {r.unchanged} (data_mode {db.data_mode}). dataset_version {r.dataset_version} ({changed})")
+                return 0
+            if args.db_command == "asset-confirm":
+                row = db.conn.execute("SELECT asset_id, label, resolution_status FROM assets WHERE asset_id = ?", (args.asset_id,)).fetchone()
+                if row is None:
+                    print(f"물건이 정본에 없다: {args.asset_id}", file=sys.stderr)
+                    return 1
+                if row["resolution_status"] == "confirmed":
+                    # 확인된 물건은 건드리지 않는다 (--label 이 있어도 개명하지 않는다: 이 명령은 확정 전용이지 정본 개명 명령이 아니다, 리뷰 반영 PR #74)
+                    print(f"이미 확인된 물건이다: {row['label']} ({row['asset_id']})" + (". --label 은 pending 물건을 확정할 때만 적용된다" if args.label else ""))
+                    return 0 if not args.label else 1
+                with db.transaction():
+                    db.conn.execute("UPDATE assets SET resolution_status = 'confirmed', label = COALESCE(?, label), updated_at = ? WHERE asset_id = ?", (args.label, db.now(), args.asset_id))
+                    v = db.bump_dataset_version()
+                print(f"물건 확인: {args.label or row['label']} ({args.asset_id}) resolution_status pending → confirmed · dataset_version {v}. 필지 연결은 parcels-suggest → parcels-link")
                 return 0
             if args.db_command == "import":
                 home = _data_home(args)

@@ -32,6 +32,10 @@ ASSETS = [
     ("7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a54", "가상 물건 5", [127.0003, 37.5712], None),
 ]
 UNKNOWN_ASSET = "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a99"
+# J5-028: 기기가 필지 4-2 (가상, 구멍 있음) 안의 점으로 만든 임시 매입 단위. 시드에는 없다
+NEW_ASSET = {"asset_id": "8e7d6c5b-4a39-4281-9f0e-1d2c3b4a5968", "label": "가상동 4-2", "location_point": [126.9996, 37.5705], "data_mode": "synthetic",
+             "created_at": "2026-09-22T10:20:00+09:00", "notes": "현장에서 만듦 (가상)", "pnu": "9999900100100040002", "origin": "device"}
+NEW_EVENT = "1a2b3c4d-0001-4000-8000-000000000004"
 ROUTE_V1 = "9d2e6b1c-5f4a-4c3b-9e8d-7a6b5c4d3e2f"
 EVENT = [
     "1a2b3c4d-0001-4000-8000-000000000001",
@@ -80,7 +84,7 @@ def line_bytes(ev: dict) -> bytes:
 
 
 def write_package(name: str, lines: list[bytes], photos: list[bytes], package_id: str,
-                  manifest_override=None) -> None:
+                  manifest_override=None, new_assets: list[dict] | None = None) -> None:
     d = PACKAGES / name
     if d.exists():
         shutil.rmtree(d)
@@ -88,12 +92,16 @@ def write_package(name: str, lines: list[bytes], photos: list[bytes], package_id
     obs = b"".join(lines)
     (d / "observations.jsonl").write_bytes(obs)
     files = [{"path": "observations.jsonl", "bytes": len(obs), "sha256": sha(obs)}]
+    if new_assets:   # J5-028: 선택 파일 assets.new.json (폰의 JSON.stringify(list, null, 2) + LF 와 같은 형태)
+        na = (json.dumps(new_assets, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        (d / "assets.new.json").write_bytes(na)
+        files.append({"path": "assets.new.json", "bytes": len(na), "sha256": sha(na)})
     for p in photos:
         h = sha(p)
         (d / "photos" / f"{h}.png").write_bytes(p)
         files.append({"path": f"photos/{h}.png", "bytes": len(p), "sha256": h})
     manifest = {
-        "format": "j5field", "schema_version": "1.0.0", "study_id": STUDY_ID,
+        "format": "j5field", "schema_version": "1.1.0" if new_assets else "1.0.0", "study_id": STUDY_ID,
         "package_id": package_id, "created_at": CREATED_AT, "data_mode": "synthetic", "files": files,
     }
     if manifest_override:
@@ -157,6 +165,10 @@ def main() -> None:
     # 알 수 없는 물건: 시드에 없는 asset_id (스키마는 통과, 연결 검사에서 거절)
     write_package("unknown_asset", [line_bytes(event(EVENT[0], UNKNOWN_ASSET, "no_change", None, []))],
                   [], "5e5e0000-0000-4000-8000-000000000008")
+
+    # 기기가 만든 물건 (J5-028): 시드에 없는 asset_id 지만 assets.new.json 에 정의 → 반영기가 pending 물건으로 만든다
+    write_package("new_asset", [line_bytes(event(NEW_EVENT, NEW_ASSET["asset_id"], "change_observed", "빈 점포 (가상)", []))],
+                  [], "5e5e0000-0000-4000-8000-000000000010", new_assets=[NEW_ASSET])
 
     # 필수값 위반: 변화 확인인데 사진도 설명도 없음 (스키마 단계에서 거절)
     write_package("invalid_change_without_evidence",

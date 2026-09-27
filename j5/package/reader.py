@@ -16,7 +16,7 @@ from typing import BinaryIO
 
 from j5.package.limits import DEFAULT_LIMITS, Limits
 
-ALLOWED_NAME = re.compile(r"^(manifest\.json|observations\.jsonl|photos/[0-9a-f]{64}\.(jpg|png|webp))$")
+ALLOWED_NAME = re.compile(r"^(manifest\.json|observations\.jsonl|assets\.new\.json|photos/[0-9a-f]{64}\.(jpg|png|webp))$")  # assets.new.json: J5-028
 _DRIVE = re.compile(r"^[A-Za-z]:")
 
 

@@ -32,6 +32,7 @@ EXPECTED = {
     "unsupported_heic": ("reject", "event_schema"),
     "unknown_asset": ("reject", "asset_not_in_seed"),
     "invalid_change_without_evidence": ("reject", "event_schema"),
+    "new_asset": ("ok", None),   # J5-028: 시드에 없지만 assets.new.json 에 정의된 물건
 }
 
 
@@ -72,7 +73,7 @@ def test_study_id_check():
 
 def test_valid_counts_and_metadata():
     r = inspect_package(PACKAGES / "valid", seed=SEED)
-    assert r.counts == {"lines": 3, "events": 3, "duplicates": 0, "conflicts": 0, "photos": 2, "photos_referenced": 2}
+    assert r.counts == {"lines": 3, "events": 3, "duplicates": 0, "conflicts": 0, "photos": 2, "photos_referenced": 2, "new_assets": 0}
     assert r.package_id == "5e5e0000-0000-4000-8000-000000000001"
     assert r.data_mode == "synthetic" and r.schema_version == "1.0.0"
 
@@ -361,3 +362,80 @@ def test_cli_survives_ascii_console():
                        capture_output=True, env=env, cwd=Path(__file__).resolve().parents[1])
     assert p.returncode == 2, p.stderr
     assert b"event_id_conflict" in p.stdout
+
+
+# ---- 기기가 만든 물건 (J5-028, assets.new.json) ----
+
+def _new_asset_pkg(tmp_path, mutate=None, *, events=None, data_mode="synthetic"):
+    from tests.fixtures.make_packages import NEW_ASSET, NEW_EVENT, event, line_bytes
+    import shutil
+    d = tmp_path / "pkg"
+    shutil.copytree(PACKAGES / "new_asset", d)
+    na = json.loads((d / "assets.new.json").read_text(encoding="utf-8"))
+    if mutate:
+        mutate(na)
+    raw = (json.dumps(na, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    (d / "assets.new.json").write_bytes(raw)
+    m = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
+    if events is not None:
+        obs = b"".join(line_bytes(e) for e in events)
+        (d / "observations.jsonl").write_bytes(obs)
+    obs = (d / "observations.jsonl").read_bytes()
+    import hashlib
+    for f in m["files"]:
+        if f["path"] == "assets.new.json":
+            f["bytes"], f["sha256"] = len(raw), hashlib.sha256(raw).hexdigest()
+        if f["path"] == "observations.jsonl":
+            f["bytes"], f["sha256"] = len(obs), hashlib.sha256(obs).hexdigest()
+    m["data_mode"] = data_mode
+    (d / "manifest.json").write_text(json.dumps(m, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return d
+
+
+def test_new_asset_counts_and_versions():
+    r = inspect_package(PACKAGES / "new_asset", seed=SEED)
+    assert r.verdict() == "ok" and r.counts["new_assets"] == 1 and r.counts["events"] == 1 and r.schema_version == "1.1.0"
+    assert len(r.new_assets) == 1 and r.new_assets[0]["pnu"] == "9999900100100040002" and "asset_not_in_seed" not in codes(r)
+    assert inspect_package(PACKAGES / "new_asset").verdict() == "ok", "시드 없이도 통과"
+
+
+def test_new_asset_rejections_and_warnings(tmp_path):
+    from tests.fixtures.make_packages import ASSETS, NEW_ASSET, NEW_EVENT, event
+    import shutil
+    # 허용되지 않은 필드(소유자 이름)는 스키마에서 거절
+    r = inspect_package(_new_asset_pkg(tmp_path / "a", lambda na: na[0].update({"owner_name": "x"})), seed=SEED)
+    assert r.verdict() == "reject" and "new_assets_schema" in codes(r)
+    # 패키지와 다른 data_mode
+    r = inspect_package(_new_asset_pkg(tmp_path / "b", lambda na: na[0].update({"data_mode": "private_real"})), seed=SEED)
+    assert r.verdict() == "reject" and "new_asset_data_mode" in codes(r)
+    # 같은 ID 두 번
+    r = inspect_package(_new_asset_pkg(tmp_path / "c", lambda na: na.append(dict(na[0]))), seed=SEED)
+    assert r.verdict() == "reject" and "new_asset_duplicate" in codes(r)
+    # 이미 시드에 있는 물건: 정보만
+    r = inspect_package(_new_asset_pkg(tmp_path / "d", lambda na: na[0].update({"asset_id": ASSETS[0][0]}), events=[event(NEW_EVENT, ASSETS[0][0], "no_change", None, [])]), seed=SEED)
+    assert r.verdict() == "ok" and "new_asset_already_in_seed" in codes(r)
+    # 어떤 이벤트도 가리키지 않는 새 물건: 경고 (이벤트는 시드 물건)
+    r = inspect_package(_new_asset_pkg(tmp_path / "e", None, events=[event(NEW_EVENT, ASSETS[0][0], "no_change", None, [])]), seed=SEED)
+    assert r.verdict() == "ok" and "new_asset_unreferenced" in codes(r) and any(f.level == "warn" and f.code == "new_asset_unreferenced" for f in r.findings)
+    # manifest 에 없는 assets.new.json 은 거절 (파일·manifest 대조)
+    d = tmp_path / "f"
+    shutil.copytree(PACKAGES / "new_asset", d)
+    m = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
+    m["files"] = [f for f in m["files"] if f["path"] != "assets.new.json"]
+    (d / "manifest.json").write_text(json.dumps(m, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    r = inspect_package(d, seed=SEED)
+    assert r.verdict() == "reject" and "file_not_in_manifest" in codes(r)
+    # schema_version 1.0.0 인데 assets.new.json 이 있으면 거절 (버전 협상)
+    d = tmp_path / "h"
+    shutil.copytree(PACKAGES / "new_asset", d)
+    m = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
+    m["schema_version"] = "1.0.0"
+    (d / "manifest.json").write_text(json.dumps(m, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    r = inspect_package(d, seed=SEED)
+    assert r.verdict() == "reject" and "new_assets_schema_version" in codes(r)
+    # JSON 이 아니면 거절
+    d = tmp_path / "g"
+    shutil.copytree(PACKAGES / "new_asset", d)
+    (d / "assets.new.json").write_bytes(b"{bad")
+    r = inspect_package(d, seed=SEED)
+    assert r.verdict() == "reject" and "new_assets_not_json" in codes(r)

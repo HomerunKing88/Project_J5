@@ -26,6 +26,8 @@
 
 - `survey_input.schema.json`: 조사 경로·점포·표본틀·세션 수동 입력 파일(`j5 db survey-apply`). `kind` 로 구분한 네 종류(route_version / units / frame_version / session). 점포 관측 상태는 `occupied / vacant / closed_today / lease_ad_only / not_visited / unclear` 이며 앞의 둘만 확인(K)이다(데이터 사전 §5).
 
+- `assets_new.schema.json`: 관측 패키지의 선택 파일 `assets.new.json`(J5-028, ADR-21). 기기가 필지에서 만든 임시 매입 단위 목록: `asset_id`(UUID v4)·`label`·`location_point`(필지 안의 점)·`data_mode`·`created_at`(기기 시각)·`notes`·`pnu`(참고값 또는 null)·`origin=device`. 추가 필드 불가(소유자·연락처 없음). 이 파일이 있으면 manifest `schema_version` 은 1.1.0.
+
 ## 파일 (j5parcels 1.0.0, R2 J5-013B-1)
 
 - `parcels_bundle.schema.json`: 필지 경계·지번 번들 `.j5parcels.json`(`j5 parcels convert` 출력, 폰 지도 입력). GeoJSON FeatureCollection 에 `j5parcels`·`data_mode(synthetic|real)`·`source`(자료명·파일·해시·좌표계·인코딩·도형 기준일·이용허락)·`clip`·`count`·`bbox`·`warnings` 를 더한 것. 필지 속성은 `pnu`(19자리)·`label`·`emd_code`·`emd_name`·`mountain`·`bon`·`bu`·`jimok`·`jibun_raw`·`jibun_mismatch`·`area_m2_geom`(도형면적, 공부면적 아님. 지리좌표 원본이면 null)·`area_missing_reason`·`bbox`. 상한 8,000 필지(ADR-13). 파생본(`j5 db project` 의 `parcels.geojson`)은 같은 형식에 필지마다 `geometry_version`·정본 연결 물건 `asset_ids` 를 더한다 (J5-013B-2). 필지 속성(J5-025, ADR-19): 필지마다 선택 `attrs`(`$defs/attrs`: 지목·공부면적·개별공시지가와 기준 연월·용도지역 1·2·이용상황·도로접면·지형·지역지구 목록 `plan_zones`(코드·이름·관계)·`plan_zones_truncated`·소유 구분 코드·구분명·공유인수·변동일·원인 코드·국가기관 구분, 결측은 null, 추가 필드 불가; 파생본에는 속성 기준일 `as_of`), 파생본에만 선택 `attrs_history`(`$defs/attrs_change`: 기준일·자료 종류·처음 확인 여부·바뀐 필드의 from/to, 최대 200건, J5-026), 최상위 선택 `attrs_sources`(읽은 자료의 종류·이름·파일·해시·레코드 수·사용 행 수·열 이름). 연령대·거주 구분·소유자 이름·주소는 없다.

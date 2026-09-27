@@ -7,8 +7,10 @@ import { isoWithOffset } from "./time.js";
 import { sha256Hex } from "./hash.js";
 
 export const PACKAGE_SCHEMA_VERSION = "1.0.0";
+export const PACKAGE_SCHEMA_VERSION_NEW_ASSETS = "1.1.0";   // assets.new.json 이 든 패키지 (J5-028)
 const MANIFEST_NAME = "manifest.json";
 const OBS_NAME = "observations.jsonl";
+export const NEW_ASSETS_NAME = "assets.new.json";
 const MANIFEST_BASE = 400, MANIFEST_PER_FILE = 200; // manifest 크기 상한 추정
 const ENC = new TextEncoder();
 
@@ -98,12 +100,12 @@ export function hasRemainingBatches(plan) {
   return !!(plan && Array.isArray(plan.batches) && Number.isInteger(plan.k) && plan.k < plan.batches.length);
 }
 
-export function buildManifest({ studyId, dataMode, packageId, createdAt, files }) {
+export function buildManifest({ studyId, dataMode, packageId, createdAt, files, schemaVersion = PACKAGE_SCHEMA_VERSION }) {
   const idErr = studyIdError(studyId);
   if (idErr) throw new Error(idErr);
   return {
     format: "j5field",
-    schema_version: PACKAGE_SCHEMA_VERSION,
+    schema_version: schemaVersion,
     study_id: studyId,
     package_id: packageId,
     created_at: createdAt,
@@ -130,12 +132,19 @@ export function exportFilename({ studyId, createdAt, k, n, packageId }) {
  * batch: planBatches 의 항목. recordsById: Map event_id → record. loadPhoto(sha) → { blob, ext } | undefined.
  * 사진은 다시 읽어 sha256·크기를 대조한다. 불일치면 예외 (부분 패키지를 만들지 않음).
  */
-export async function buildPackage(batch, recordsById, { loadPhoto, studyId, dataMode, now = new Date(), packageId = uuid4(), k = 1, n = 1, limits = LIMITS }) {
+export async function buildPackage(batch, recordsById, { loadPhoto, studyId, dataMode, now = new Date(), packageId = uuid4(), k = 1, n = 1, limits = LIMITS, newAssets = [] }) {
   const lines = batch.eventIds.map((id) => {
     const r = recordsById.get(id);
     if (!r) throw new Error(`기록 없음 ${id}`);
     return r.line;
   });
+  // 기기가 만든 물건(J5-028): 이 묶음의 기록이 가리키는 것만 assets.new.json 으로 싣는다 (PC 반영기가 pending 물건으로 만든다)
+  const assetIds = new Set(batch.eventIds.map((id) => recordsById.get(id)?.asset_id));
+  const carried = newAssets.filter((a) => a && a.origin === "device" && assetIds.has(a.asset_id))
+    .map((a) => ({ asset_id: a.asset_id, label: a.label, location_point: a.location_point, data_mode: a.data_mode, created_at: a.created_at, notes: a.notes ?? null, pnu: a.pnu ?? null, origin: "device" }))
+    .sort((a, b) => (a.asset_id < b.asset_id ? -1 : 1));
+  if (carried.some((a) => a.data_mode !== dataMode)) throw new Error("기기가 만든 물건의 자료 종류가 패키지와 다르다");
+  const newAssetsBytes = carried.length ? ENC.encode(JSON.stringify(carried, null, 2) + "\n") : null;
   const obsLen = lines.reduce((s, l) => s + l.length, 0);
   const obs = new Uint8Array(obsLen);
   let off = 0;
@@ -157,13 +166,16 @@ export async function buildPackage(batch, recordsById, { loadPhoto, studyId, dat
     files.push({ path: name, bytes: size, sha256: sha });
   }
   photoEntries.sort((a, b) => (a.name < b.name ? -1 : 1));
+  if (newAssetsBytes) files.push({ path: NEW_ASSETS_NAME, bytes: newAssetsBytes.length, sha256: await sha256Hex(newAssetsBytes) });
   files.sort((a, b) => (a.path === OBS_NAME ? -1 : b.path === OBS_NAME ? 1 : a.path < b.path ? -1 : 1));
   const createdAt = isoWithOffset(now);
-  const manifestBytes = ENC.encode(JSON.stringify(buildManifest({ studyId, dataMode, packageId, createdAt, files }), null, 2) + "\n");
+  const schemaVersion = newAssetsBytes ? PACKAGE_SCHEMA_VERSION_NEW_ASSETS : PACKAGE_SCHEMA_VERSION;
+  const manifestBytes = ENC.encode(JSON.stringify(buildManifest({ studyId, dataMode, packageId, createdAt, files, schemaVersion }), null, 2) + "\n");
   if (manifestBytes.length > limits.photo || obs.length > limits.photo) throw new Error("manifest 또는 observations.jsonl 크기 초과");
   const entries = [
     { name: MANIFEST_NAME, size: manifestBytes.length, crc32: crc32(manifestBytes), data: manifestBytes },
     { name: OBS_NAME, size: obs.length, crc32: crc32(obs), data: obs },
+    ...(newAssetsBytes ? [{ name: NEW_ASSETS_NAME, size: newAssetsBytes.length, crc32: crc32(newAssetsBytes), data: newAssetsBytes }] : []),
     ...photoEntries,
   ];
   const { parts, size } = buildZip(entries, { mtime: now });
@@ -174,6 +186,6 @@ export async function buildPackage(batch, recordsById, { loadPhoto, studyId, dat
   return {
     blob, bytes: size, packageId, createdAt,
     filename: exportFilename({ studyId, createdAt: now, k, n, packageId }),
-    eventIds: [...batch.eventIds], photoCount: photoEntries.length, files,
+    eventIds: [...batch.eventIds], photoCount: photoEntries.length, files, newAssetCount: carried.length,
   };
 }
