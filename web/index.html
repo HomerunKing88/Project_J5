@@ -75,6 +75,24 @@
   </form>
   <ul id="parcel-search-results" class="plain search-results" hidden></ul>
   <p id="parcel-search-note" class="muted" role="status"></p>
+  <details id="parcel-filter" class="filter-box" hidden>
+    <summary>조건으로 필지 찾기</summary>
+    <form id="parcel-filter-form">
+      <div class="filter-grid">
+        <label>용도지역 <select id="pf-zone"><option value="">전체</option></select></label>
+        <label>공부면적 최소(㎡) <input id="pf-area-min" type="number" inputmode="decimal" min="0" step="any"></label>
+        <label>공부면적 최대(㎡) <input id="pf-area-max" type="number" inputmode="decimal" min="0" step="any"></label>
+        <label>공시지가 최소(만원/㎡) <input id="pf-price-min" type="number" inputmode="decimal" min="0" step="any"></label>
+        <label>공시지가 최대(만원/㎡) <input id="pf-price-max" type="number" inputmode="decimal" min="0" step="any"></label>
+        <label>소유구분 <select id="pf-owner"><option value="">전체</option></select></label>
+        <label class="check"><input id="pf-restricted" type="checkbox"> 저촉 규제 있음</label>
+      </div>
+      <div class="row"><button type="submit" class="primary">찾기</button> <button type="button" id="pf-clear" class="secondary">지우기</button></div>
+    </form>
+    <p id="parcel-filter-note" class="muted" role="status"></p>
+    <ul id="parcel-filter-results" class="plain search-results" hidden></ul>
+    <p class="help">불러온 필지 파일의 토지 자료 값 그대로 거릅니다. 값이 없는 필지는 조건에 맞는 것으로 보지 않고 따로 셉니다. 공부면적은 토지대장 면적(도형면적 아님)입니다. 매입 가능성·규제 판단이 아닙니다.</p>
+  </details>
   <div id="map-selected" class="selected-card" hidden>
     <div class="selected-body">
       <strong id="map-selected-label"></strong>

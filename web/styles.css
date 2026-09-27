@@ -254,6 +254,7 @@ details.disclosure > :not(summary) { margin-top: var(--space-2); }
 .lg-bm { background: var(--bm-building); border: 1px solid var(--muted); border-radius: 2px; }
 .parcel { fill: var(--surface); fill-opacity: .5; stroke: var(--muted); stroke-width: 1; stroke-opacity: .8; pointer-events: visiblePainted; }
 .parcel.synthetic { stroke-dasharray: 4 2; }
+.parcel.mark { stroke: var(--accent); stroke-width: 2.5; stroke-opacity: 1; stroke-dasharray: none; }
 .parcel.sel { fill: var(--sel); fill-opacity: .25; stroke: var(--sel); stroke-width: 2; stroke-opacity: 1; }
 /* 용도지역 색 (J5-025): 토지이음의 관례에 가깝게 주거 노랑, 상업 분홍, 공업 보라, 녹지 초록. 선택 강조가 우선. */
 .parcel.zone-res1 { fill: #fff3b0; fill-opacity: .55; }
@@ -352,3 +353,9 @@ section:not(.view):not(.card) { background: var(--surface); border: 1px solid va
 table { border-collapse: collapse; width: 100%; font-size: .9rem; }
 td, th { border-bottom: 1px solid var(--line); padding: 6px; text-align: left; vertical-align: top; }
 pre { white-space: pre-wrap; word-break: break-all; font-size: .85rem; background: var(--surface-2); padding: 8px; border-radius: 8px; }
+/* 조건으로 필지 찾기 (J5-033) */
+.filter-box summary { cursor: pointer; font-weight: 600; min-height: var(--touch); display: flex; align-items: center; }
+.filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(9.5em, 1fr)); gap: 6px 10px; align-items: end; }
+.filter-grid label { display: grid; gap: 2px; font-size: .88rem; color: var(--muted); }
+.filter-grid input, .filter-grid select { min-height: var(--touch); }
+.filter-grid .check { display: flex; align-items: center; gap: 6px; }

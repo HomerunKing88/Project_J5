@@ -32,14 +32,14 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     // 지도 모듈 로드 실패: map.js 요청을 막고 첫 접속 (서비스 워커가 아직 없을 때). 목록·설정은 그대로 동작하고 지도 절만 안내를 낸다.
     await cdp.send("Network.setBlockedURLs", { urls: ["*/app/map.js"] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.11')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.12')");
     await cdp.waitFor("document.getElementById('map-note').textContent.includes('지도 표시 불가')");
     assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li').length"), 1, "지도 모듈 없이도 목록 절이 그려진다");
     const blockedLogs = cdp.errors.splice(0);
     assert.ok(blockedLogs.every((e) => e.includes("ERR_BLOCKED_BY_CLIENT") || e.includes("Failed to load resource") || e.includes("map.js")), blockedLogs.join("; "));
     await cdp.send("Network.setBlockedURLs", { urls: [] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.11')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.12')");
     await cdp.waitFor("document.getElementById('map-note').textContent === ''");
     // 설정
     await cdp.eval("document.getElementById('study-id').value = 'e2e-study'; document.getElementById('save-settings').click(); 'ok'");
@@ -401,6 +401,27 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       assert.equal(await cdp.eval("document.getElementById('parcel-price').hidden"), false);
       assert.deepEqual(await cdp.eval("Array.from(document.querySelectorAll('#parcel-price-list li')).map(li => li.textContent)"),
         ["2026년 1월 기준12,340,000원/㎡ · 확인 2026-09-05", "2026년 1월 기준13,000,000원/㎡ (+5.3%) · 확인 2026-09-25 · 같은 기준연월의 값이 바뀜 (정정 여부 확인)"]);
+      // 조건으로 필지 찾기 (J5-033): 상업 용도지역 → 필지 1 하나, 지도 테두리 1개, 열기로 패널. 저촉 규제 → 3필지. 지우기 → 강조 없음
+      assert.equal(await cdp.eval("document.getElementById('parcel-filter').hidden"), false, "속성 있는 필지 파일에서 보인다");
+      await cdp.eval("document.getElementById('parcel-filter').open = true; document.getElementById('pf-zone').value = 'com'; document.getElementById('parcel-filter-form').requestSubmit(); 'ok'");
+      await cdp.waitFor("document.getElementById('parcel-filter-note').textContent.includes('일치')");
+      assert.match(await cdp.eval("document.getElementById('parcel-filter-note').textContent"), /^속성 있는 필지 6개 중 1개 일치 \(공부면적 큰 순\) · 지도에 테두리로 표시$/);
+      assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel.mark').length"), 1);
+      assert.equal(await cdp.eval("document.querySelector('#parcel-filter-results li .title').textContent"), "가상동 1");
+      await cdp.eval("document.getElementById('pf-zone').value = ''; document.getElementById('pf-restricted').checked = true; document.getElementById('parcel-filter-form').requestSubmit(); 'ok'");
+      await cdp.waitFor("document.getElementById('parcel-filter-note').textContent.includes('3개 일치')");
+      assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel.mark').length"), 3);
+      await cdp.eval("document.getElementById('pf-restricted').checked = false; document.getElementById('pf-area-min').value = '9'; document.getElementById('pf-area-max').value = '1'; document.getElementById('parcel-filter-form').requestSubmit(); 'ok'");
+      await cdp.waitFor("document.getElementById('parcel-filter-note').textContent.startsWith('조건 확인')");
+      assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel.mark').length"), 0, "잘못된 조건이면 강조를 지운다");
+      await cdp.eval("document.getElementById('pf-clear').click(); 'ok'");
+      assert.equal(await cdp.eval("document.getElementById('pf-area-min').value + document.getElementById('parcel-filter-note').textContent"), "");
+      await cdp.eval("document.getElementById('pf-zone').value = 'com'; document.getElementById('parcel-filter-form').requestSubmit(); 'ok'");
+      await cdp.waitFor("document.querySelectorAll('#parcel-filter-results li button').length === 1");
+      await cdp.eval("document.querySelector('#parcel-filter-results li button').click(); 'ok'");
+      await cdp.waitFor("document.getElementById('parcel-title').textContent === '가상동 1'");
+      await cdp.eval("document.getElementById('pf-clear').click(); 'ok'");
+      assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel.mark').length"), 0);
       await cdp.eval("document.getElementById('parcel-history').click(); 'ok'");
       await cdp.waitFor("!document.getElementById('sec-history').hidden");
       assert.equal(await cdp.eval("document.getElementById('history-title').textContent"), "가상동 1 필지");

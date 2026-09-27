@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { validateParcels, labelPoint, pointInFeature, assetsInParcel, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, polygonsOf, MAX_PARCELS, zoneCategory, ZONE_LABELS, fmtInt, attrLines, attrsSummary, fmtAttrValue, attrChangeText, parseParcelQuery, findParcels, parcelAt, interiorPoint, priceTrend, priceTrendRow, planZonesText } from "../../web/app/parcels.js";
+import { validateParcels, labelPoint, pointInFeature, assetsInParcel, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, polygonsOf, MAX_PARCELS, zoneCategory, ZONE_LABELS, fmtInt, attrLines, attrsSummary, fmtAttrValue, attrChangeText, parseParcelQuery, findParcels, parcelAt, interiorPoint, priceTrend, priceTrendRow, planZonesText, ownershipKinds, parseFilter, hasCriteria, filterParcels, filterRowText, FILTER_LIMIT } from "../../web/app/parcels.js";
 import { worldBbox, parcelPathD, parcelLabelVisible, mercator, fitView, FIT_MAX_SCALE, PARCEL_LOCAL_K } from "../../web/app/map.js";
 
 const bundle = () => JSON.parse(readFileSync(new URL("../fixtures/parcels/synthetic.j5parcels.json", import.meta.url), "utf8"));
@@ -311,7 +311,9 @@ test("규제·지역지구 한 줄 (J5-032): 이름은 짝짓지 않은 목록, 
   // 관계가 여럿이면 종류별로 묶는다
   assert.equal(planZonesText({ plan_zones: [{ code: "A", relation: "저촉" }, { code: "B", relation: "접함" }, { code: "C", relation: "저촉" }], plan_zone_names: ["가"] }), "가 · 코드 3개 (저촉 A, C · 접함 B)");
   // J5-025 형식 번들(이름 목록 없음): 코드에 붙은 이름을 순서대로 쓴다
-  assert.equal(planZonesText({ plan_zones: [{ code: "A", name: "도시지역", relation: "포함" }, { code: "B", name: null, relation: "저촉" }], plan_zones_truncated: true }), "도시지역 … (이름 목록은 원본 열 길이에서 잘림) · 코드 2개 (저촉 B)");
+  assert.equal(planZonesText({ plan_zones: [{ code: "A", name: "도시지역", relation: "포함" }, { code: "B", name: "지구단위(종", relation: "저촉" }, { code: "C", name: null, relation: "포함" }], plan_zones_truncated: true }),
+    "도시지역 … (이름 목록은 원본 열 길이에서 잘림) · 코드 3개 (저촉 B)", "옛 형식에서 잘렸으면 끊긴 마지막 조각은 뺀다");
+  assert.equal(planZonesText({ plan_zones: [{ code: "A", name: "도시지역", relation: "포함" }, { code: "B", name: null, relation: "저촉" }] }), "도시지역 · 코드 2개 (저촉 B)");
   assert.equal(planZonesText({ plan_zones: [{ code: "A", name: null, relation: "포함" }] }), "이름 없음 · 코드 1개");
   assert.equal(planZonesText({}), null);
   assert.equal(Object.fromEntries(attrLines({ jimok_name: "대" }))["규제·지역지구"], "미확인");
@@ -321,4 +323,40 @@ test("규제·지역지구 한 줄 (J5-032): 이름은 짝짓지 않은 목록, 
   assert.deepEqual(validateParcels(hist), [], "이름 목록은 토지이용계획 이력의 허용 필드");
   assert.equal(attrChangeText({ first: false, changes: { plan_zones: { from: [{ code: "A", relation: "포함" }], to: [{ code: "A", relation: "포함" }, { code: "B", relation: "저촉" }] }, plan_zone_names: { from: ["가"], to: ["가", "나"] } } }),
     "지역지구 코드 A → A, B(저촉) · 지역지구 이름 목록 가 → 가, 나");
+});
+
+test("조건으로 필지 찾기 (J5-033): 조건 해석·거르기·결측 따로 세기·정렬", () => {
+  const feats = vwBundle().features;
+  const labels = (r) => r.matches.map((f) => f.properties.label);
+  const run = (form) => { const { criteria, errors } = parseFilter(form); assert.deepEqual(errors, [], JSON.stringify(errors)); return filterParcels(feats, criteria); };
+  assert.deepEqual(ownershipKinds(feats), [{ kind: "개인", count: 2 }, { kind: "국유지", count: 1 }, { kind: "법인", count: 1 }]);
+  assert.deepEqual(labels(run({ zone: "com" })), ["1"]);
+  const big = run({ areaMin: "1100" });
+  assert.deepEqual(labels(big), ["산1-2", "1", "2", "3"], "공부면적 큰 순");
+  assert.equal(big.withAttrs, 6);
+  const price = run({ priceMin: "900" });   // 만원/㎡ → 9,000,000원/㎡
+  assert.deepEqual(labels(price), ["1", "1-1"]);
+  assert.equal(price.unknown.price, 1, "공시지가가 없는 필지는 맞는 것으로 보지 않고 따로 센다");
+  const own = run({ owner: "개인" });
+  assert.deepEqual(labels(own), ["1", "2"]);
+  assert.equal(own.unknown.owner, 2, "소유 행이 없거나 값이 빈 필지");
+  assert.deepEqual(labels(run({ restricted: true })), ["2", "3", "4-2"], "저촉 규제가 있는 필지");
+  assert.deepEqual(labels(run({ zone: "res2", restricted: true })), ["2"], "조건은 모두 만족해야 한다");
+  assert.deepEqual(labels(run({ areaMin: "1000", areaMax: "1100", priceMax: "500" })), ["4-2"]);
+  assert.equal(run({ zone: "ind", priceMin: "1" }).unknown.price, 1);
+  assert.equal(filterParcels(feats, parseFilter({ areaMin: "0" }).criteria, { limit: 2 }).matches.length, 2);
+  assert.equal(FILTER_LIMIT, 50);
+  // 조건 해석
+  assert.equal(parseFilter({ priceMin: "1234.5" }).criteria.priceMin, 12_345_000);
+  assert.ok(parseFilter({ areaMin: "-1" }).errors.some((e) => e.includes("공부면적 최소")));
+  assert.ok(parseFilter({ priceMax: "abc" }).errors.some((e) => e.includes("공시지가 최대")));
+  assert.ok(parseFilter({ areaMin: "10", areaMax: "5" }).errors.some((e) => e.includes("최소가 최대보다")));
+  assert.ok(parseFilter({ zone: "nope" }).errors.length);
+  assert.equal(hasCriteria(parseFilter({}).criteria), false);
+  assert.equal(hasCriteria(parseFilter({ restricted: true }).criteria), true);
+  // 속성 없는 번들: 걸리는 필지 없음
+  assert.equal(filterParcels(bundle().features, parseFilter({ areaMin: "0" }).criteria).withAttrs, 0);
+  const by = byLabel(vwBundle());
+  assert.equal(filterRowText(by["1"].properties.attrs), "일반상업지역 · 1,771㎡ · 12,340,000원/㎡ · 개인");
+  assert.equal(filterRowText(by["3"].properties.attrs), "준공업지역 · 1,100㎡ · 공시지가 미확인 · 소유 미확인");
 });

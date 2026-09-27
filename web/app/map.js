@@ -161,6 +161,7 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}
   let parcelOrigin = { x: 0, y: 0 };
   let parcelMode = "";
   let zoneColors = false;        // 용도지역 색 (J5-025): 필지 속성 use_zone_1 의 분류로 채움색
+  let marked = null;             // 조건으로 찾은 필지 PNU 집합 (J5-033). null 이면 표시 없음
   const roads = []; // { id, name, mid, text, visible } (도로명 라벨 후보)
   let location = null;           // { world:{x,y}, lat, accuracy } 또는 null
   let tiles = null;              // { url, minZoom, maxZoom, attribution } 또는 null (꺼짐)
@@ -252,7 +253,7 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}
   const setClass = (m) => m.g.setAttribute("class", `pt ${m.asset.data_mode}${m.asset.asset_id === selectedId ? " sel" : ""}`);
   const setParcelClass = (pc) => {
     const zone = zoneColors ? zoneCategory(pc.feature.properties.attrs?.use_zone_1) : null;
-    pc.path.setAttribute("class", `parcel ${parcelMode}${zone ? ` zone-${zone}` : ""}${pc.feature.id === selectedPnu ? " sel" : ""}`);
+    pc.path.setAttribute("class", `parcel ${parcelMode}${zone ? ` zone-${zone}` : ""}${marked?.has(pc.feature.id) ? " mark" : ""}${pc.feature.id === selectedPnu ? " sel" : ""}`);
   };
   const fitPoints = () => {
     const pts = [...markers.values()].map((m) => m.world);
@@ -301,6 +302,7 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}
       layerShapes.replaceChildren();
       layerLabels.replaceChildren();
       selectedPnu = null;
+      marked = null;   // 번들이 바뀌면 조건 결과 강조도 지운다 (J5-033)
       parcelMode = bundle?.data_mode ?? "";
       const feats = bundle?.features ?? [];
       if (feats.length) {
@@ -405,6 +407,16 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}
         view = { scale: view.scale, tx: size.w / 2 - location.world.x * view.scale, ty: size.h / 2 - location.world.y * view.scale };
       }
       render();
+    },
+    /** 조건으로 찾은 필지 테두리 강조 (J5-033). pnus 가 null·빈 목록이면 지운다. 지도에 있는 강조 필지 수를 돌려준다. */
+    setMarked(pnus) {
+      marked = pnus && pnus.length ? new Set(pnus) : null;
+      let n = 0;
+      for (const pc of parcels.values()) {
+        setParcelClass(pc);
+        if (marked?.has(pc.feature.id)) n++;
+      }
+      return n;
     },
     /** 용도지역 색 켜기/끄기. 속성이 없는 필지는 그대로. 색이 칠해진 필지 수를 돌려준다. */
     setZoneColors(on) {

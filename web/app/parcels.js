@@ -142,7 +142,12 @@ export function attrLines(a, fallbackAsOf = null) {
  */
 export function planZonesText(a) {
   const zones = Array.isArray(a?.plan_zones) ? a.plan_zones : [];
-  const names = Array.isArray(a?.plan_zone_names) && a.plan_zone_names.length ? a.plan_zone_names : zones.map((z) => z?.name).filter((n) => typeof n === "string" && n);
+  let names = Array.isArray(a?.plan_zone_names) && a.plan_zone_names.length ? a.plan_zone_names : null;
+  if (!names) {
+    // J5-025 형식: 코드에 붙은 이름을 순서대로 쓰되, 잘림 표시가 있으면 끊긴 마지막 조각은 뺀다 (정본의 옛 형식 정규화와 같다)
+    names = zones.map((z) => z?.name).filter((n) => typeof n === "string" && n);
+    if (a?.plan_zones_truncated && names.length) names = names.slice(0, -1);
+  }
   if (!zones.length && !names.length) return null;
   const byRel = new Map();
   for (const z of zones) if (z.relation && z.relation !== "포함") byRel.set(z.relation, [...(byRel.get(z.relation) ?? []), z.code]);
@@ -230,6 +235,91 @@ export function priceTrendRow(q) {
   const delta = q.deltaPct == null ? "" : `${q.deltaPct > 0 ? "+" : ""}${q.deltaPct.toFixed(1)}%`;
   const seen = q.earlier ? "이전 자료 (기준일 모름)" : q.as_of ? `확인 ${q.as_of}` : "기준일 미확인";
   return [base, `${fmtInt(q.price)}원/㎡`, delta, seen + (q.sameBase ? " · 같은 기준연월의 값이 바뀜 (정정 여부 확인)" : "")];
+}
+
+// ---- 조건으로 필지 찾기 (J5-033): 불러온 필지의 속성(값 그대로)으로 거른다. 외부 통신 없음 ----
+export const FILTER_LIMIT = 50;
+
+/** 번들의 소유구분 값과 필지 수 [{kind, count}] (많은 순). 값이 없는 필지는 세지 않는다. */
+export function ownershipKinds(features) {
+  const m = new Map();
+  for (const f of features ?? []) {
+    const k = f?.properties?.attrs?.ownership_kind;
+    if (typeof k === "string" && k) m.set(k, (m.get(k) ?? 0) + 1);
+  }
+  return [...m.entries()].map(([kind, count]) => ({ kind, count })).sort((a, b) => b.count - a.count || a.kind.localeCompare(b.kind, "ko"));
+}
+
+const num = (v) => (v === "" || v == null ? null : Number.isFinite(Number(v)) ? Number(v) : NaN);
+
+/**
+ * 폼 값 → 조건. 공시지가는 만원/㎡ 로 받아 원/㎡ 로 바꾼다. 잘못된 숫자·거꾸로 된 범위는 errors 로 돌려준다.
+ * 조건: zone(용도지역 분류 키), areaMin/areaMax(공부면적 ㎡), priceMin/priceMax(원/㎡), owner(소유구분 값), restricted(저촉 규제가 하나라도 있음).
+ */
+export function parseFilter({ zone = "", areaMin = "", areaMax = "", priceMin = "", priceMax = "", owner = "", restricted = false } = {}) {
+  const c = { zone: zone || null, areaMin: num(areaMin), areaMax: num(areaMax), priceMin: num(priceMin), priceMax: num(priceMax), owner: owner || null, restricted: !!restricted };
+  const errors = [];
+  for (const [k, label] of [["areaMin", "공부면적 최소"], ["areaMax", "공부면적 최대"], ["priceMin", "공시지가 최소"], ["priceMax", "공시지가 최대"]]) {
+    if (Number.isNaN(c[k]) || (c[k] != null && c[k] < 0)) errors.push(`${label}은 0 이상의 숫자`);
+  }
+  if (c.zone && !(c.zone in ZONE_LABELS)) errors.push("용도지역 분류가 목록에 없다");
+  if (!errors.length && c.areaMin != null && c.areaMax != null && c.areaMin > c.areaMax) errors.push("공부면적 최소가 최대보다 크다");
+  if (!errors.length && c.priceMin != null && c.priceMax != null && c.priceMin > c.priceMax) errors.push("공시지가 최소가 최대보다 크다");
+  for (const k of ["priceMin", "priceMax"]) if (c[k] != null && !Number.isNaN(c[k])) c[k] = Math.round(c[k] * 10000);
+  return { criteria: c, errors };
+}
+
+export function hasCriteria(c) {
+  return !!c && (!!c.zone || c.areaMin != null || c.areaMax != null || c.priceMin != null || c.priceMax != null || !!c.owner || !!c.restricted);
+}
+
+/**
+ * 조건에 맞는 필지. 값이 없는 필지는 그 조건에 맞는 것으로 보지 않고 unknown 에 센다(결측을 0 이나 불일치로 채우지 않는다).
+ * 결과는 공부면적이 큰 순, 같으면 PNU 순. 반환 { total, matches(앞 limit 개), unknown: {zone, area, price, owner, plan}, withAttrs }.
+ */
+export function filterParcels(features, c, { limit = FILTER_LIMIT } = {}) {
+  const unknown = { zone: 0, area: 0, price: 0, owner: 0, plan: 0 };
+  const out = [];
+  let withAttrs = 0;
+  for (const f of features ?? []) {
+    const a = f?.properties?.attrs;
+    if (!a) continue;
+    withAttrs++;
+    if (c.zone) {
+      const z = zoneCategory(a.use_zone_1);
+      if (!z) { unknown.zone++; continue; }
+      if (z !== c.zone) continue;
+    }
+    if (c.areaMin != null || c.areaMax != null) {
+      const v = a.registered_area_m2;
+      if (!Number.isFinite(v)) { unknown.area++; continue; }
+      if ((c.areaMin != null && v < c.areaMin) || (c.areaMax != null && v > c.areaMax)) continue;
+    }
+    if (c.priceMin != null || c.priceMax != null) {
+      const v = a.official_land_price_krw_m2;
+      if (!Number.isFinite(v)) { unknown.price++; continue; }
+      if ((c.priceMin != null && v < c.priceMin) || (c.priceMax != null && v > c.priceMax)) continue;
+    }
+    if (c.owner) {
+      if (typeof a.ownership_kind !== "string" || !a.ownership_kind) { unknown.owner++; continue; }
+      if (a.ownership_kind !== c.owner) continue;
+    }
+    if (c.restricted) {
+      if (!Array.isArray(a.plan_zones) || !a.plan_zones.length) { unknown.plan++; continue; }
+      if (!a.plan_zones.some((z) => z?.relation === "저촉")) continue;
+    }
+    out.push(f);
+  }
+  const area = (f) => (Number.isFinite(f.properties.attrs.registered_area_m2) ? f.properties.attrs.registered_area_m2 : -1);
+  out.sort((x, y) => area(y) - area(x) || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
+  return { total: out.length, matches: out.slice(0, limit), unknown, withAttrs };
+}
+
+/** 결과 한 줄의 보조 글: 용도지역 · 공부면적 · 공시지가 · 소유구분 (없으면 미확인). */
+export function filterRowText(a) {
+  const miss = "미확인";
+  return [a?.use_zone_1 ?? miss, Number.isFinite(a?.registered_area_m2) ? `${fmtInt(a.registered_area_m2)}㎡` : `면적 ${miss}`,
+    Number.isFinite(a?.official_land_price_krw_m2) ? `${fmtInt(a.official_land_price_krw_m2)}원/㎡` : `공시지가 ${miss}`, a?.ownership_kind ?? `소유 ${miss}`].join(" · ");
 }
 
 /** 번들의 속성 요약: 속성 있는 필지 수와 용도지역별 수. */
