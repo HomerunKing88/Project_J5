@@ -11,9 +11,10 @@ import { validateParcels, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea } from
 import { selectRecords, planBatches, buildPackage, hasRemainingBatches, studyIdError } from "./export.js";
 import { migrationReadiness, migrationText, persistenceText } from "./migrate.js";
 import { createNavigator, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, MODE_LABEL, MODE_SHORT } from "./ui.js";
+import { externalMapLinks, bboxCenter, LINK_ATTRS } from "./extmap.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.0";
+export const APP_VERSION = "0.2.1";
 const $ = (id) => document.getElementById(id);
 const state = { store: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, seedLoadedAt: null,
                 nav: null, returnFocus: null, mapSelected: null };
@@ -25,6 +26,14 @@ function text(el, value, cls) {
 
 function modeBadge(mode) {
   return el("span", { class: `badge mode-${mode}`, text: MODE_SHORT[mode] ?? mode });
+}
+
+/** 외부 지도 링크 (J5-021, ADR-15): 좌표가 있으면 "다른 지도에서 보기" 링크를 채우고, 없으면 숨긴다. 누르기 전에는 전송 없음. */
+function renderExtLinks(container, point) {
+  const links = externalMapLinks(point);
+  container.hidden = links.length === 0;
+  container.replaceChildren(...(links.length ? [el("span", { text: "다른 지도에서 보기:" }),
+    ...links.map((l) => el("a", { href: l.href, text: l.name, ...LINK_ATTRS, ...(l.verified ? {} : { title: "링크 형식 미검증. 열리지 않으면 기록해 둔다" }) }))] : []));
 }
 
 function el(tag, props = {}, ...children) {
@@ -227,6 +236,7 @@ function showParcel(feature) {
   const src = state.parcels?.source;
   $("parcel-meta").textContent = `도형면적 ${fmtArea(p.area_m2_geom, p.area_missing_reason)} (공부면적 아님)` + (p.jimok ? ` · 지목 ${p.jimok}` : "") + (p.jibun_mismatch ? " · 원본 지번과 PNU 불일치" : "") +
     (src ? ` · ${src.name} ${src.geometry_version}` : "");
+  renderExtLinks($("parcel-ext"), bboxCenter(p.bbox));
   const linksValid = parcelLinksValid();
   const inside = parcelAssets(feature, state.assets, { linksValid });
   $("parcel-assets").replaceChildren(...inside.map(({ asset: a, basis }) => el("li", {},
@@ -240,6 +250,7 @@ function showParcel(feature) {
 
 function closeParcelPanel() {
   $("parcel-panel").hidden = true;
+  renderExtLinks($("parcel-ext"), null);
   mapCall((m) => m.selectParcel(null));
 }
 
@@ -288,6 +299,7 @@ function selectOnMap(asset, { focus = true } = {}) {
   const s = assetSummary(asset.asset_id, state.events);
   $("map-selected-label").textContent = asset.label;
   $("map-selected-sub").textContent = assetSub(asset) + (s.count ? ` · 마지막 기록 ${shortWhen(s.lastAt)} (${CHANGE_STATUS_LABEL[s.lastStatus] ?? ""})` : " · 이 기기에 기록 없음");
+  renderExtLinks($("map-selected-ext"), asset.location_point);
   $("map-selected").hidden = false;
   $("map-selected-start").onclick = () => startObservation(asset);
   for (const li of $("asset-list").children) li.classList.toggle("selected", li.dataset.assetId === asset.asset_id);
@@ -298,6 +310,7 @@ function clearMapSelection() {
   state.mapSelected = null;
   $("map-selected").hidden = true;
   $("map-selected-start").onclick = null;
+  renderExtLinks($("map-selected-ext"), null);
   mapCall((m) => m.select(null));
   for (const li of $("asset-list").children) li.classList.remove("selected");
 }
