@@ -56,8 +56,8 @@ def _ring_src(ring, clockwise: bool):
     return list(reversed(pts)) if clockwise else pts
 
 
-def write_shapefile(base: Path, records: list[tuple[list[list[tuple[float, float]]], dict]], fields: list[tuple[str, str, int]], prj: str, encoding="cp949") -> None:
-    """records: [(링 목록(원본 좌표, 방향은 이미 Shapefile 규칙), 속성 dict)], fields: [(이름, 타입 C/N, 길이)]."""
+def write_shapefile(base: Path, records: list[tuple[list[list[tuple[float, float]]], dict]], fields: list[tuple[str, str, int]], prj: str, encoding="cp949", shape_type: int = 5) -> None:
+    """records: [(링 목록(원본 좌표, 방향은 이미 Shapefile 규칙), 속성 dict)], fields: [(이름, 타입 C/N, 길이)]. shape_type 5 폴리곤, 3 폴리라인(레코드 배치 동일)."""
     base.parent.mkdir(parents=True, exist_ok=True)
     shp_records = []
     shx_records = []
@@ -73,7 +73,7 @@ def write_shapefile(base: Path, records: list[tuple[list[list[tuple[float, float
         for r in rings:
             parts.append(acc)
             acc += len(r)
-        content = struct.pack("<i", 5) + struct.pack("<4d", min(xs), min(ys), max(xs), max(ys)) + struct.pack("<ii", len(rings), len(pts))
+        content = struct.pack("<i", shape_type) + struct.pack("<4d", min(xs), min(ys), max(xs), max(ys)) + struct.pack("<ii", len(rings), len(pts))
         content += struct.pack(f"<{len(parts)}i", *parts) + b"".join(struct.pack("<2d", x, y) for x, y in pts)
         words = len(content) // 2
         shp_records.append(struct.pack(">ii", i, words) + content)
@@ -82,7 +82,7 @@ def write_shapefile(base: Path, records: list[tuple[list[list[tuple[float, float
     bbox = (min(all_x), min(all_y), max(all_x), max(all_y))
 
     def header(total_words: int) -> bytes:
-        return struct.pack(">i", 9994) + b"\x00" * 20 + struct.pack(">i", total_words) + struct.pack("<ii", 1000, 5) + struct.pack("<4d", *bbox) + struct.pack("<4d", 0, 0, 0, 0)
+        return struct.pack(">i", 9994) + b"\x00" * 20 + struct.pack(">i", total_words) + struct.pack("<ii", 1000, shape_type) + struct.pack("<4d", *bbox) + struct.pack("<4d", 0, 0, 0, 0)
 
     shp = b"".join(shp_records)
     base.with_suffix(".shp").write_bytes(header(50 + len(shp) // 2) + shp)
