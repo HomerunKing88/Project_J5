@@ -1,10 +1,12 @@
 // 최소 지도 (J5-005, ADR-12): 자체 SVG 점 지도. Web Mercator 투영으로 위치점(location_point)을 그린다.
 // J5-013B-1 (ADR-13): 필지 번들(.j5parcels.json)의 경계 폴리곤과 지번 라벨을 점 아래 층에 그린다.
+// J5-022 (ADR-16): 배경 도형 번들(.j5basemap.json)의 실폭도로·건물 윤곽·도로 중심선과 도로명 라벨을 필지 아래 층에 그린다 (탭 대상 아님).
 // 배경 타일·외부 통신 없음. 위 순수 함수는 DOM 없이 단위 테스트하고, createMap 만 SVG 를 만진다.
 // 화면 좌표 = 세계 좌표(0~1) × scale + (tx, ty). 마커·라벨은 픽셀 단위라 확대해도 크기가 변하지 않는다.
 // 필지 경로는 번들 중심 기준 로컬 단위(세계 좌표 × PARCEL_LOCAL_K)로 한 번만 만들고, 이동·확대는 그룹 transform 으로 처리한다.
 
 import { labelPoint as labelPointOf } from "./parcels.js";
+import { partsOf as basePartsOf, lineMidpoint, pickRoadLabels } from "./basemap.js";
 
 export const WORLD_METERS = 40075016.686; // WGS84 적도 둘레
 export const MIN_SCALE = 256; // z0: 세계 전체 = 256px
@@ -102,6 +104,11 @@ export function parcelPathD(polygons, origin, k = PARCEL_LOCAL_K) {
   return parts.join("");
 }
 
+/** GeoJSON 선 목록 [[pt...], ...] → 로컬 단위 SVG path d (닫지 않음). origin 은 세계 좌표. */
+export function linePathD(lines, origin, k = PARCEL_LOCAL_K) {
+  return lines.map((line) => "M" + line.map((c) => { const w = mercator(c); return `${((w.x - origin.x) * k).toFixed(1)} ${((w.y - origin.y) * k).toFixed(1)}`; }).join("L")).join("");
+}
+
 /** 필지 라벨을 보일지: 화면 폭이 라벨 길이에 비해 충분하고 화면 안(여백 포함)일 때. */
 export function parcelLabelVisible(wb, label, view, w, h) {
   const widthPx = (wb.x1 - wb.x0) * view.scale;
@@ -122,6 +129,12 @@ export function createMap(svgEl, { onSelect, onSelectParcel } = {}) {
     for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, String(v));
     return n;
   };
+  const layerBase = node("g", { class: "layer-base" });          // 배경: 실폭도로 → 건물 → 도로 중심선 (탭 대상 아님)
+  const layerRoadAreas = node("g", { class: "layer-road-areas" });
+  const layerBuildings = node("g", { class: "layer-buildings" });
+  const layerRoads = node("g", { class: "layer-roads" });
+  layerBase.append(layerRoadAreas, layerBuildings, layerRoads);
+  const layerRoadLabels = node("g", { class: "layer-road-labels" });
   const layerShapes = node("g", { class: "layer-parcels" });
   const layerLabels = node("g", { class: "layer-parcel-labels" });
   const layerPts = node("g", { class: "layer-pts" });
@@ -129,7 +142,7 @@ export function createMap(svgEl, { onSelect, onSelectParcel } = {}) {
   const scaleLine = node("line", { x1: 10, y1: 0, x2: 10, y2: 0 });
   const scaleText = node("text", { x: 10, y: 0 });
   layerScale.append(scaleLine, scaleText);
-  svgEl.replaceChildren(layerShapes, layerLabels, layerPts, layerScale);
+  svgEl.replaceChildren(layerBase, layerRoadLabels, layerShapes, layerLabels, layerPts, layerScale);
 
   let view = fitView([], 320, 280);
   let size = { w: 320, h: 280 };
@@ -137,6 +150,9 @@ export function createMap(svgEl, { onSelect, onSelectParcel } = {}) {
   const parcels = new Map(); // pnu → { path, text, wb, lp, feature, visible }
   let parcelOrigin = { x: 0, y: 0 };
   let parcelMode = "";
+  const roads = []; // { id, name, mid, text, visible } (도로명 라벨 후보)
+  let baseOrigin = { x: 0, y: 0 };
+  let baseCount = 0, baseBbox = null;
   let selectedId = null, selectedPnu = null;
   const pointers = new Map();
   let downTarget = null, moved = 0;
@@ -149,6 +165,19 @@ export function createMap(svgEl, { onSelect, onSelectParcel } = {}) {
   const local = (e) => { const r = svgEl.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
 
   const render = () => {
+    if (baseCount) {
+      const o = toScreen(baseOrigin, view);
+      layerBase.setAttribute("transform", `translate(${o.x.toFixed(2)},${o.y.toFixed(2)}) scale(${(view.scale / PARCEL_LOCAL_K).toPrecision(8)})`);
+      const show = pickRoadLabels(roads, view, size.w, size.h);
+      for (const r of roads) {
+        const vis = show.has(r.id);
+        if (vis) {
+          const p = toScreen(r.mid, view);
+          r.text.setAttribute("transform", `translate(${p.x.toFixed(1)},${p.y.toFixed(1)}) rotate(${r.mid.angle.toFixed(1)})`);
+        }
+        if (vis !== r.visible) { r.visible = vis; r.text.setAttribute("visibility", vis ? "visible" : "hidden"); }
+      }
+    }
     if (parcels.size) {
       const o = toScreen(parcelOrigin, view);
       layerShapes.setAttribute("transform", `translate(${o.x.toFixed(2)},${o.y.toFixed(2)}) scale(${(view.scale / PARCEL_LOCAL_K).toPrecision(8)})`);
@@ -178,6 +207,8 @@ export function createMap(svgEl, { onSelect, onSelectParcel } = {}) {
   const fitPoints = () => {
     const pts = [...markers.values()].map((m) => m.world);
     for (const pc of parcels.values()) pts.push({ x: pc.wb.x0, y: pc.wb.y0 }, { x: pc.wb.x1, y: pc.wb.y1 });
+    // 배경만 있을 때는 배경 범위로 맞춘다 (물건·필지가 있으면 그것들에 맞추고 배경은 넘쳐도 된다)
+    if (!pts.length && baseBbox) pts.push({ x: baseBbox.x0, y: baseBbox.y0 }, { x: baseBbox.x1, y: baseBbox.y1 });
     return pts;
   };
 
@@ -245,6 +276,45 @@ export function createMap(svgEl, { onSelect, onSelectParcel } = {}) {
       api.fit();
       return { count: feats.length };
     },
+    /** 배경 도형 번들(.j5basemap.json, 검증된 것) 또는 null. 층을 전부 다시 만들고 전체 보기. 반환: 층별 수. */
+    setBasemap(bundle) {
+      roads.length = 0;
+      layerRoadAreas.replaceChildren(); layerBuildings.replaceChildren(); layerRoads.replaceChildren(); layerRoadLabels.replaceChildren();
+      const feats = bundle?.features ?? [];
+      baseCount = feats.length;
+      baseBbox = null;
+      const counts = { building: 0, road_area: 0, road: 0 };
+      if (feats.length) {
+        const wb = worldBbox(bundle.bbox ?? feats[0].properties.bbox);
+        baseBbox = wb;
+        baseOrigin = { x: (wb.x0 + wb.x1) / 2, y: (wb.y0 + wb.y1) / 2 };
+        const mode = bundle.data_mode ?? "";
+        for (const feature of feats) {
+          const layer = feature.properties.layer;
+          counts[layer] = (counts[layer] ?? 0) + 1;
+          const parts = basePartsOf(feature);
+          if (layer === "road") {
+            const path = node("path", { class: `bm-road ${mode}`, d: linePathD(parts, baseOrigin), "vector-effect": "non-scaling-stroke" });
+            layerRoads.append(path);
+            const name = feature.properties.name;
+            if (name) {
+              const mid = lineMidpoint(parts.map((line) => line.map(mercator)));
+              if (mid) {
+                const text = node("text", { class: "bm-road-label", visibility: "hidden" });
+                text.textContent = name;
+                layerRoadLabels.append(text);
+                roads.push({ id: feature.id, name, mid, text, visible: false });
+              }
+            }
+          } else {
+            const cls = layer === "building" ? "bm-building" : "bm-road-area";
+            (layer === "building" ? layerBuildings : layerRoadAreas).append(node("path", { class: `${cls} ${mode}`, d: parcelPathD(parts, baseOrigin), "vector-effect": "non-scaling-stroke" }));
+          }
+        }
+      }
+      api.fit();
+      return { count: feats.length, counts };
+    },
     selectParcel(pnu) {
       selectedPnu = pnu ?? null;
       for (const pc of parcels.values()) setParcelClass(pc);
@@ -274,6 +344,7 @@ export function createMap(svgEl, { onSelect, onSelectParcel } = {}) {
       svgEl.replaceChildren();
       markers.clear();
       parcels.clear();
+      roads.length = 0;
     },
   };
 

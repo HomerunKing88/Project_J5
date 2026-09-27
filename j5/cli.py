@@ -40,6 +40,7 @@ from j5.db.cases import export_cases, export_text
 from j5.calc.inputs import calc_text, load_calc_input, run_calc
 from j5.calc.plans import plans_csv
 from j5.parcels.convert import Clip, ConvertError, ConvertOptions, convert, convert_text, inspect_source, inspect_text, write_bundle
+from j5.parcels.basemap import BasemapOptions, LayerInput, basemap_text, convert_basemap, write_basemap
 from j5.schemas_loader import schema_errors
 
 EXIT = {"ok": 0, "reject": 1, "hold": 2}
@@ -247,6 +248,29 @@ def _build_parser() -> argparse.ArgumentParser:
     pc.add_argument("--max-features", type=int, default=8000, help="범위 안 필지 상한 (기본이자 최대 8000, 번들 계약과 같다)")
     pc.add_argument("--synthetic", action="store_true", help="가상자료 표시 (data_mode synthetic)")
     pc.add_argument("--json", action="store_true")
+
+    bm = sub.add_parser("basemap", help="배경 도형 (ADR-16, J5-022): 공공 도형 자료(도로명주소 전자지도 등)의 건물 윤곽·실폭도로·도로 중심선 SHP → 폰 지도 배경 번들(.j5basemap.json). inspect 는 `j5 parcels inspect` 를 그대로 쓴다")
+    bsub = bm.add_subparsers(dest="basemap_command", required=True)
+    bc = bsub.add_parser("convert", help="조사 범위의 배경 도형만 WGS84 GeoJSON 번들로 만든다 (도형·도로명만, 원본은 수정하지 않음, 출력은 덮어쓰지 않음)")
+    bc.add_argument("--out", type=Path, required=True, help="출력 파일 (<이름>.j5basemap.json). 실데이터 홈 안에 둔다")
+    bc.add_argument("--geometry-version", required=True, help="도형 기준일 YYYY-MM-DD (배포 자료의 기준 시점)")
+    bc.add_argument("--source-name", required=True, help="자료명 (예: '도로명주소 전자지도 서울특별시')")
+    bc.add_argument("--buildings", type=Path, help="건물 윤곽 폴리곤 SHP(.shp 또는 ZIP)")
+    bc.add_argument("--buildings-layer", help="ZIP 안에 .shp 가 여럿일 때 건물 층의 기본 이름")
+    bc.add_argument("--road-areas", type=Path, help="실폭도로 폴리곤 SHP(.shp 또는 ZIP)")
+    bc.add_argument("--road-areas-layer", help="ZIP 안 실폭도로 층의 기본 이름")
+    bc.add_argument("--roads", type=Path, help="도로 중심선 폴리라인 SHP(.shp 또는 ZIP)")
+    bc.add_argument("--roads-layer", help="ZIP 안 도로 중심선 층의 기본 이름")
+    bc.add_argument("--road-name-field", help="도로명 필드 이름 (기본 RN·ROAD_NM·RD_NM·NAME 후보에서 찾음)")
+    bc.add_argument("--bbox", help="WGS84 minlon,minlat,maxlon,maxlat")
+    bc.add_argument("--center", help="WGS84 lon,lat (--radius-m 과 함께)")
+    bc.add_argument("--radius-m", type=float, help="중심에서의 반경(m)")
+    bc.add_argument("--crs", help=".prj 가 없거나 못 읽을 때 EPSG:5179 형식으로 지정 (모든 층에 같은 값)")
+    bc.add_argument("--encoding", help=".dbf 문자 인코딩 (기본 .cpg 또는 cp949)")
+    bc.add_argument("--license", help="이용허락 유형·출처 표시 문구 (확인한 값만)")
+    bc.add_argument("--max-features", type=int, default=20000, help="범위 안 도형 상한 (기본이자 최대 20000, 번들 계약과 같다)")
+    bc.add_argument("--synthetic", action="store_true", help="가상자료 표시 (data_mode synthetic)")
+    bc.add_argument("--json", action="store_true")
 
     ca = sub.add_parser("calc", help="계산기 (R5, J5-016, 데이터 사전 §9~§10): 용적률 기준 여유면적 / 매입 전체 필요자기자본 / 사업기간 최대 필요자기자본. 입력은 schemas/calc_inputs.schema.json")
     casub = ca.add_subparsers(dest="calc_command")
@@ -691,6 +715,42 @@ def _db_offline(args) -> int:
     return BACKUP_EXIT[r.outcome]
 
 
+def _basemap_main(args) -> int:
+    try:
+        if args.bbox and (args.center or args.radius_m is not None):
+            print("--bbox 와 --center/--radius-m 은 함께 쓰지 않는다", file=sys.stderr)
+            return USAGE_ERROR
+        if args.bbox:
+            clip = Clip.from_bbox(args.bbox)
+        elif args.center and args.radius_m is not None:
+            clip = Clip.from_center(args.center, args.radius_m)
+        else:
+            print("범위가 필요하다: --bbox 또는 --center 와 --radius-m", file=sys.stderr)
+            return USAGE_ERROR
+        inputs = []
+        if args.buildings:
+            inputs.append(LayerInput("building", args.buildings, args.buildings_layer))
+        if args.road_areas:
+            inputs.append(LayerInput("road_area", args.road_areas, args.road_areas_layer))
+        if args.roads:
+            inputs.append(LayerInput("road", args.roads, args.roads_layer, args.road_name_field))
+        if not inputs:
+            print("층 입력이 필요하다: --buildings, --road-areas, --roads 중 하나 이상", file=sys.stderr)
+            return USAGE_ERROR
+        opts = BasemapOptions(clip=clip, geometry_version=args.geometry_version, source_name=args.source_name, inputs=inputs, crs_arg=args.crs, encoding=args.encoding,
+                              license=args.license, max_features=args.max_features, data_mode="synthetic" if args.synthetic else "real")
+        bundle = convert_basemap(opts)
+        written = write_basemap(bundle, args.out)
+        if args.json:
+            print(json.dumps({"written": written, "count": bundle["count"], "counts": bundle["counts"], "stats": bundle["stats"], "warnings": bundle["warnings"], "sources": bundle["sources"], "clip": bundle["clip"]}, ensure_ascii=False, indent=2))
+        else:
+            sys.stdout.write(basemap_text(bundle, written))
+        return 0
+    except ConvertError as e:
+        print(f"배경 변환 실패 [{e.code}]: {e.message}", file=sys.stderr)
+        return 1
+
+
 def _parcels_main(args) -> int:
     try:
         if args.parcels_command == "inspect":
@@ -862,6 +922,8 @@ def main(argv: list[str] | None = None) -> int:
         return _view_main(args)
     if args.command == "parcels":
         return _parcels_main(args)
+    if args.command == "basemap":
+        return _basemap_main(args)
     if args.command == "collect":
         return _collect_main(args)
     if args.command == "calc":

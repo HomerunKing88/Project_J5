@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://j5.local/schemas/basemap_bundle.schema.json",
+  "title": "배경 도형 번들 (.j5basemap.json, j5 basemap convert 출력·폰 지도 입력)",
+  "description": "ADR-16 (J5-022). 공공 도형 자료(도로명주소 전자지도 등)의 건물 윤곽·실폭도로·도로 중심선을 조사 범위로 잘라 WGS84 GeoJSON FeatureCollection 으로 바꾼 파일. 폰 지도가 필지 아래 층에 배경으로 그린다. 도형·도로명만 담고 건물명·주소·소유 정보는 담지 않는다. 정본이 아니며 실제 번들은 저장소·공개 배포에 넣지 않는다.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "j5basemap", "data_mode", "generated_at", "sources", "clip", "count", "counts", "bbox", "features"],
+  "properties": {
+    "type": { "const": "FeatureCollection" },
+    "j5basemap": { "const": "1.0.0" },
+    "data_mode": { "type": "string", "enum": ["synthetic", "real"] },
+    "generated_at": { "type": "string", "format": "date-time", "pattern": "(Z|[+-][0-9]{2}:[0-9]{2})$" },
+    "sources": {
+      "description": "층마다 원본 SHP 하나 (같은 층을 두 번 넣지 않는다)",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["layer", "name", "file", "shp_sha256", "dbf_sha256", "crs", "encoding", "record_count", "geometry_version", "license", "fields", "name_field"],
+        "properties": {
+          "layer": { "$ref": "#/$defs/layer" },
+          "name": { "description": "자료명 (예: 도로명주소 전자지도 서울특별시)", "type": "string", "minLength": 1, "maxLength": 200 },
+          "file": { "description": "원본 .shp 파일 이름 (경로 없이)", "type": "string", "minLength": 1, "maxLength": 300 },
+          "shp_sha256": { "$ref": "#/$defs/sha256" },
+          "dbf_sha256": { "$ref": "#/$defs/sha256" },
+          "crs": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["epsg", "name", "ellipsoid", "datum_shift", "detected_from"],
+            "properties": {
+              "epsg": { "type": ["integer", "null"] },
+              "name": { "type": "string" },
+              "ellipsoid": { "type": "string", "enum": ["GRS80", "WGS84", "Bessel"] },
+              "datum_shift": { "type": ["string", "null"], "enum": ["korean1985", null] },
+              "detected_from": { "type": "string", "enum": ["prj", "argument"] }
+            }
+          },
+          "encoding": { "type": "string", "minLength": 1 },
+          "record_count": { "description": "원본 SHP 의 전체 레코드 수 (자르기 전)", "type": "integer", "minimum": 0 },
+          "geometry_version": { "description": "도형 기준일 (배포 자료의 기준 시점, 사용자가 지정)", "type": "string", "format": "date", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+          "license": { "description": "이용허락 유형·출처 표시 문구. 확인 전이면 null", "type": ["string", "null"], "maxLength": 500 },
+          "fields": { "type": "array", "items": { "type": "string" } },
+          "name_field": { "description": "도로명을 읽은 .dbf 필드 (도로 층만, 없으면 null)", "type": ["string", "null"], "maxLength": 30 }
+        }
+      }
+    },
+    "clip": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bbox", "center", "radius_m"],
+      "properties": {
+        "bbox": { "$ref": "#/$defs/bbox" },
+        "center": { "oneOf": [{ "$ref": "#/$defs/lonlat" }, { "type": "null" }] },
+        "radius_m": { "type": ["number", "null"], "exclusiveMinimum": 0 }
+      }
+    },
+    "count": { "type": "integer", "minimum": 0 },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["building", "road_area", "road"],
+      "properties": {
+        "building": { "type": "integer", "minimum": 0 },
+        "road_area": { "type": "integer", "minimum": 0 },
+        "road": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "bbox": { "oneOf": [{ "$ref": "#/$defs/bbox" }, { "type": "null" }] },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "features": {
+      "type": "array",
+      "maxItems": 20000,
+      "items": { "$ref": "#/$defs/feature" }
+    }
+  },
+  "$defs": {
+    "layer": { "type": "string", "enum": ["building", "road_area", "road"] },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "lon": { "type": "number", "minimum": -180, "maximum": 180 },
+    "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+    "lonlat": { "type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{ "$ref": "#/$defs/lon" }, { "$ref": "#/$defs/lat" }] },
+    "bbox": { "type": "array", "minItems": 4, "maxItems": 4, "prefixItems": [{ "$ref": "#/$defs/lon" }, { "$ref": "#/$defs/lat" }, { "$ref": "#/$defs/lon" }, { "$ref": "#/$defs/lat" }] },
+    "ring": { "type": "array", "minItems": 4, "items": { "$ref": "#/$defs/lonlat" } },
+    "polygon": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/ring" } },
+    "line": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/lonlat" } },
+    "feature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id", "geometry", "properties"],
+      "properties": {
+        "type": { "const": "Feature" },
+        "id": { "description": "<층>:<원본 레코드 번호>", "type": "string", "pattern": "^(building|road_area|road):[0-9]{1,9}$" },
+        "geometry": {
+          "oneOf": [
+            { "type": "object", "additionalProperties": false, "required": ["type", "coordinates"], "properties": { "type": { "const": "Polygon" }, "coordinates": { "$ref": "#/$defs/polygon" } } },
+            { "type": "object", "additionalProperties": false, "required": ["type", "coordinates"], "properties": { "type": { "const": "MultiPolygon" }, "coordinates": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/polygon" } } } },
+            { "type": "object", "additionalProperties": false, "required": ["type", "coordinates"], "properties": { "type": { "const": "LineString" }, "coordinates": { "$ref": "#/$defs/line" } } },
+            { "type": "object", "additionalProperties": false, "required": ["type", "coordinates"], "properties": { "type": { "const": "MultiLineString" }, "coordinates": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/line" } } } }
+          ]
+        },
+        "properties": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["layer", "name", "bbox"],
+          "properties": {
+            "layer": { "$ref": "#/$defs/layer" },
+            "name": { "description": "도로명 (도로 층만). 건물·실폭도로는 null", "type": ["string", "null"], "maxLength": 60 },
+            "bbox": { "$ref": "#/$defs/bbox" }
+          }
+        }
+      }
+    }
+  }
+}

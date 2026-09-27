@@ -1,6 +1,6 @@
 """ESRI Shapefile(.shp/.dbf/.prj/.cpg) 읽기 (J5-013B-1). 표준 라이브러리만 쓴다.
 
-지원: 도형 Polygon(5)·PolygonZ(15)·PolygonM(25)·Null(0). 입력은 `.shp` 경로(같은 이름의 .dbf 등을 옆에서 찾음) 또는
+지원: 도형 Polygon(5)·PolygonZ(15)·PolygonM(25)·Null(0). 배경 층(J5-022)은 PolyLine(3)·PolyLineZ(13)·PolyLineM(23) 도 `iter_shapes(kinds=...)` 로 읽는다. 입력은 `.shp` 경로(같은 이름의 .dbf 등을 옆에서 찾음) 또는
 ZIP(안에서 .shp 한 벌을 찾음). ZIP 은 디스크에 풀지 않고 메모리로 읽으며 항목 크기 상한을 둔다. 입력 파일은 수정하지 않는다.
 """
 
@@ -17,6 +17,7 @@ MAX_MEMBER_BYTES = 800 * 1024 * 1024  # ZIP 항목 하나의 상한 (시·군·�
 MAX_TOTAL_BYTES = 1200 * 1024 * 1024  # 읽어 들이는 항목(.shp/.dbf/.prj/.cpg)의 압축 해제 합계 상한
 MAX_RATIO = 200                       # 압축 해제 합계 / 압축 크기 합계 상한 (ZIP 폭탄 차단)
 POLYGON_TYPES = {5, 15, 25}
+POLYLINE_TYPES = {3, 13, 23}
 NULL_SHAPE = 0
 
 
@@ -154,11 +155,13 @@ def read_shp_header(data: bytes) -> ShpHeader:
     return ShpHeader(shape_type, (xmin, ymin, xmax, ymax), length_words * 2)
 
 
-def iter_shapes(data: bytes) -> Iterator[tuple[int, list[list[tuple[float, float]]] | None]]:
-    """(레코드 번호, 링 목록 또는 None) 을 순서대로. 링은 (x, y) 목록이며 도형 순서·방향은 원본 그대로다."""
+def iter_shapes(data: bytes, kinds: frozenset[int] | set[int] = POLYGON_TYPES) -> Iterator[tuple[int, list[list[tuple[float, float]]] | None]]:
+    """(레코드 번호, 파트 목록 또는 None) 을 순서대로. 파트는 (x, y) 목록이며 도형 순서·방향은 원본 그대로다.
+    kinds 는 허용 도형 종류(기본 폴리곤, 배경 층은 POLYLINE_TYPES). 폴리곤·폴리라인의 레코드 배치는 같다(bbox·파트 수·점 수·파트 시작·점)."""
     header = read_shp_header(data)
-    if header.shape_type not in POLYGON_TYPES and header.shape_type != NULL_SHAPE:
-        raise ShapeError("shp_not_polygon", f"폴리곤 파일이 아니다 (shape type {header.shape_type})")
+    what = "폴리라인" if kinds == POLYLINE_TYPES else "폴리곤"
+    if header.shape_type not in kinds and header.shape_type != NULL_SHAPE:
+        raise ShapeError("shp_not_polygon" if what == "폴리곤" else "shp_not_polyline", f"{what} 파일이 아니다 (shape type {header.shape_type})")
     end = min(len(data), header.file_length)
     off = 100
     while off + 8 <= end:
@@ -170,7 +173,7 @@ def iter_shapes(data: bytes) -> Iterator[tuple[int, list[list[tuple[float, float
         stype, = struct.unpack("<i", data[off:off + 4])
         if stype == NULL_SHAPE:
             yield rec_no, None
-        elif stype in POLYGON_TYPES:
+        elif stype in kinds:
             num_parts, num_points = struct.unpack("<ii", data[off + 36:off + 44])
             p = off + 44
             parts = list(struct.unpack(f"<{num_parts}i", data[p:p + 4 * num_parts]))
@@ -184,7 +187,7 @@ def iter_shapes(data: bytes) -> Iterator[tuple[int, list[list[tuple[float, float
             rings = [pts[bounds[i]:bounds[i + 1]] for i in range(num_parts)]
             yield rec_no, rings
         else:
-            raise ShapeError("shp_mixed_type", f".shp 레코드 {rec_no} 의 도형 종류가 폴리곤이 아니다: {stype}")
+            raise ShapeError("shp_mixed_type", f".shp 레코드 {rec_no} 의 도형 종류가 {what}이 아니다: {stype}")
         off = content_end
 
 

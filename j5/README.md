@@ -171,6 +171,20 @@ python -m j5 db [--db 경로] parcels-link <제안.json> [--json]
 
   `parcels-load` 는 PNU 기준으로 정본 `parcels`(db_schema 5) 에 넣는다(같은 내용 변화 없음, 더 새로운 도형 기준일이면 갱신, 같은 기준일·다른 내용이나 더 오래된 기준일은 거절). 번들 data_mode 는 정본과 맞아야 하고(synthetic ↔ synthetic, real ↔ private_real), 반영한 번들은 `source_documents` 에 남는다. `parcels-suggest` 는 물건 위치점을 품는 필지를 찾아 연결 제안 파일(`schemas/asset_components_input.schema.json`)을 만들 뿐 정본에 쓰지 않는다. 검토·수정한 파일을 `parcels-link` 로 반영하면 `asset_components` 에 적용 기간·근거와 함께 저장되고 dataset_version 이 오른다. 이후 `project` 의 파생본에 `parcels.geojson`(필지 + 연결 물건 `asset_ids`)이 들어가며 폰의 "필지 파일 불러오기" 로 그대로 넣는다.
 
+## 배경 도형 번들: 도로·건물 윤곽·도로명 (J5-022, ADR-16)
+
+```text
+python -m j5 parcels inspect <건물.shp 또는 .zip> [--layer 이름]        # 배경 층도 같은 검사기로 필드·좌표계·범위를 먼저 본다 (폴리라인은 도형 종류 오류가 나도 필드·좌표계는 보인다)
+python -m j5 basemap convert --out <이름>.j5basemap.json --geometry-version YYYY-MM-DD --source-name "도로명주소 전자지도 서울특별시" \
+    (--bbox minlon,minlat,maxlon,maxlat | --center lon,lat --radius-m 600) \
+    [--buildings <건물.shp|.zip> [--buildings-layer 이름]] [--road-areas <실폭도로.shp|.zip> [--road-areas-layer 이름]] \
+    [--roads <도로구간.shp|.zip> [--roads-layer 이름] [--road-name-field RN]] [--crs EPSG:5179] [--encoding cp949] [--license "…"] [--synthetic] [--json]
+```
+
+- 층은 건물 윤곽(폴리곤)·실폭도로(폴리곤)·도로 중심선(폴리라인, 도로명)이며 층마다 SHP 하나를 준다(하나 이상). 범위와 겹치는 도형만 WGS84 로 바꿔 한 번들(`schemas/basemap_bundle.schema.json`)에 넣는다. 도로명 필드는 `RN`·`ROAD_NM`·`RD_NM`·`NAME` 후보에서 찾고 없으면 `--road-name-field` 로 지정한다(못 찾으면 이름 없이 넣고 경고).
+- 번들에는 도형과 도로명만 들어간다. 건물명·건물 관리번호·주소·층수는 읽지 않는다. 좌표는 소수 6자리(약 0.1 m). 상한 20,000 도형(`--max-features`). 원본은 수정하지 않고 출력은 검증 뒤 교체하며 덮어쓰지 않는다. 좌표계 처리는 필지 변환기와 같다(도로명주소 전자지도는 보통 EPSG:5179).
+- 번들은 폰 설정의 자료 관리 → "배경 지도 파일 선택" 으로 넣는다. 배경은 지도 참고용이며 정본·기록·필지와 연결되지 않는다. 실제 번들·원본 SHP 는 실데이터 홈에 두고 저장소에 넣지 않으며, 자료 배포처의 이용허락·신청 절차를 확인해 `--license` 로 기록한다.
+
 ## 실거래 API 표본 수집 (R0 실측, J5-014A)
 
 ```text

@@ -80,8 +80,8 @@
   </div>
   <details class="disclosure">
     <summary>범례와 설명</summary>
-    <p id="map-legend" class="map-legend"><span><span class="lg lg-syn"></span>연습용 물건</span> <span><span class="lg lg-real"></span>실제 물건</span> <span><span class="lg lg-sel"></span>선택됨</span> <span><span class="lg lg-parcel"></span>필지 경계</span></p>
-    <p class="help">배경 지도는 없고 북쪽이 위입니다. 점을 누르면 대상 요약이 뜨고, 필지를 누르면 그 안의 물건이 보입니다. 필지 경계는 설정의 자료 관리에서 넣습니다.</p>
+    <p id="map-legend" class="map-legend"><span><span class="lg lg-syn"></span>연습용 물건</span> <span><span class="lg lg-real"></span>실제 물건</span> <span><span class="lg lg-sel"></span>선택됨</span> <span><span class="lg lg-parcel"></span>필지 경계</span> <span><span class="lg lg-bm"></span>건물·도로 배경</span></p>
+    <p class="help">배경 지도는 없고 북쪽이 위입니다. 점을 누르면 대상 요약이 뜨고, 필지를 누르면 그 안의 물건이 보입니다. 필지 경계와 도로·건물 배경은 설정의 자료 관리에서 넣습니다. 배경은 참고용이며 누를 수 없습니다.</p>
     <p class="help">"다른 지도에서 보기" 링크를 누르면 그 좌표만 해당 지도 서비스로 전달됩니다. 물건 이름·지번·기록은 전달하지 않습니다. 누르기 전에는 아무것도 전송되지 않습니다.</p>
   </details>
 </section>
@@ -165,6 +165,16 @@
           <button id="clear-parcels" class="danger">필지 지우기</button>
         </div>
         <p id="parcels-note" class="muted" role="status"></p>
+      </div>
+      <div>
+        <div class="field-name">배경 지도 (도로·건물 윤곽)</div>
+        <div class="row">
+          <button id="load-synthetic-basemap" class="secondary">연습용 배경 불러오기</button>
+          <label class="file-btn"><span>배경 지도 파일 선택</span><input id="basemap-file" type="file" accept="application/json,application/geo+json,.json,.geojson"></label>
+          <button id="clear-basemap" class="danger">배경 지우기</button>
+        </div>
+        <p id="basemap-note" class="muted" role="status"></p>
+        <p class="help">PC 에서 공공 도형 자료로 만든 파일입니다. 도로·건물 윤곽과 도로명만 있고 상호·주소는 없습니다. 지도 참고용이며 기록과는 연결되지 않습니다.</p>
       </div>
     </div>
   </section>

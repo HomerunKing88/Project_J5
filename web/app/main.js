@@ -12,11 +12,12 @@ import { selectRecords, planBatches, buildPackage, hasRemainingBatches, studyIdE
 import { migrationReadiness, migrationText, persistenceText } from "./migrate.js";
 import { createNavigator, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, MODE_LABEL, MODE_SHORT } from "./ui.js";
 import { externalMapLinks, bboxCenter, LINK_ATTRS } from "./extmap.js";
+import { validateBasemap, LAYERS as BASEMAP_LAYERS, LAYER_LABEL as BASEMAP_LAYER_LABEL } from "./basemap.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.1";
+export const APP_VERSION = "0.2.2";
 const $ = (id) => document.getElementById(id);
-const state = { store: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, seedLoadedAt: null,
+const state = { store: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, seedLoadedAt: null, basemapRec: null, basemapCount: 0,
                 nav: null, returnFocus: null, mapSelected: null };
 
 function text(el, value, cls) {
@@ -227,6 +228,58 @@ async function clearParcels() {
   applyParcels(null);
 }
 
+// ---- 배경 도형 (J5-022, ADR-16) ----
+// 배경은 지도의 참고 층이다. 없거나 실패해도 목록·기록·내보내기·필지는 그대로 동작한다. 기록과 연결되지 않는다.
+async function loadBasemapObject(doc, source) {
+  const errs = validateBasemap(doc);
+  if (errs.length) return text($("basemap-note"), "배경 파일 오류: " + errs.slice(0, 5).join("; ") + (errs.length > 5 ? ` 외 ${errs.length - 5}건` : ""), "bad");
+  await state.store.replaceBasemap(doc, source);
+  applyBasemap(await state.store.getBasemap());
+}
+
+function applyBasemap(rec) {
+  state.basemapRec = rec ?? null;
+  state.basemapCount = rec?.bundle?.features.length ?? 0;
+  mapCall((m) => m.setBasemap(rec?.bundle ?? null));
+  basemapNote(rec);
+  mapCall((m) => mapNote(m.setAssets(state.assets)));
+}
+
+function basemapNote(rec) {
+  if (!rec) return text($("basemap-note"), "배경 없음. 지도에는 물건 위치와 필지만 보입니다.", "muted");
+  const b = rec.bundle, s0 = b.sources[0];
+  const parts = BASEMAP_LAYERS.filter((k) => b.counts[k] > 0).map((k) => `${BASEMAP_LAYER_LABEL[k]} ${b.counts[k]}`).join(" · ");
+  const when = shortWhen(rec.loaded_at);
+  text($("basemap-note"), `배경 도형 ${b.count}개 (${parts}) · ${b.data_mode === "synthetic" ? "연습용" : s0.name} · 도형 기준일 ${s0.geometry_version} · 이용허락 ${s0.license ?? "미확인"}` +
+    (when ? ` · 가져오기 ${when}` : ""), "muted");
+}
+
+async function loadSyntheticBasemap() {
+  try {
+    const res = await fetch("data/basemap.synthetic.j5basemap.json", { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await loadBasemapObject(await res.json(), "bundled_synthetic");
+  } catch (e) {
+    text($("basemap-note"), "연습용 배경을 읽지 못함: " + e, "bad");
+  }
+}
+
+async function loadBasemapFile(input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  try {
+    await loadBasemapObject(JSON.parse(await file.text()), "file:" + file.name);
+  } catch (e) {
+    text($("basemap-note"), "배경 파일을 읽지 못함: " + e, "bad");
+  }
+  input.value = "";
+}
+
+async function clearBasemap() {
+  await state.store.clearBasemap();
+  applyBasemap(null);
+}
+
 function showParcel(feature) {
   const p = feature.properties;
   mapCall((m) => m.selectParcel(feature.id));
@@ -283,8 +336,8 @@ function mapCall(fn) {
 
 function mapNote(c) {
   if (!c) return;
-  $("map-empty").hidden = c.total > 0 || state.parcelsCount > 0;
-  const parcels = state.parcelsCount ? ` · 필지 ${state.parcelsCount}개` : "";
+  $("map-empty").hidden = c.total > 0 || state.parcelsCount > 0 || state.basemapCount > 0;
+  const parcels = (state.parcelsCount ? ` · 필지 ${state.parcelsCount}개` : "") + (state.basemapCount ? ` · 배경 ${state.basemapCount}개` : "");
   if (c.total === 0) return text($("map-note"), parcels ? `물건 없음${parcels}` : "", "muted");
   if (c.located === 0) return text($("map-note"), `위치점 있는 물건이 없다. 목록에서 선택한다${parcels}`, "muted");
   let msg = `위치점 ${c.located}개 표시 (가상 ${c.synthetic} · 실제 ${c.privateReal})`;
@@ -760,6 +813,9 @@ async function main() {
   $("load-synthetic-parcels").addEventListener("click", loadSyntheticParcels);
   $("parcels-file").addEventListener("change", (e) => loadParcelsFile(e.target));
   $("clear-parcels").addEventListener("click", clearParcels);
+  $("load-synthetic-basemap").addEventListener("click", loadSyntheticBasemap);
+  $("basemap-file").addEventListener("change", (e) => loadBasemapFile(e.target));
+  $("clear-basemap").addEventListener("click", clearBasemap);
   $("parcel-close").addEventListener("click", closeParcelPanel);
   $("photos").addEventListener("change", (e) => addPhotos(e.target));
   $("save-observation").addEventListener("click", saveObservation);
@@ -784,6 +840,13 @@ async function main() {
     parcelsNote(rec ?? null);
   } catch (e) {
     text($("parcels-note"), "저장된 필지를 읽지 못함: " + (e?.message || e), "bad");
+  }
+  try {
+    const rec = await state.store.getBasemap();
+    if (rec) { state.basemapRec = rec; state.basemapCount = rec.bundle.features.length; mapCall((m) => m.setBasemap(rec.bundle)); }
+    basemapNote(rec ?? null);
+  } catch (e) {
+    text($("basemap-note"), "저장된 배경을 읽지 못함: " + (e?.message || e), "bad");
   }
   await renderAssets();
   await renderRecords();

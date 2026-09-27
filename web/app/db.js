@@ -1,9 +1,10 @@
 // IndexedDB 저장소. 스토어: meta(설정), assets(시드 물건), events(관측: 객체 + 고정 바이트), photos(sha256 → Blob),
-// parcels(필지 번들 한 벌, v2·J5-013B-1). 저장 실패(용량 부족 등)는 예외로 올려 화면이 '저장됨'으로 오표시하지 않게 한다. 자동 삭제는 없다.
+// parcels(필지 번들 한 벌, v2·J5-013B-1), basemap(배경 도형 번들 한 벌, v3·J5-022). 저장 실패(용량 부족 등)는 예외로 올려 화면이 '저장됨'으로 오표시하지 않게 한다. 자동 삭제는 없다.
 
 export const DB_NAME = "j5";
-export const DB_VERSION = 2;
+export const DB_VERSION = 3; // v3: basemap 스토어 추가 (기존 스토어·기록은 그대로)
 const PARCELS_KEY = "active";
+const BASEMAP_KEY = "active";
 
 function req(r) {
   return new Promise((resolve, reject) => {
@@ -33,6 +34,7 @@ export async function openDb() {
     }
     if (!db.objectStoreNames.contains("photos")) db.createObjectStore("photos", { keyPath: "sha256" });
     if (!db.objectStoreNames.contains("parcels")) db.createObjectStore("parcels");
+    if (!db.objectStoreNames.contains("basemap")) db.createObjectStore("basemap");
   };
   return req(r);
 }
@@ -88,6 +90,23 @@ export class Store {
   async clearParcels() {
     const tx = this.db.transaction("parcels", "readwrite");
     tx.objectStore("parcels").delete(PARCELS_KEY);
+    await done(tx);
+  }
+
+  /** 배경 도형 번들을 통째로 교체한다 (한 벌만 둔다). 다른 스토어는 건드리지 않는다. */
+  async replaceBasemap(bundle, source) {
+    const tx = this.db.transaction("basemap", "readwrite");
+    tx.objectStore("basemap").put({ bundle, source, loaded_at: new Date().toISOString() }, BASEMAP_KEY);
+    await done(tx);
+  }
+
+  async getBasemap() {
+    return req(this.db.transaction("basemap").objectStore("basemap").get(BASEMAP_KEY));
+  }
+
+  async clearBasemap() {
+    const tx = this.db.transaction("basemap", "readwrite");
+    tx.objectStore("basemap").delete(BASEMAP_KEY);
     await done(tx);
   }
 

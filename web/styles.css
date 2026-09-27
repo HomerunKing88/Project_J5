@@ -7,6 +7,8 @@
   --surface: #ffffff;
   --surface-2: #e9ece7;
   --line: #d3d8d1;
+  --bm-road: #ffffff;      /* 배경 층: 실폭도로·도로 중심선 (지도 바탕보다 밝게) */
+  --bm-building: #d6dbd4;  /* 배경 층: 건물 윤곽 */
   --ink: #1a1f1c;
   --muted: #5a625d;
   --accent: #1e6b5a;
@@ -36,7 +38,7 @@
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
-    --bg: #121614; --surface: #1b211e; --surface-2: #242c28; --line: #313b36;
+    --bg: #121614; --surface: #1b211e; --surface-2: #242c28; --line: #313b36; --bm-road: #2f3934; --bm-building: #3a453f;
     --ink: #e7ece8; --muted: #a0aba5;
     --accent: #5bbd9b; --accent-ink: #0f1512; --accent-soft: #1d2f29;
     --sel: #f0a04b; --sel-soft: #3a2a17;
@@ -211,6 +213,13 @@ details.disclosure > :not(summary) { margin-top: var(--space-2); }
 .lg-real { background: var(--accent); }
 .lg-sel { background: var(--sel); }
 .lg-parcel { border: 1.5px solid var(--muted); border-radius: 2px; }
+.layer-base path, .layer-road-labels text { pointer-events: none; }
+.bm-road-area { fill: var(--bm-road); stroke: none; }
+.bm-building { fill: var(--bm-building); fill-opacity: .8; stroke: var(--muted); stroke-opacity: .35; stroke-width: .6; }
+.bm-road { fill: none; stroke: var(--bm-road); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+.bm-road.synthetic, .bm-building.synthetic { stroke-dasharray: 3 2; }
+.bm-road-label { font-size: 10px; fill: var(--muted); text-anchor: middle; dominant-baseline: middle; paint-order: stroke; stroke: var(--surface-2); stroke-width: 2.5px; letter-spacing: .02em; }
+.lg-bm { background: var(--bm-building); border: 1px solid var(--muted); border-radius: 2px; }
 .parcel { fill: var(--surface); fill-opacity: .5; stroke: var(--muted); stroke-width: 1; stroke-opacity: .8; pointer-events: visiblePainted; }
 .parcel.synthetic { stroke-dasharray: 4 2; }
 .parcel.sel { fill: var(--sel); fill-opacity: .25; stroke: var(--sel); stroke-width: 2; stroke-opacity: 1; }
