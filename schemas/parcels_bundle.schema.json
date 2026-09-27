@@ -637,10 +637,21 @@
                 "maxLength": 20
               }
             }
+          },
+          "description": "토지이용계획 지역지구 코드와 관계(포함·저촉·접함) 짝. J5-032 부터 name 은 null 이다: 원본 이름 목록은 코드와 순서가 맞지 않아 위치로 짝짓지 않는다(이름은 plan_zone_names). J5-025 형식의 번들은 name 이 있을 수 있으나 짝은 확인되지 않은 것이다"
+        },
+        "plan_zone_names": {
+          "description": "J5-032: 원본 이름 목록(순서 그대로, 코드와 짝짓지 않음). 열 길이에 잘렸으면 끊긴 마지막 조각은 뺐다(plan_zones_truncated)",
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
           }
         },
         "plan_zones_truncated": {
-          "description": "원본 이름 목록이 열 길이에 잘려 코드 수보다 적으면 true",
+          "description": "원본 이름 목록이 .dbf 열 길이 한도에 닿아 잘렸으면 true (J5-032: 바이트 길이로 판정)",
           "type": "boolean"
         },
         "ownership_kind_code": {
@@ -764,6 +775,7 @@
               "terrain_height",
               "terrain_form",
               "plan_zones",
+              "plan_zone_names",
               "plan_zones_truncated",
               "ownership_kind_code",
               "ownership_kind",
@@ -820,6 +832,7 @@
                 "propertyNames": {
                   "enum": [
                     "plan_zones",
+                    "plan_zone_names",
                     "plan_zones_truncated"
                   ]
                 }

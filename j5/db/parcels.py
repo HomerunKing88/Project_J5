@@ -109,8 +109,11 @@ def _parcel_content(feature: dict, src: dict) -> dict:
 
 
 ATTR_FIELDS = ("jimok_name", "registered_area_m2", "official_land_price_krw_m2", "price_base_year", "price_base_month", "use_zone_1", "use_zone_2", "land_use_situation",
-               "road_side", "terrain_height", "terrain_form", "plan_zones", "plan_zones_truncated", "ownership_kind_code", "ownership_kind", "co_owner_count",
+               "road_side", "terrain_height", "terrain_form", "plan_zones", "plan_zone_names", "plan_zones_truncated", "ownership_kind_code", "ownership_kind", "co_owner_count",
                "ownership_changed_on", "ownership_change_cause_code", "national_institution_code")
+# 목록·불리언처럼 열이 따로인 필드 (행 변환에서 따로 다룬다). plan_zone_names(J5-032)는 비어 있으면 내용에서 뺀다:
+# 그 키가 없던 J5-025·026 정본 행·스냅샷과 해시·값이 같게 유지되어, 옛 번들을 다시 넣어도 헛된 갱신이 생기지 않는다
+_LIST_FIELDS = ("plan_zones", "plan_zone_names", "plan_zones_truncated")
 
 
 # 자료 종류별 필드 묶음 (리뷰 반영, PR #71): 번들에 든 자료(attrs_sources.kind)의 묶음만 반영하고 없는 자료의 값은 기존 행을 유지한다.
@@ -118,13 +121,13 @@ ATTR_FIELDS = ("jimok_name", "registered_area_m2", "official_land_price_krw_m2",
 ATTR_GROUPS = {
     "land_feature": ("jimok_name", "registered_area_m2", "official_land_price_krw_m2", "price_base_year", "price_base_month", "use_zone_1", "use_zone_2", "land_use_situation",
                      "road_side", "terrain_height", "terrain_form"),
-    "land_plan": ("plan_zones", "plan_zones_truncated"),
+    "land_plan": ("plan_zones", "plan_zone_names", "plan_zones_truncated"),
     "land_ownership": ("ownership_kind_code", "ownership_kind", "co_owner_count", "ownership_changed_on", "ownership_change_cause_code", "national_institution_code"),
 }
 
 
 def _empty_attrs() -> dict:
-    c = {k: None for k in ATTR_FIELDS}
+    c = {k: None for k in ATTR_FIELDS if k != "plan_zone_names"}
     c["plan_zones"] = []
     c["plan_zones_truncated"] = False
     return c
@@ -137,27 +140,34 @@ def _attrs_content(attrs: dict, as_of: str, kinds: set[str], base: dict | None =
         for k in ATTR_GROUPS[kind]:
             c[k] = attrs.get(k)
     c["plan_zones"] = c["plan_zones"] or []
+    names = c.pop("plan_zone_names", None) or []
+    if names:
+        c["plan_zone_names"] = list(names)
     c["plan_zones_truncated"] = bool(c["plan_zones_truncated"])
     c["as_of"] = as_of
     return c
 
 
 def _attrs_content_from_row(row) -> dict:
-    c = {k: row[k] for k in ATTR_FIELDS if k not in ("plan_zones", "plan_zones_truncated")}
+    c = {k: row[k] for k in ATTR_FIELDS if k not in _LIST_FIELDS}
     c["plan_zones"] = json.loads(row["plan_zones_json"])
+    names = json.loads(row["plan_zone_names_json"]) if "plan_zone_names_json" in row.keys() else []
+    if names:
+        c["plan_zone_names"] = names
     c["plan_zones_truncated"] = bool(row["plan_zones_truncated"])
     return c
 
 
 def _attrs_row(parcel_id: str, content: dict, h: str, sources: list[dict], doc_id: str | None, now: str) -> dict:
-    row = {k: content.get(k) for k in ATTR_FIELDS if k not in ("plan_zones", "plan_zones_truncated")}
-    row.update({"parcel_id": parcel_id, "as_of": content["as_of"], "plan_zones_json": _canon(content["plan_zones"]), "plan_zones_truncated": int(content["plan_zones_truncated"]),
+    row = {k: content.get(k) for k in ATTR_FIELDS if k not in _LIST_FIELDS}
+    row.update({"parcel_id": parcel_id, "as_of": content["as_of"], "plan_zones_json": _canon(content["plan_zones"]), "plan_zone_names_json": _canon(content.get("plan_zone_names") or []),
+                "plan_zones_truncated": int(content["plan_zones_truncated"]),
                 "sources_json": _canon(sources), "source_document_id": doc_id, "content_hash": h, "now": now})
     return row
 
 
 _ATTR_COLS = ("as_of", "jimok_name", "registered_area_m2", "official_land_price_krw_m2", "price_base_year", "price_base_month", "use_zone_1", "use_zone_2", "land_use_situation",
-              "road_side", "terrain_height", "terrain_form", "plan_zones_json", "plan_zones_truncated", "ownership_kind_code", "ownership_kind", "co_owner_count",
+              "road_side", "terrain_height", "terrain_form", "plan_zones_json", "plan_zone_names_json", "plan_zones_truncated", "ownership_kind_code", "ownership_kind", "co_owner_count",
               "ownership_changed_on", "ownership_change_cause_code", "national_institution_code", "sources_json", "source_document_id", "content_hash")
 _ATTR_INSERT = (f"INSERT INTO parcel_attributes (parcel_id, {', '.join(_ATTR_COLS)}, recorded_at, updated_at)"
                 f" VALUES (:parcel_id, {', '.join(':' + c for c in _ATTR_COLS)}, :now, :now)")
@@ -249,7 +259,7 @@ def load_bundle(db: Db, doc: dict) -> ParcelLoadResult:
         snap_plan = []
         for _action, pnu, content, _h, _sources in attrs_plan:
             for kind in sorted(kinds):
-                values = {k: content[k] for k in ATTR_GROUPS[kind]}
+                values = {k: content[k] for k in ATTR_GROUPS[kind] if k in content}   # 빈 이름 목록은 키 없음 (_LIST_FIELDS 설명)
                 row = db.conn.execute("SELECT s.snapshot_id, s.values_json FROM parcel_attribute_snapshots s JOIN parcels p ON p.parcel_id = s.parcel_id WHERE p.pnu = ? AND s.kind = ? AND s.as_of = ?",
                                       (pnu, kind, content["as_of"])).fetchone()
                 if row is None:
@@ -511,7 +521,7 @@ def attribute_history(db: Db, pnu: str) -> dict:
 
 ATTR_LABELS = {"jimok_name": "지목", "registered_area_m2": "공부면적(㎡)", "official_land_price_krw_m2": "공시지가(원/㎡)", "price_base_year": "공시 기준연도", "price_base_month": "공시 기준월",
                "use_zone_1": "용도지역 1", "use_zone_2": "용도지역 2", "land_use_situation": "이용상황", "road_side": "도로접면", "terrain_height": "지형 높이", "terrain_form": "지형 형상",
-               "plan_zones": "규제·지역지구", "plan_zones_truncated": "이름 목록 잘림", "ownership_kind_code": "소유 구분 코드", "ownership_kind": "소유 구분", "co_owner_count": "공유인수",
+               "plan_zones": "지역지구 코드", "plan_zone_names": "지역지구 이름 목록", "plan_zones_truncated": "이름 목록 잘림", "ownership_kind_code": "소유 구분 코드", "ownership_kind": "소유 구분", "co_owner_count": "공유인수",
                "ownership_changed_on": "소유 변동일", "ownership_change_cause_code": "변동 원인 코드", "national_institution_code": "국가기관 구분"}
 KIND_LABELS = {"land_feature": "토지특성", "land_plan": "토지이용계획", "land_ownership": "토지소유"}
 
@@ -519,8 +529,10 @@ KIND_LABELS = {"land_feature": "토지특성", "land_plan": "토지이용계획"
 def _fmt_attr_value(field: str, v) -> str:
     if v is None:
         return "없음"
-    if field == "plan_zones":
-        return ", ".join((z.get("name") or z.get("code")) + (f"({z['relation']})" if z.get("relation") and z["relation"] != "포함" else "") for z in v) or "없음"
+    if field == "plan_zones":   # 코드와 관계 (J5-032: 이름은 코드와 짝짓지 않는다. J5-025 형식의 옛 값도 코드로 보인다)
+        return ", ".join(z.get("code") + (f"({z['relation']})" if z.get("relation") and z["relation"] != "포함" else "") for z in v) or "없음"
+    if field == "plan_zone_names":
+        return ", ".join(v) or "없음"
     if field == "official_land_price_krw_m2":
         return f"{int(v):,}"
     return str(v)

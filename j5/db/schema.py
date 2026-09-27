@@ -850,6 +850,13 @@ SELECT {_SQL_UUID4}, asset_id, previous_status, new_status, decided_on, reason, 
 FROM readiness_decisions WHERE previous_status <> new_status ORDER BY recorded_at, decision_id;
 """
 
+# J5-032 토지이용계획 이름 목록 정정 (ADR-19 정정). 실측에서 원본 이름 목록이 코드와 순서가 맞지 않아(한 코드의 이름이 두 번 나오는 등) 위치로 짝짓지 않는다.
+# 코드·관계는 plan_zones_json 에 두고, 이름은 자료에 적힌 순서 그대로 이 열에 둔다(열 길이에 잘린 마지막 조각은 뺀다). 기존 행은 빈 목록이며,
+# 이미 넣은 J5-025 형식의 값(코드에 이름이 위치로 붙은 것)은 VWorld 묶음을 다시 반영하면(같은 기준일이면 교체) 새 형식이 된다.
+MIGRATION_0018 = """
+ALTER TABLE parcel_attributes ADD COLUMN plan_zone_names_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(plan_zone_names_json) AND json_type(plan_zone_names_json) = 'array');
+"""
+
 # (버전, 이름, SQL). 새 릴리스의 테이블은 새 항목으로 추가하고 기존 항목은 고치지 않는다.
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "r1b_minimum", MIGRATION_0001),
@@ -869,6 +876,7 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (15, "r8_parcel_attributes", MIGRATION_0015),
     (16, "r8_parcel_attribute_snapshots", MIGRATION_0016),
     (17, "r8_tracking_changes", MIGRATION_0017),
+    (18, "r8_plan_zone_names", MIGRATION_0018),
 )
 # 표 재작성이 필요한 마이그레이션: 외래키 검사를 끈 채 한 트랜잭션으로 실행하고 foreign_key_check 가 비어야 커밋한다 (store._migrate).
 FK_OFF_MIGRATIONS = frozenset({9, 12, 13})
