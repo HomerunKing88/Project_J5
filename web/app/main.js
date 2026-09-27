@@ -13,7 +13,7 @@ import { migrationReadiness, migrationText, persistenceText } from "./migrate.js
 import { createNavigator, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, MODE_LABEL, MODE_SHORT } from "./ui.js";
 import { externalMapLinks, bboxCenter, LINK_ATTRS } from "./extmap.js";
 import { validateBasemap, LAYERS as BASEMAP_LAYERS, LAYER_LABEL as BASEMAP_LAYER_LABEL } from "./basemap.js";
-import { PROVIDERS, resolveTileConfig, maskUrl, prefetchPlan, padBbox, tileUrl, TILE_CACHE, PREFETCH_ZOOMS } from "./tiles.js";
+import { PROVIDERS, resolveTileConfig, prefetchPlan, padBbox, tileUrl, TILE_CACHE, PREFETCH_ZOOMS, KEY_PLACEHOLDER } from "./tiles.js";
 import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
 import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
@@ -77,8 +77,8 @@ async function loadTileSettings() {
 
 function updateTileFields() {
   const p = $("tiles-provider").value;
-  $("tiles-key-field").hidden = !(PROVIDERS[p]?.needsKey);
   $("tiles-template-field").hidden = p !== "custom";
+  $("tiles-key-field").hidden = !(PROVIDERS[p]?.needsKey || (p === "custom" && $("tiles-template").value.includes(KEY_PLACEHOLDER)));
 }
 
 function applyTileSettings({ provider, key, template }, { quiet = false } = {}) {
@@ -97,22 +97,40 @@ function applyTileSettings({ provider, key, template }, { quiet = false } = {}) 
   }
   state.tiles = cfg;
   mapCall((m) => m.setTiles({ url: cfg.url, minZoom: cfg.minZoom, maxZoom: cfg.maxZoom, attribution: cfg.attribution }));
-  if (!quiet) text($("tiles-note"), `저장했습니다: ${PROVIDERS[provider].name} · ${maskUrl(cfg.url, key)}` + (PROVIDERS[provider].verified ? "" : " · 주소 형식은 공식 문서로 미확인 (안 보이면 제공자 문서의 형식으로 직접 입력)"), "ok");
+  if (!quiet) text($("tiles-note"), `저장했습니다: ${PROVIDERS[provider].name} · ${cfg.url}` + (cfg.needsKey ? " · 인증키는 이 기기에만 저장" : ""), "ok");
   return true;
 }
 
 async function saveTileSettings() {
   const provider = $("tiles-provider").value, key = $("tiles-key").value.trim(), template = $("tiles-template").value.trim();
-  if (!applyTileSettings({ provider, key, template })) return;
-  mapNote(state.lastMapCounts);
+  // 먼저 검증만 하고, 키를 저장한 뒤에 타일을 켠다 (서비스 워커가 첫 요청부터 키를 읽을 수 있게)
+  if (provider) {
+    const cfg = resolveTileConfig({ provider, key, template });
+    if (cfg.errors) { state.tiles = null; mapCall((m) => m.setTiles(null)); return text($("tiles-note"), "배경 지도 설정 오류: " + cfg.errors.join("; "), "bad"); }
+  }
   await state.store.setMeta("tiles_provider", provider || null);
   await state.store.setMeta("tiles_key", key || null);
   await state.store.setMeta("tiles_template", template || null);
+  try { navigator.serviceWorker?.controller?.postMessage({ type: "tile-key-changed" }); } catch {}
+  applyTileSettings({ provider, key, template });
+  mapNote(state.lastMapCounts);
   renderTileCacheStatus();
 }
 
 function onTileStatus(st) {
+  // 그리지 못한 타일(오류 응답이 불투명하게 저장됐을 수 있음)은 캐시에서 빼서 다음에 다시 받게 한다 (리뷰 반영)
+  if (st.failedUrl) { try { navigator.serviceWorker?.controller?.postMessage({ type: "tile-evict", url: new URL(st.failedUrl, location.href).href }); } catch {} }
   if (st.failed && st.failed % 8 === 1) mapNote(state.lastMapCounts);
+}
+
+/** 서비스 워커가 이 페이지를 제어 중인지 (제어 전에는 받은 타일이 저장되지 않는다). 등록이 진행 중이면 잠시 기다린다. */
+async function swControlled(timeoutMs = 4000) {
+  if (!("serviceWorker" in navigator) || !window.isSecureContext) return false;
+  if (navigator.serviceWorker.controller) return true;
+  try { await Promise.race([navigator.serviceWorker.ready, new Promise((r) => setTimeout(r, timeoutMs))]); } catch { return false; }
+  if (navigator.serviceWorker.controller) return true;
+  await new Promise((r) => setTimeout(r, 300));
+  return !!navigator.serviceWorker.controller;
 }
 
 async function tileCacheCount() {
@@ -147,8 +165,10 @@ async function prefetchTiles() {
   if (!bbox) return text($("tiles-prefetch-note"), "범위를 정할 대상·필지가 없습니다. 물건 목록이나 필지를 먼저 넣습니다.", "warn");
   const plan = prefetchPlan(bbox, { minZoom: Math.max(PREFETCH_ZOOMS.min, state.tiles.minZoom), maxZoom: Math.min(PREFETCH_ZOOMS.max, state.tiles.maxZoom) });
   if (plan.tooMany) return text($("tiles-prefetch-note"), `범위가 넓어 타일이 ${plan.count}장을 넘습니다 (한도 ${plan.cap}). 대상 범위를 좁힙니다.`, "warn");
+  if (!(await swControlled())) return text($("tiles-prefetch-note"), "아직 이 기기에 저장할 준비가 되지 않았습니다 (서비스 워커 미활성: https 또는 localhost 로 열고 한 번 새로고침). 받아도 저장되지 않아 시작하지 않습니다.", "warn");
   state.prefetching = true;
   $("tiles-prefetch").disabled = true;
+  const before = (await tileCacheCount()) ?? 0;
   let done = 0, failed = 0;
   const load = (t) => new Promise((resolve) => {
     const img = new Image();
@@ -160,7 +180,9 @@ async function prefetchTiles() {
     const queue = plan.tiles.slice();
     const workers = Array.from({ length: 4 }, async () => { while (queue.length) { await load(queue.shift()); if ((done + failed) % 25 === 0) text($("tiles-prefetch-note"), `받는 중 ${done + failed}/${plan.count}`, "muted"); } });
     await Promise.all(workers);
-    text($("tiles-prefetch-note"), `받기 끝: ${done}장 성공 · ${failed}장 실패 (확대 ${plan.tiles[0]?.z ?? "?"}~${plan.tiles[plan.tiles.length - 1]?.z ?? "?"} 단계, 범위 여유 300 m)` + (failed ? ". 실패한 타일은 다음에 다시 받습니다" : ""), failed ? "warn" : "ok");
+    const stored = Math.max(0, ((await tileCacheCount()) ?? 0) - before);
+    const zr = `${plan.tiles[0]?.z ?? "?"}~${plan.tiles[plan.tiles.length - 1]?.z ?? "?"}`;
+    text($("tiles-prefetch-note"), `받기 끝: ${done}장 성공 · ${failed}장 실패 · 새로 저장 ${stored}장 (확대 ${zr} 단계, 범위 여유 300 m)` + (failed ? ". 실패한 타일은 다음에 다시 받습니다" : "") + (done && !stored ? ". 저장된 수가 늘지 않았습니다 (이미 저장됐거나 저장 공간 부족)" : ""), failed ? "warn" : "ok");
   } finally {
     state.prefetching = false;
     $("tiles-prefetch").disabled = false;
@@ -1068,6 +1090,7 @@ async function main() {
   $("basemap-file").addEventListener("change", (e) => loadBasemapFile(e.target));
   $("clear-basemap").addEventListener("click", clearBasemap);
   $("tiles-provider").addEventListener("change", updateTileFields);
+  $("tiles-template").addEventListener("input", updateTileFields);
   $("tiles-save").addEventListener("click", saveTileSettings);
   $("tiles-prefetch").addEventListener("click", prefetchTiles);
   $("tiles-clear").addEventListener("click", clearTileCache);

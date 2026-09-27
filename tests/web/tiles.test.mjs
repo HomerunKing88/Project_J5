@@ -3,18 +3,21 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { PROVIDERS, TILE_HOSTS, resolveTileConfig, validateTemplate, maskUrl, tileUrl, tileZoom, tilesFor, tileRect, prefetchPlan, padBbox, PREFETCH_MAX_TILES } from "../../web/app/tiles.js";
 
-test("resolveTileConfig: 제공자·키·템플릿 규칙", () => {
+test("resolveTileConfig: 미검증 제공자는 선택 불가, 키는 자리표로만, 템플릿 규칙", () => {
   assert.deepEqual(TILE_HOSTS, ["api.vworld.kr"]);
-  const v = resolveTileConfig({ provider: "vworld_base", key: "ab c/=1" });
-  assert.equal(v.url, "https://api.vworld.kr/req/wmts/1.0.0/ab%20c%2F%3D1/Base/{z}/{y}/{x}.png");
-  assert.deepEqual([v.minZoom, v.maxZoom, v.attribution], [6, 19, "배경: VWorld (국토교통부)"]);
-  assert.ok(resolveTileConfig({ provider: "vworld_base", key: " " }).errors[0].includes("인증키"));
+  const v = resolveTileConfig({ provider: "vworld_base", key: "abc" });
+  assert.ok(v.errors && v.errors[0].includes("아직 고를 수 없다"), "공식 문서로 확인하기 전에는 미리 설정을 쓸 수 없다");
+  assert.ok(Object.entries(PROVIDERS).every(([id, p]) => p.enabled === (id === "custom") && p.verified === null), "직접 입력만 켜져 있다");
   assert.ok(resolveTileConfig({ provider: "nope" }).errors.length);
   const c = resolveTileConfig({ provider: "custom", template: "./tiles/{z}/{x}/{y}.png" });
   assert.equal(c.url, "./tiles/{z}/{x}/{y}.png");
+  assert.equal(c.needsKey, false);
+  const k = resolveTileConfig({ provider: "custom", template: "https://api.vworld.kr/req/wmts/1.0.0/{key}/Base/{z}/{y}/{x}.png", key: "ab c" });
+  assert.equal(k.url, "https://api.vworld.kr/req/wmts/1.0.0/{key}/Base/{z}/{y}/{x}.png", "URL 에 키를 넣지 않는다 (서비스 워커가 바꾼다)");
+  assert.equal(k.needsKey, true);
+  assert.ok(resolveTileConfig({ provider: "custom", template: "./t/{key}/{z}/{x}/{y}.png", key: " " }).errors[0].includes("인증키"));
   assert.ok(resolveTileConfig({ provider: "custom", template: "" }).errors[0].includes("템플릿"));
   assert.ok(resolveTileConfig({ provider: "custom", template: "https://tile.example.org/{z}/{x}/{y}.png" }).errors[0].includes("허용되지 않은 호스트"));
-  assert.ok(Object.values(PROVIDERS).every((p) => p.verified === null), "형식은 아직 공식 문서로 확인하지 못했다");
 });
 
 test("validateTemplate: 자리표·경로 탈출·스킴", () => {
@@ -27,6 +30,7 @@ test("validateTemplate: 자리표·경로 탈출·스킴", () => {
   assert.ok(validateTemplate("http://api.vworld.kr/{z}/{x}/{y}.png").some((e) => e.includes("https://")));
   assert.ok(validateTemplate("./t/{z}/{x}/{y}.png\n").some((e) => e.includes("제어문자")));
   assert.equal(maskUrl("https://api.vworld.kr/req/k%2Fey/{z}", "k/ey"), "https://api.vworld.kr/req/****/{z}");
+  assert.equal(tileUrl("./t/{key}/{z}/{x}/{y}.png", 1, 2, 3), "./t/{key}/1/2/3.png", "자리표는 남는다");
   assert.equal(tileUrl("./t/{z}/{x}/{y}.png", 15, 27943, 12707), "./t/15/27943/12707.png");
 });
 

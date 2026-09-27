@@ -183,7 +183,7 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}
       if (!img) {
         img = node("image", { "data-tile": t.key, preserveAspectRatio: "none" });
         img.setAttribute("href", tileUrl(tiles.url, t.z, t.x, t.y));
-        img.addEventListener("error", () => { tileStatus.failed += 1; img.setAttribute("visibility", "hidden"); if (onTileStatus) onTileStatus({ ...tileStatus }); });
+        img.addEventListener("error", () => { tileStatus.failed += 1; img.setAttribute("visibility", "hidden"); if (onTileStatus) onTileStatus({ ...tileStatus, failedUrl: img.getAttribute("href") }); });
         img.addEventListener("load", () => { tileStatus.loaded += 1; if (onTileStatus) onTileStatus({ ...tileStatus }); });
         layerTiles.append(img);
         tileNodes.set(t.key, img);

@@ -9,29 +9,37 @@ export const TILE_HOSTS = Object.freeze(["api.vworld.kr"]);
 export const PREFETCH_MAX_TILES = 3000;   // 미리 받기 한 번의 상한 (256px PNG 약 20KB × 3,000 ≈ 60MB)
 export const PREFETCH_ZOOMS = Object.freeze({ min: 14, max: 18 });
 
-/** 제공자 미리 설정. verified: 공식 문서로 형식을 확인한 날짜, 아니면 null (작업 환경에서 문서 접근이 막혀 미검증). */
+/** 인증키 자리표. 타일 URL 에는 이 자리표만 두고 실제 키는 서비스 워커가 요청 직전에 IndexedDB 에서 읽어 바꾼다 (캐시 키·화면·요소 속성에 키가 남지 않게, 리뷰 반영). */
+export const KEY_PLACEHOLDER = "{key}";
+
+/**
+ * 제공자 미리 설정. verified: 공식 문서로 형식·약관을 확인한 날짜, 아니면 null. enabled 가 false 면 선택할 수 없다 (리뷰 반영: 공식 문서·실제 응답·캐시 이용조건을 확인하기 전에는
+ * 미검증 주소로 수천 건을 요청·저장하지 않는다. 확인이 끝나면 verified 에 날짜를 적고 enabled 를 true 로 바꾼다). 그 전에는 사용자가 제공자 문서의 형식을 "직접 입력" 에 넣는다.
+ */
 export const PROVIDERS = Object.freeze({
-  vworld_base: { name: "VWorld 기본 지도 (국토교통부)", host: "api.vworld.kr", template: "/req/wmts/1.0.0/{key}/Base/{z}/{y}/{x}.png", minZoom: 6, maxZoom: 19, needsKey: true, attribution: "배경: VWorld (국토교통부)", verified: null },
-  vworld_satellite: { name: "VWorld 항공사진", host: "api.vworld.kr", template: "/req/wmts/1.0.0/{key}/Satellite/{z}/{y}/{x}.jpeg", minZoom: 6, maxZoom: 19, needsKey: true, attribution: "배경: VWorld (국토교통부)", verified: null },
-  vworld_hybrid: { name: "VWorld 항공사진 + 라벨", host: "api.vworld.kr", template: "/req/wmts/1.0.0/{key}/Hybrid/{z}/{y}/{x}.png", minZoom: 6, maxZoom: 19, needsKey: true, attribution: "배경: VWorld (국토교통부)", verified: null },
-  custom: { name: "직접 입력 (허용 호스트 또는 같은 출처)", host: null, template: "", minZoom: 0, maxZoom: 22, needsKey: false, attribution: "배경: 사용자 지정 타일", verified: null },
+  vworld_base: { name: "VWorld 기본 지도 (국토교통부)", host: "api.vworld.kr", template: "/req/wmts/1.0.0/{key}/Base/{z}/{y}/{x}.png", minZoom: 6, maxZoom: 19, needsKey: true, attribution: "배경: VWorld (국토교통부)", verified: null, enabled: false },
+  vworld_satellite: { name: "VWorld 항공사진", host: "api.vworld.kr", template: "/req/wmts/1.0.0/{key}/Satellite/{z}/{y}/{x}.jpeg", minZoom: 6, maxZoom: 19, needsKey: true, attribution: "배경: VWorld (국토교통부)", verified: null, enabled: false },
+  vworld_hybrid: { name: "VWorld 항공사진 + 라벨", host: "api.vworld.kr", template: "/req/wmts/1.0.0/{key}/Hybrid/{z}/{y}/{x}.png", minZoom: 6, maxZoom: 19, needsKey: true, attribution: "배경: VWorld (국토교통부)", verified: null, enabled: false },
+  custom: { name: "직접 입력 (허용 호스트 또는 같은 출처)", host: null, template: "", minZoom: 0, maxZoom: 22, needsKey: false, attribution: "배경: 사용자 지정 타일", verified: null, enabled: true },
 });
 
-/** 설정 → 실제 템플릿 URL. 잘못되면 {errors:[...]}. 키는 URL 인코딩한다. */
+/** 설정 → 템플릿 URL(키는 자리표 그대로). 잘못되면 {errors:[...]}. */
 export function resolveTileConfig({ provider, key = "", template = "", attribution = "" } = {}) {
   const p = PROVIDERS[provider];
   if (!p) return { errors: ["제공자를 고른다"] };
+  if (!p.enabled) return { errors: [`${p.name} 은 주소 형식·이용조건을 공식 문서로 확인하기 전이라 아직 고를 수 없다. 제공자 문서의 타일 주소를 "직접 입력" 에 넣는다 (허용 호스트: ${TILE_HOSTS.join(", ")})`] };
   let url;
   if (provider === "custom") {
     url = String(template ?? "").trim();
-    if (!url) return { errors: ["타일 주소 템플릿을 넣는다 (예: ./tiles/{z}/{x}/{y}.png)"] };
+    if (!url) return { errors: ["타일 주소 템플릿을 넣는다 (예: ./tiles/{z}/{x}/{y}.png, 인증키 자리는 {key})"] };
   } else {
-    if (p.needsKey && !String(key ?? "").trim()) return { errors: [`${p.name} 은 인증키가 필요하다 (제공자 사이트에서 발급, 이 기기에만 저장)`] };
-    url = "https://" + p.host + p.template.replace("{key}", encodeURIComponent(String(key).trim()));
+    url = "https://" + p.host + p.template;
   }
+  const needsKey = p.needsKey || url.includes(KEY_PLACEHOLDER);
+  if (needsKey && !String(key ?? "").trim()) return { errors: ["이 주소는 인증키가 필요하다 (제공자 사이트에서 발급, 이 기기에만 저장)"] };
   const errs = validateTemplate(url);
   if (errs.length) return { errors: errs };
-  return { url, minZoom: p.minZoom, maxZoom: p.maxZoom, attribution: provider === "custom" && attribution ? attribution : p.attribution, provider };
+  return { url, minZoom: p.minZoom, maxZoom: p.maxZoom, attribution: provider === "custom" && attribution ? attribution : p.attribution, provider, needsKey };
 }
 
 /** 템플릿 검사: {z}{x}{y} 필수, 같은 출처 상대 경로이거나 https 의 허용 호스트, 경로 탈출·제어문자 없음. */
@@ -52,12 +60,13 @@ export function validateTemplate(url) {
   return errs;
 }
 
-/** 키를 가린 템플릿 (화면 표시용). */
+/** 키를 가린 템플릿 (화면 표시용). URL 에 키가 들어 있지 않으면 그대로. */
 export function maskUrl(url, key) {
   if (!key) return url;
-  return url.split(encodeURIComponent(key)).join("****");
+  return url.split(encodeURIComponent(key)).join("****").split(key).join("****");
 }
 
+/** 타일 URL. {key} 자리표는 남겨 둔다 (서비스 워커가 바꾼다). */
 export function tileUrl(template, z, x, y) {
   return template.replace("{z}", String(z)).replace("{x}", String(x)).replace("{y}", String(y));
 }

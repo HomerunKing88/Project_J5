@@ -154,16 +154,16 @@
       <label class="field"><span>제공자</span>
         <select id="tiles-provider">
           <option value="">사용 안 함 (위치점·필지·도로 배경만)</option>
-          <option value="vworld_base">VWorld 기본 지도 (국토교통부)</option>
-          <option value="vworld_satellite">VWorld 항공사진</option>
-          <option value="vworld_hybrid">VWorld 항공사진 + 라벨</option>
-          <option value="custom">직접 입력 (같은 출처 타일 폴더 등)</option>
+          <option value="custom">직접 입력 (제공자 문서의 타일 주소, 또는 같은 출처 타일 폴더)</option>
+          <option value="vworld_base" disabled>VWorld 기본 지도 (국토교통부) · 공식 문서 확인 전이라 선택 불가</option>
+          <option value="vworld_satellite" disabled>VWorld 항공사진 · 확인 전</option>
+          <option value="vworld_hybrid" disabled>VWorld 항공사진 + 라벨 · 확인 전</option>
         </select>
       </label>
-      <label class="field" id="tiles-key-field"><span>인증키 (VWorld 오픈API)</span><input id="tiles-key" type="password" autocomplete="off" spellcheck="false" placeholder="제공자 사이트에서 발급한 키">
-        <span class="field-hint">vworld.kr 에서 무료로 발급합니다. 키를 등록할 때 이 앱을 여는 주소(폰 브라우저 주소창의 주소)를 서비스 URL 로 넣어야 합니다.</span></label>
-      <label class="field" id="tiles-template-field" hidden><span>타일 주소 템플릿</span><input id="tiles-template" type="text" autocomplete="off" spellcheck="false" placeholder="./tiles/{z}/{x}/{y}.png">
-        <span class="field-hint">{z} {x} {y} 를 포함한 같은 출처 경로(./ 로 시작) 또는 허용 호스트의 https 주소만 됩니다.</span></label>
+      <label class="field" id="tiles-template-field" hidden><span>타일 주소 템플릿</span><input id="tiles-template" type="text" autocomplete="off" spellcheck="false" placeholder="api.vworld.kr 의 https 주소(…/{key}/…/{z}/{y}/{x}.png) 또는 ./tiles/{z}/{x}/{y}.png">
+        <span class="field-hint">{z} {x} {y} 를 포함한 허용 호스트(api.vworld.kr)의 https 주소 또는 같은 출처 경로(./ 로 시작)만 됩니다. 인증키가 들어갈 자리는 {key} 로 씁니다. 형식은 제공자 문서에서 확인합니다.</span></label>
+      <label class="field" id="tiles-key-field" hidden><span>인증키</span><input id="tiles-key" type="password" autocomplete="off" spellcheck="false" placeholder="제공자 사이트에서 발급한 키">
+        <span class="field-hint">이 기기에만 저장되며 주소·저장된 타일·화면 어디에도 남지 않습니다. VWorld 는 vworld.kr 에서 무료로 발급하고, 이 앱을 여는 주소(폰 브라우저 주소창의 주소)를 서비스 URL 로 등록해야 합니다.</span></label>
       <div class="row"><button id="tiles-save" class="primary">배경 지도 저장</button> <span id="tiles-note" class="muted" role="status"></span></div>
       <div class="field-name">이 기기에 저장된 타일</div>
       <p id="tiles-cache-status" class="muted"></p>

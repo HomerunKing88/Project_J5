@@ -87,7 +87,8 @@ def test_no_network_apis_in_js():
         for m in re.finditer(r"\bfetch\(\s*([^)]*)", text):
             arg = m.group(1).strip()
             if p.name == "sw.js":
-                assert arg.startswith("e.request"), f"{p}: 서비스 워커는 받은 요청만 전달"
+                # 받은 요청 그대로, 또는 타일 요청의 키 자리표를 바꾼 같은 요청(tileRequest(e, …), ADR-18)만 보낸다
+                assert arg.startswith("e.request") or arg.startswith("tileRequest(e"), f"{p}: 서비스 워커는 받은 요청(또는 그 타일 요청의 키 치환본)만 전달"
             else:
                 assert re.match(r'^"(\./)?[a-z][a-z0-9_./-]*"', arg), f"{p}: fetch 는 상대경로 리터럴만 허용: {arg}"
         if "serviceWorker" in text:
