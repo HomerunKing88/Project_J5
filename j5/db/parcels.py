@@ -139,6 +139,16 @@ def _attrs_content(attrs: dict, as_of: str, kinds: set[str], base: dict | None =
     for kind in kinds:
         for k in ATTR_GROUPS[kind]:
             c[k] = attrs.get(k)
+    if "land_plan" in kinds and "plan_zone_names" not in attrs:
+        # J5-025 형식(이름 목록 키 없음, 코드에 이름이 위치로 붙음)의 옛 번들 (리뷰 반영 PR #79): 위치 짝을 되살리지 않는다.
+        # 코드에 붙은 이름을 떼어 순서대로 이름 목록으로 옮기고(잘림 표시가 있으면 끊긴 마지막 조각은 뺀다), 같은 기준일에 정정된 이름 목록이 이미 있으면 그것을 지킨다
+        zones = attrs.get("plan_zones") or []
+        legacy = [z["name"] for z in zones if isinstance(z, dict) and z.get("name")]
+        if attrs.get("plan_zones_truncated") and legacy:
+            legacy = legacy[:-1]
+        kept = base.get("plan_zone_names") if base and base.get("as_of") == as_of else None
+        c["plan_zone_names"] = kept or legacy
+        c["plan_zones"] = [dict(z, name=None) for z in zones]
     c["plan_zones"] = c["plan_zones"] or []
     names = c.pop("plan_zone_names", None) or []
     if names:
@@ -155,6 +165,7 @@ def _attrs_content_from_row(row) -> dict:
     if names:
         c["plan_zone_names"] = names
     c["plan_zones_truncated"] = bool(row["plan_zones_truncated"])
+    c["as_of"] = row["as_of"]
     return c
 
 

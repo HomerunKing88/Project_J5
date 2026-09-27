@@ -47,11 +47,13 @@ def test_plan_parser_rules():
 
 
 def _old_format(bundle: dict) -> dict:
-    """J5-025 형식: 코드에 이름을 위치로 붙이고 이름 목록 필드가 없다."""
+    """J5-025 형식: 코드에 이름을 위치로 붙이고 이름 목록 필드가 없다. 잘린 행에는 J5-025 가 남긴 끊긴 이름 조각이 코드에 붙어 있다."""
     b = copy.deepcopy(bundle)
     for f in b["features"]:
         a = f["properties"]["attrs"]
-        names = a.pop("plan_zone_names", [])
+        names = list(a.pop("plan_zone_names", []))
+        if a.get("plan_zones_truncated"):
+            names.append("토지거래계약에관한허가구역(가상 아주")   # J5-025 는 열 한도에서 끊긴 조각을 이름으로 남겼다
         a["plan_zones"] = [dict(z, name=names[i] if i < len(names) else None) for i, z in enumerate(a["plan_zones"])]
     return b
 
@@ -62,12 +64,12 @@ def test_schema_18_and_old_rows_are_replaced_by_new_format(db):
     assert schema_errors("parcels_bundle.schema.json", old) == [], "옛 형식 번들도 받는다"
     load_bundle(db, old)
     assert load_bundle(db, _old_format(vw_bundle())).outcome == "unchanged", "이름 목록이 빈 옛 번들은 다시 넣어도 변화 없음 (해시 안정)"
+    # 옛 형식 번들은 반영할 때 정규화한다 (리뷰 반영 PR #79): 코드의 이름을 떼어 이름 목록으로, 잘렸으면 끊긴 마지막 조각 제외
     row = db.conn.execute("SELECT a.plan_zones_json, a.plan_zone_names_json FROM parcel_attributes a JOIN parcels p USING (parcel_id) WHERE p.pnu = ?", (P1,)).fetchone()
-    assert json.loads(row[1]) == [] and json.loads(row[0])[1]["name"] == "일반상업지역"
-    # 새 형식 번들을 같은 기준일로 넣으면 교체된다 (속성 행 갱신·토지이용계획 스냅샷 교체)
+    assert json.loads(row[1]) == ["도시지역", "일반상업지역", "지구단위계획구역(가상)"] and all(z["name"] is None for z in json.loads(row[0]))
+    # 새 형식 번들을 같은 기준일로 넣으면: 옛 형식에서 잃은 이름(코드 수보다 많은 이름)만 채워진다. 나머지는 이미 같다
     r = load_bundle(db, vw_bundle())
-    named = sum(1 for f in vw_bundle()["features"] if f["properties"]["attrs"].get("plan_zone_names"))
-    assert r.outcome == "applied" and r.attrs_updated == named and r.snapshots_replaced == named and r.snapshots_inserted == 0, r.to_text()
+    assert r.outcome == "applied" and r.attrs_updated == 1 and r.snapshots_replaced == 1 and r.snapshots_inserted == 0, r.to_text()
     row = db.conn.execute("SELECT a.plan_zones_json, a.plan_zone_names_json FROM parcel_attributes a JOIN parcels p USING (parcel_id) WHERE p.pnu = ?", (P1,)).fetchone()
     assert json.loads(row[1]) == ["도시지역", "일반상업지역", "지구단위계획구역(가상)"] and all(z["name"] is None for z in json.loads(row[0]))
     snap = db.conn.execute("SELECT s.values_json FROM parcel_attribute_snapshots s JOIN parcels p USING (parcel_id) WHERE p.pnu = ? AND s.kind = 'land_plan'", (P1,)).fetchone()
@@ -93,3 +95,23 @@ def test_ingest_bundle_key_includes_parser_version(tmp_path, monkeypatch):
     monkeypatch.setattr(vworld, "PLAN_PARSER_VERSION", "999")
     b = ING._bundle_path(tmp_path, src, "2026-09-05", name="n", license=None, bundle_mode="real")
     assert a != b and a.parent == b.parent
+
+
+def test_legacy_bundle_does_not_erase_corrected_names(db):
+    """리뷰 반영 PR #79 (P1): 정정된 정본에 같은 기준일의 옛 형식 번들이 들어와도 이름 목록을 지우거나 위치 짝을 되살리지 않는다.
+    더 새로운 기준일의 옛 형식 번들은 그 자료의 이름을 정규화해 쓴다."""
+    load_bundle(db, vw_bundle())
+    r = load_bundle(db, _old_format(vw_bundle()))
+    p3 = "9999900100100030000"
+    names = lambda pnu: json.loads(db.conn.execute("SELECT a.plan_zone_names_json FROM parcel_attributes a JOIN parcels p USING (parcel_id) WHERE p.pnu = ?", (pnu,)).fetchone()[0])
+    zones = lambda pnu: json.loads(db.conn.execute("SELECT a.plan_zones_json FROM parcel_attributes a JOIN parcels p USING (parcel_id) WHERE p.pnu = ?", (pnu,)).fetchone()[0])
+    assert r.outcome == "unchanged", r.to_text()
+    assert names(p3) == ["도시지역", "상대보호구역", "상대보호구역(가상)", "준공업지역"], "코드 수보다 많은 이름도 지키고"
+    assert all(z["name"] is None for z in zones(p3)), "위치 짝을 되살리지 않는다"
+    newer = _old_format(vw_bundle())
+    newer["source"]["geometry_version"] = "2026-10-01"
+    load_bundle(db, newer)
+    assert names(P1) == ["도시지역", "일반상업지역", "지구단위계획구역(가상)"] and all(z["name"] is None for z in zones(P1))
+    assert names(p3) == ["도시지역", "상대보호구역", "상대보호구역(가상)"], "새 기준일의 옛 형식은 그 자료의 이름(코드 수까지)을 쓴다"
+    p2 = "9999900100100020000"
+    assert names(p2) == ["도시지역", "제3종일반주거지역", "준주거지역"], "잘림 표시가 있으면 끊긴 조각은 이미 없다"
