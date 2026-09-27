@@ -409,9 +409,10 @@ def _db_main(args) -> int:
                 if row is None:
                     print(f"물건이 정본에 없다: {args.asset_id}", file=sys.stderr)
                     return 1
-                if row["resolution_status"] == "confirmed" and not args.label:
-                    print(f"이미 확인된 물건이다: {row['label']} ({row['asset_id']})")
-                    return 0
+                if row["resolution_status"] == "confirmed":
+                    # 확인된 물건은 건드리지 않는다 (--label 이 있어도 개명하지 않는다: 이 명령은 확정 전용이지 정본 개명 명령이 아니다, 리뷰 반영 PR #74)
+                    print(f"이미 확인된 물건이다: {row['label']} ({row['asset_id']})" + (". --label 은 pending 물건을 확정할 때만 적용된다" if args.label else ""))
+                    return 0 if not args.label else 1
                 with db.transaction():
                     db.conn.execute("UPDATE assets SET resolution_status = 'confirmed', label = COALESCE(?, label), updated_at = ? WHERE asset_id = ?", (args.label, db.now(), args.asset_id))
                     v = db.bump_dataset_version()

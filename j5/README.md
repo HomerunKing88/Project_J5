@@ -39,7 +39,7 @@ python -m j5 db [--db 경로] import <package.j5field.zip 또는 폴더> [--data
 - 판정과 종료 코드: `applied`(0), `duplicate`(0, 새 이벤트 없음·버전 유지), `held`(2, 같은 ID·다른 내용 또는 정정 대상 없음: 전체 보류), `rejected`(1), `failed`(1, 파일·DB 실패: DB 롤백). 어느 경우에도 입력 파일은 바꾸지 않는다.
 - DB 실패로 되돌린 뒤 이미 보관한 사진은 정리대기로 결과·`import_runs`·`logs/import.log` 에 남기고 자동 삭제하지 않는다. 재시도하면 같은 사진을 재사용한다.
 - 반영은 백업·파생본 생성 완료가 아니다(J5-011·012).
-- 기기가 필지에서 만든 물건(J5-028, ADR-21): 패키지의 선택 파일 `assets.new.json`(schema_version 1.1.0)에 든 물건은 검사에서 시드처럼 인정되고(`new_assets` 수), 반영기가 정본에 없는 것만 `resolution_status=pending` 으로 만든 뒤 기록을 반영한다(이미 있으면 정본 값 유지). 결과에 "기기가 만든 물건 N개" 가 나온다. 이어서 `db parcels-suggest` → `parcels-link` 로 필지 연결을 확인하고, 사람이 확인하면 `db asset-confirm <asset_id> [--label 이름]` 으로 확정한다(dataset_version 증가). 파생본 시드에 그 물건이 들어가면 폰이 기기 사본을 지운다.
+- 기기가 필지에서 만든 물건(J5-028, ADR-21): 패키지의 선택 파일 `assets.new.json`(schema_version 1.1.0)에 든 물건은 검사에서 시드처럼 인정되고(`new_assets` 수), 반영기가 정본에 없는 것만 `resolution_status=pending` 으로 만든 뒤 기록을 반영한다(이미 있으면 정본 값 유지). 결과에 "기기가 만든 물건 N개" 가 나온다. 이어서 `db parcels-suggest` → `parcels-link` 로 필지 연결을 확인하고, 사람이 확인하면 `db asset-confirm <asset_id> [--label 이름]` 으로 확정한다(dataset_version 증가; 이미 확인된 물건은 `--label` 이 있어도 바꾸지 않는다). 시드가 없는 정본이라도 이벤트의 대상이 모두 `assets.new.json` 으로 정의되면 반영된다. 파생본 시드에 그 물건이 들어가면 폰이 기기 사본을 지운다.
 
 PC에서 실행하려면 저장소 루트에서 `pip install -r requirements-dev.txt` 후 `python -m j5 ...`. `pip install -e .`를 하면 `j5` 명령으로도 쓸 수 있다. SQLite 3.38 이상이 필요하다(STRICT 테이블·내장 JSON 함수).
 

@@ -136,6 +136,9 @@ def _inspect(src, report: Report, seed, study_id, limits: Limits) -> None:
         na_raw, na_digest = src.read(NEW_ASSETS, limits.manifest, code="new_assets_too_large")
         actual[NEW_ASSETS] = (len(na_raw), na_digest)
         report.file_digests[NEW_ASSETS] = na_digest
+        if report.schema_version is not None and report.schema_version < "1.1.0":
+            # 1.0.0 으로 표시한 패키지에 1.1 의 파일이 들어 있으면 버전 협상이 깨진다 (리뷰 반영 PR #74)
+            report.add("reject", "new_assets_schema_version", MANIFEST, f"assets.new.json 은 schema_version 1.1.0 이상에서만 허용된다 (manifest 는 {report.schema_version})")
         try:
             na = json.loads(na_raw.decode("utf-8"), object_pairs_hook=_no_dup_pairs)
         except (UnicodeDecodeError, ValueError) as e:

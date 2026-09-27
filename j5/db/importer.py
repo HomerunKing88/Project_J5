@@ -242,8 +242,8 @@ def _import_open(db: Db, src, path: Path, data_home: Path, limits: Limits, resul
             result.add(f.level, f.code, f.path, f.message)
         result.events_total = report.counts.get("events", 0)
         result.events_skipped = report.counts.get("duplicates", 0)
-        if not seed:
-            result.add("reject", "no_assets_in_db", "assets", "정본에 물건이 없다. 시드를 먼저 승계한다 (j5 db load-seed)")
+        if not seed and not report.new_assets:
+            result.add("reject", "no_assets_in_db", "assets", "정본에 물건이 없다. 시드를 먼저 승계한다 (j5 db load-seed). 기기가 만든 물건(assets.new.json)만 든 패키지는 빈 정본에도 반영된다")
         if report.data_mode is not None and report.data_mode != db.data_mode:
             result.add("reject", "data_mode_mismatch", "manifest.json", f"패키지 data_mode {report.data_mode}, 정본 {db.data_mode}")
         verdict = report.verdict()

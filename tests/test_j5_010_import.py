@@ -396,6 +396,28 @@ def test_new_asset_package_creates_pending_asset_and_links_by_location(db, home,
     assert cli.main(["db", "asset-confirm", "1" * 8 + "-0000-4000-8000-000000000000"]) == 1
 
 
+def test_new_asset_package_applies_to_empty_db(home):
+    """리뷰 반영(PR #74): 시드가 없는 정본이라도 이벤트의 대상이 모두 assets.new.json 으로 정의되면 반영된다 (필지만으로 시작하는 흐름)."""
+    from tests.fixtures.make_packages import NEW_ASSET
+    with Db.create(home / "db" / "j5.sqlite3", study_id=STUDY, data_mode="synthetic") as empty:
+        r = import_package(empty, PACKAGES / "new_asset", home)
+        assert r.outcome == "applied" and r.assets_created == 1 and r.events_new == 1, r.to_text()
+        assert empty.status()["counts"]["assets"] == 1 and empty.conn.execute("SELECT resolution_status FROM assets").fetchone()[0] == "pending"
+        r2 = import_package(empty, PACKAGES / "valid", home)
+        assert r2.outcome == "rejected" and "asset_not_in_seed" in codes(r2), "시드 물건을 가리키는 기록은 여전히 시드가 필요하다"
+
+
+def test_asset_confirm_never_renames_confirmed_asset(db, home, capsys, monkeypatch):
+    monkeypatch.setenv("J5_DATA_HOME", str(home))
+    v = db.status()["dataset_version"]
+    db.close()
+    assert cli.main(["db", "asset-confirm", ASSETS[0][0], "--label", "바꾼 이름"]) == 1
+    assert "이미 확인된" in capsys.readouterr().out
+    with Db.open(home / "db" / "j5.sqlite3") as d2:
+        row = d2.conn.execute("SELECT label FROM assets WHERE asset_id = ?", (ASSETS[0][0],)).fetchone()
+        assert row["label"] == "가상 물건 1" and d2.status()["dataset_version"] == v, "확인된 물건은 이름·버전 그대로"
+
+
 def test_new_asset_already_in_seed_is_not_recreated(db, home, tmp_path):
     from tests.fixtures.make_packages import ASSETS, NEW_EVENT, event
     d = write_pkg(tmp_path / "p", [line_bytes(event(NEW_EVENT, ASSETS[0][0], "no_change", None, []))], [], "5e5e0000-0000-4000-8000-0000000000b1")

@@ -425,6 +425,14 @@ def test_new_asset_rejections_and_warnings(tmp_path):
     (d / "manifest.json").write_text(json.dumps(m, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     r = inspect_package(d, seed=SEED)
     assert r.verdict() == "reject" and "file_not_in_manifest" in codes(r)
+    # schema_version 1.0.0 인데 assets.new.json 이 있으면 거절 (버전 협상)
+    d = tmp_path / "h"
+    shutil.copytree(PACKAGES / "new_asset", d)
+    m = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
+    m["schema_version"] = "1.0.0"
+    (d / "manifest.json").write_text(json.dumps(m, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    r = inspect_package(d, seed=SEED)
+    assert r.verdict() == "reject" and "new_assets_schema_version" in codes(r)
     # JSON 이 아니면 거절
     d = tmp_path / "g"
     shutil.copytree(PACKAGES / "new_asset", d)
