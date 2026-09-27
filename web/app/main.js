@@ -7,7 +7,7 @@ import { uuid4, isUuid } from "./uuid.js";
 import { isoWithOffset, fromDatetimeLocal, toDatetimeLocal, localDate } from "./time.js";
 import { buildEvent, validateEvent, lineBytes, PHOTO_TAGS, PHOTO_TAG_LABEL, CHANGE_STATUS_LABEL, PHOTO_LIMIT, VIEWPOINT_MAX } from "./event.js";
 import { validateSeed } from "./seed.js";
-import { validateParcels, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, attrLines, attrsSummary, ZONE_LABELS } from "./parcels.js";
+import { validateParcels, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, attrLines, attrsSummary, ZONE_LABELS, findParcels, parcelAt } from "./parcels.js";
 import { selectRecords, planBatches, buildPackage, hasRemainingBatches, studyIdError } from "./export.js";
 import { migrationReadiness, migrationText, persistenceText } from "./migrate.js";
 import { createNavigator, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, MODE_LABEL, MODE_SHORT } from "./ui.js";
@@ -18,7 +18,7 @@ import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
 import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.5";
+export const APP_VERSION = "0.2.6";
 const $ = (id) => document.getElementById(id);
 const state = { store: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, zoneColors: false, seedLoadedAt: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
                 nav: null, returnFocus: null, mapSelected: null };
@@ -328,11 +328,75 @@ function applyParcels(rec) {
   closeParcelPanel();
   mapCall((m) => m.setParcels(state.parcels));
   applyZoneColors();
+  applySearchUi();
   parcelsNote(rec);
   mapCall((m) => mapNote(m.setAssets(state.assets)));
 }
 
 // ---- 용도지역 색 (J5-025, ADR-19): 필지 속성이 있을 때만 켤 수 있고, 켬 여부는 이 기기에 저장한다 ----
+// ---- 필지 찾기 (J5-027): 지번·PNU 검색과 현재 위치. 불러온 필지 안에서만 찾고, 위치는 누를 때 한 번 읽어 그리기만 한다 (저장·전송 없음) ----
+function applySearchUi() {
+  const has = state.parcelsCount > 0;
+  $("parcel-search-form").hidden = !has;
+  $("map-locate").disabled = !("geolocation" in navigator);
+  $("map-locate").title = "geolocation" in navigator ? "" : "이 브라우저에서는 위치를 읽을 수 없습니다";
+  if (!has) { $("parcel-search-results").replaceChildren(); $("parcel-search-results").hidden = true; text($("parcel-search-note"), "", "muted"); }
+}
+
+function openParcel(feature, { focus = true, move = true } = {}) {
+  if (move) mapCall((m) => m.focusParcel(feature.id));
+  showParcel(feature);
+  if (focus) $("parcel-history").focus();
+}
+
+function searchParcels(q) {
+  const feats = state.parcels?.features ?? [];
+  const list = $("parcel-search-results");
+  list.replaceChildren();
+  list.hidden = true;
+  if (!feats.length) return text($("parcel-search-note"), "필지 파일을 먼저 넣습니다.", "warn");
+  const r = findParcels(feats, q);
+  if (!r.query) return text($("parcel-search-note"), "지번(예: 182-13, 산1-2, 동 이름 182-13) 또는 PNU 19자리를 넣습니다.", "warn");
+  if (!r.matches.length) return text($("parcel-search-note"), `'${String(q).trim()}' 에 맞는 필지가 불러온 ${feats.length}개 안에 없습니다. 동 이름·지번을 확인하거나 PC 에서 범위를 넓힌 파일을 넣습니다.`, "warn");
+  if (r.matches.length === 1) {
+    openParcel(r.matches[0]);
+    return text($("parcel-search-note"), `${parcelTitle(r.matches[0].properties)} 필지로 이동`, "ok");
+  }
+  list.replaceChildren(...r.matches.map((f) => el("li", {}, el("span", { class: "title", text: parcelTitle(f.properties) }), el("span", { class: "mono muted", text: f.id }),
+    el("button", { text: "열기", onclick: () => { openParcel(f); list.hidden = true; } }))));
+  list.hidden = false;
+  text($("parcel-search-note"), `${r.total}개 일치${r.total > r.matches.length ? ` (앞 ${r.matches.length}개만 표시)` : ""}. 하나를 고릅니다.`, "muted");
+}
+
+function locateMe() {
+  if (!("geolocation" in navigator)) return text($("parcel-search-note"), "이 브라우저에서는 위치를 읽을 수 없습니다.", "warn");
+  if (!window.isSecureContext) return text($("parcel-search-note"), "위치는 보안 컨텍스트(https 또는 localhost)에서만 읽을 수 있습니다.", "warn");
+  const btn = $("map-locate");
+  btn.disabled = true;
+  text($("parcel-search-note"), "현재 위치를 읽는 중…", "muted");
+  navigator.geolocation.getCurrentPosition((pos) => {
+    btn.disabled = false;
+    const { longitude: lon, latitude: lat, accuracy } = pos.coords;
+    // 배경 타일이 켜져 있으면 화면을 옮기지 않는다: 옮기면 현재 위치 주변의 타일을 제공자에게 요청해 위치가 드러난다 (리뷰 반영 PR #73, ADR-20).
+    // 점·정확도 원은 지금 보이는 범위 안에서만 그리고, 필지 패널은 화면 이동 없이 연다. 화면을 옮길지는 사용자가 손으로 정한다.
+    const move = !state.tiles;
+    mapCall((m) => m.setLocation({ lon, lat, accuracy }, { center: move }));
+    const acc = Number.isFinite(accuracy) ? ` (정확도 ±${Math.round(accuracy)} m)` : "";
+    const tileNote = move ? "" : " 배경 타일이 켜져 있어 화면을 옮기지 않았습니다(옮기면 그 주변 타일을 제공자에게 요청합니다).";
+    const f = parcelAt(state.parcels?.features ?? [], [lon, lat]);
+    if (f) {
+      openParcel(f, { focus: false, move });
+      text($("parcel-search-note"), `현재 위치는 ${parcelTitle(f.properties)} 필지 안${acc}. 위치는 저장하지 않습니다.${tileNote}`, "ok");
+    } else {
+      text($("parcel-search-note"), (state.parcelsCount ? `현재 위치${acc}가 불러온 필지 범위 밖입니다. 위치는 저장하지 않습니다.` : `현재 위치를 표시했습니다${acc}. 필지 파일을 넣으면 그 자리의 필지를 엽니다.`) + tileNote, "muted");
+    }
+  }, (err) => {
+    btn.disabled = false;
+    const why = err.code === 1 ? "위치 권한이 거부됐습니다 (브라우저 설정에서 허용)" : err.code === 2 ? "위치를 구할 수 없습니다 (실내·기내 모드)" : "위치 읽기 시간이 지났습니다";
+    text($("parcel-search-note"), why + ". 위치는 저장·전송하지 않습니다.", "warn");
+  }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+}
+
 function applyZoneColors() {
   const sm = attrsSummary(state.parcels);
   const btn = $("map-zones");
@@ -1119,6 +1183,9 @@ async function main() {
   $("seed-file").addEventListener("change", (e) => loadSeedFile(e.target));
   $("load-synthetic-parcels").addEventListener("click", loadSyntheticParcels);
   $("parcels-file").addEventListener("change", (e) => loadParcelsFile(e.target));
+  // 필지 찾기·현재 위치는 지도가 못 떠도 동작한다 (검색·포함 판정은 순수 함수, 패널은 DOM). 지도 초기화와 무관하게 여기서 잇는다 (리뷰 반영 PR #73)
+  $("parcel-search-form").addEventListener("submit", (e) => { e.preventDefault(); searchParcels($("parcel-search").value); });
+  $("map-locate").addEventListener("click", locateMe);
   $("clear-parcels").addEventListener("click", clearParcels);
   $("load-synthetic-basemap").addEventListener("click", loadSyntheticBasemap);
   $("basemap-file").addEventListener("change", (e) => loadBasemapFile(e.target));
@@ -1165,6 +1232,7 @@ async function main() {
     if (rec) { state.parcelsRec = rec; state.parcels = rec.bundle; state.parcelsCount = rec.bundle.features.length; mapCall((m) => m.setParcels(rec.bundle)); }
     state.zoneColors = (await state.store.getMeta("zone_colors")) === true;
     applyZoneColors();
+    applySearchUi();
     parcelsNote(rec ?? null);
   } catch (e) {
     text($("parcels-note"), "저장된 필지를 읽지 못함: " + (e?.message || e), "bad");

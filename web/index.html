@@ -60,8 +60,16 @@
     <button id="map-zoom-out" class="icon" aria-label="축소">−</button>
     <button id="map-fit" class="secondary">전체 보기</button>
     <button id="map-zones" class="secondary" aria-pressed="false" disabled>용도지역 색</button>
+    <button id="map-locate" class="secondary" disabled>현재 위치</button>
     <button id="map-go-list" class="quiet">목록으로</button>
   </div>
+  <form id="parcel-search-form" class="search-row" hidden>
+    <label for="parcel-search" class="sr-only">필지 찾기</label>
+    <input id="parcel-search" type="search" inputmode="search" autocomplete="off" placeholder="지번으로 필지 찾기 (예: 182-13, 산1-2, PNU 19자리)">
+    <button id="parcel-search-go" class="secondary" type="submit">찾기</button>
+  </form>
+  <ul id="parcel-search-results" class="plain search-results" hidden></ul>
+  <p id="parcel-search-note" class="muted" role="status"></p>
   <div id="map-selected" class="selected-card" hidden>
     <div class="selected-body">
       <strong id="map-selected-label"></strong>
@@ -88,6 +96,7 @@
   <details class="disclosure">
     <summary>범례와 설명</summary>
     <p id="map-legend" class="map-legend"><span><span class="lg lg-syn"></span>연습용 물건</span> <span><span class="lg lg-real"></span>실제 물건</span> <span><span class="lg lg-sel"></span>선택됨</span> <span><span class="lg lg-parcel"></span>필지 경계</span> <span><span class="lg lg-bm"></span>건물·도로 배경</span></p>
+    <p class="help">"현재 위치" 는 누를 때만 이 기기의 위치를 한 번 읽어 지도에 점과 정확도 원으로 표시하고, 그 자리의 필지가 있으면 엽니다. 위치는 저장하거나 전송하지 않습니다. 배경 타일이 켜져 있으면 화면을 자동으로 옮기지 않습니다(옮기면 그 주변 타일을 제공자에게 요청하게 되므로). 위치 권한은 브라우저가 묻습니다. 지번 찾기는 불러온 필지 안에서만 찾습니다.</p>
     <p class="help">필지 이력에는 토지 자료의 처음 확인과 값이 바뀐 지점(공시지가·소유구분·용도지역 등)이 기준일의 연도에 들어갑니다. 값은 자료 표기 그대로이며 판단이 아닙니다.</p>
     <p class="help">"용도지역 색" 은 필지 속성이 있는 파일을 넣었을 때 켤 수 있고, 용도지역 이름을 주거·상업·공업·녹지 등으로 나눠 채웁니다. 색 분류는 표시용이며 규제 판단이 아닙니다.</p>
     <p class="help">배경 타일은 설정에서 켜면 보입니다(켜기 전에는 배경 없음). 북쪽이 위입니다. 점을 누르면 대상 요약이 뜨고, 필지를 누르면 그 안의 물건이 보입니다. 필지 경계와 도로·건물 배경은 설정의 자료 관리에서 넣습니다. 배경은 참고용이며 누를 수 없습니다.</p>

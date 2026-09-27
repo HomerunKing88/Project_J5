@@ -32,14 +32,14 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     // 지도 모듈 로드 실패: map.js 요청을 막고 첫 접속 (서비스 워커가 아직 없을 때). 목록·설정은 그대로 동작하고 지도 절만 안내를 낸다.
     await cdp.send("Network.setBlockedURLs", { urls: ["*/app/map.js"] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.5')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.6')");
     await cdp.waitFor("document.getElementById('map-note').textContent.includes('지도 표시 불가')");
     assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li').length"), 1, "지도 모듈 없이도 목록 절이 그려진다");
     const blockedLogs = cdp.errors.splice(0);
     assert.ok(blockedLogs.every((e) => e.includes("ERR_BLOCKED_BY_CLIENT") || e.includes("Failed to load resource") || e.includes("map.js")), blockedLogs.join("; "));
     await cdp.send("Network.setBlockedURLs", { urls: [] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.5')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.6')");
     await cdp.waitFor("document.getElementById('map-note').textContent === ''");
     // 설정
     await cdp.eval("document.getElementById('study-id').value = 'e2e-study'; document.getElementById('save-settings').click(); 'ok'");
@@ -190,6 +190,44 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel.zone-res2').length"), 2);
     assert.equal(await cdp.eval("document.getElementById('zone-legend').hidden"), false);
     assert.match(await cdp.eval("document.getElementById('zone-legend').textContent"), /일반주거 2/);
+    // 필지 찾기 (J5-027): 지번·PNU 검색은 불러온 필지 안에서만. 하나면 바로 열고 화면을 맞춘다(확대 유지), 여럿이면 목록, 없으면 안내
+    assert.equal(await cdp.eval("document.getElementById('parcel-search-form').hidden"), false, "필지가 있으면 찾기 입력이 보인다");
+    const search = async (q) => { await cdp.eval(`document.getElementById('parcel-search').value = ${JSON.stringify(q)}; document.getElementById('parcel-search-go').click(); 'ok'`); };
+    const scaleOf = () => cdp.eval("(() => { const t = document.querySelector('#map-svg .layer-parcels').getAttribute('transform') || ''; const m = /scale\\(([^)]+)\\)/.exec(t); return m ? Number(m[1]) : 0; })()");
+    const s0 = await scaleOf();
+    await search("1-1");
+    await cdp.waitFor("!document.getElementById('parcel-panel').hidden && document.getElementById('parcel-title').textContent === '가상동 1-1'");
+    assert.match(await cdp.eval("document.getElementById('parcel-search-note').textContent"), /^가상동 1-1 필지로 이동$/);
+    assert.ok((await scaleOf()) > s0, "필지 하나로 맞추면 확대된다");
+    assert.equal(await cdp.eval("document.activeElement.id"), "parcel-history", "찾은 필지의 패널로 포커스");
+    await search("9999900100100040002");
+    await cdp.waitFor("document.getElementById('parcel-title').textContent === '가상동 4-2'");
+    await search("산1-2");
+    await cdp.waitFor("document.getElementById('parcel-title').textContent === '가상동 산1-2'");
+    await search("999-9");
+    await cdp.waitFor("document.getElementById('parcel-search-note').textContent.includes('맞는 필지가 불러온 6개 안에 없습니다')");
+    await search("abc");
+    await cdp.waitFor("document.getElementById('parcel-search-note').textContent.startsWith('지번(예:')");
+    // 현재 위치: 권한 허용 + 위치 흉내(필지 4-2 안) → 점·정확도 원 표시, 그 필지 열림. 범위 밖 → 안내. 권한 거부 → 안내. 위치는 IndexedDB 에 남지 않는다
+    await cdp.send("Browser.grantPermissions", { origin: base, permissions: ["geolocation"] });
+    await cdp.send("Emulation.setGeolocationOverride", { latitude: 37.5705, longitude: 126.9996, accuracy: 12 });
+    await cdp.clickRect("#map-locate");
+    await cdp.waitFor("document.getElementById('parcel-search-note').textContent.includes('현재 위치는 가상동 4-2 필지 안')");
+    assert.match(await cdp.eval("document.getElementById('parcel-search-note').textContent"), /정확도 ±12 m\)\. 위치는 저장하지 않습니다\.$/);
+    assert.equal(await cdp.eval("document.querySelector('#map-svg .layer-locate').getAttribute('visibility')"), "visible");
+    assert.ok(Number(await cdp.eval("document.querySelector('#map-svg .locate-ring').getAttribute('r')")) > 0, "정확도 원");
+    assert.equal(await cdp.eval("document.getElementById('parcel-title').textContent"), "가상동 4-2");
+    await cdp.send("Emulation.setGeolocationOverride", { latitude: 37.6, longitude: 127.1, accuracy: 30 });
+    await cdp.clickRect("#map-locate");
+    await cdp.waitFor("document.getElementById('parcel-search-note').textContent.includes('불러온 필지 범위 밖')");
+    await cdp.send("Browser.setPermission", { origin: base, permission: { name: "geolocation" }, setting: "denied" });
+    await cdp.clickRect("#map-locate");
+    await cdp.waitFor("document.getElementById('parcel-search-note').textContent.includes('위치 권한이 거부')");
+    assert.equal(await cdp.eval("document.getElementById('map-locate').disabled"), false);
+    await cdp.send("Browser.resetPermissions", {});
+    await cdp.send("Emulation.clearGeolocationOverride", {});
+    await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
+    await cdp.clickRect("#map-fit");
     await cdp.clickRect('#map-svg path.parcel[data-pnu="9999900100100010000"]');
     await cdp.waitFor("!document.getElementById('parcel-panel').hidden && document.getElementById('parcel-title').textContent === '가상동 1'");
     assert.equal(await cdp.eval("document.querySelector('#map-svg path.parcel[data-pnu=\"9999900100100010000\"]').getAttribute('class')"), "parcel synthetic zone-com sel");
@@ -212,6 +250,7 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.setFiles("#parcels-file", [parcelsFile]);
     await cdp.waitFor("document.getElementById('parcels-note').textContent.includes('file:parcels.geojson')");
     assert.equal(await cdp.eval("document.getElementById('map-zones').disabled"), true);
+    assert.equal(await cdp.eval("document.getElementById('parcel-search-form').hidden"), false);
     await cdp.clickRect('#map-svg path.parcel[data-pnu="9999900100100040002"]');
     await cdp.waitFor("!document.getElementById('parcel-panel').hidden && document.getElementById('parcel-title').textContent === '가상동 4-2'");
     assert.equal(await cdp.eval("document.getElementById('parcel-attrs').hidden"), true, "속성 없는 필지에는 속성 목록이 없다");
@@ -406,6 +445,21 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.clickRect("#map-zoom-in");
     await new Promise((r) => setTimeout(r, 300));
     assert.ok(tileReqs.length > reqBefore, "확대하면 다음 단계 타일을 받는다");
+    // 현재 위치 + 타일 켜짐 (J5-027 리뷰 반영): 화면을 옮기지 않아 현재 위치 주변 타일을 요청하지 않는다. 점·패널은 열린다
+    await cdp.send("Browser.grantPermissions", { origin: base, permissions: ["geolocation"] });
+    await cdp.send("Emulation.setGeolocationOverride", { latitude: 37.5705, longitude: 126.9996, accuracy: 9 });
+    const reqBeforeLocate = tileReqs.length;
+    const viewBefore = await cdp.eval("document.querySelector('#map-svg .layer-parcels').getAttribute('transform')");
+    await cdp.clickRect("#map-locate");
+    await cdp.waitFor("document.getElementById('parcel-search-note').textContent.includes('배경 타일이 켜져 있어 화면을 옮기지 않았습니다')");
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(tileReqs.length, reqBeforeLocate, "위치를 읽어도 타일 요청이 늘지 않는다");
+    assert.equal(await cdp.eval("document.querySelector('#map-svg .layer-parcels').getAttribute('transform')"), viewBefore, "화면이 그대로다");
+    assert.equal(await cdp.eval("document.querySelector('#map-svg .layer-locate').getAttribute('visibility')"), "visible");
+    assert.equal(await cdp.eval("document.getElementById('parcel-title').textContent"), "가상동 4-2");
+    await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
+    await cdp.send("Browser.resetPermissions", {});
+    await cdp.send("Emulation.clearGeolocationOverride", {});
     // 미리 받기: 대상·필지 범위를 14~18 단계로. 같은 출처라 서비스 워커가 저장한다
     await cdp.eval("document.getElementById('nav-settings').click(); 'ok'");
     await cdp.eval("document.getElementById('tiles-prefetch').click(); 'ok'");
@@ -444,6 +498,13 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel').length"), 0);
     assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /필지 6개/, "지도 실패해도 필지 안내는 남는다");
     assert.equal(await cdp.eval("document.querySelectorAll('#record-list li').length"), 1, "지도 실패해도 기록 목록 유지");
+    // 지도가 못 떠도 지번 찾기는 페이지 이동 없이 필지 패널을 연다 (J5-027 리뷰 반영)
+    await cdp.eval("document.getElementById('nav-map').click(); 'ok'");
+    assert.equal(await cdp.eval("document.getElementById('parcel-search-form').hidden"), false);
+    await cdp.eval("document.getElementById('parcel-search').value = '1-1'; document.getElementById('parcel-search-go').click(); 'ok'");
+    await cdp.waitFor("!document.getElementById('parcel-panel').hidden && document.getElementById('parcel-title').textContent === '가상동 1-1'");
+    assert.ok(!(await cdp.eval("location.href")).includes("?") && (await cdp.eval("location.pathname")).endsWith("/index.html"), "폼 제출이 페이지 이동(GET ?…)으로 이어지지 않는다");
+    await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
     await cdp.eval("document.querySelectorAll('#asset-list li > button')[2].click(); 'ok'");
     await cdp.waitFor("!document.getElementById('sec-observe').hidden");
     assert.equal(await cdp.eval("document.getElementById('target-label').textContent"), "가상 물건 3", "지도 없이 목록으로 선택");
