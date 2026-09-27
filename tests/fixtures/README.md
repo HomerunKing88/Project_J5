@@ -18,4 +18,5 @@
 | missing_attachment | 이벤트가 참조한 사진이 패키지에 없음 | 첨부 존재 검사에서 거절 (J5-008) |
 | unsupported_heic | `image/heic` 첨부 | 이벤트 스키마에서 거절, 변환 안내 후 중단 |
 | unknown_asset | 시드에 없는 asset_id | 스키마 통과, 시드 연결 검사에서 거절 |
+| new_asset | 시드에 없는 asset_id 를 `assets.new.json`(기기가 만든 임시 매입 단위, J5-028)에 정의 | 검사 통과(new_assets 1), 반영기가 pending 물건을 만들고 기록 반영 |
 | invalid_change_without_evidence | 변화 확인인데 사진·설명 없음 | 이벤트 스키마에서 거절 |

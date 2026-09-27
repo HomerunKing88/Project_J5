@@ -353,3 +353,77 @@ def test_cli_db_import(home, tmp_path, capsys, monkeypatch):
     assert "data-home" in capsys.readouterr().err
     assert cli.main(["db", "--db", str(home / "db" / "j5.sqlite3"), "import", str(z), "--data-home", str(home)]) == 0
     capsys.readouterr()
+
+
+# ---- 기기가 만든 물건 (J5-028, ADR-21) ----
+
+def test_new_asset_package_creates_pending_asset_and_links_by_location(db, home, tmp_path, capsys, monkeypatch):
+    from j5.db.parcels import load_bundle, suggest_links
+    from j5.db.projection import build_projection
+    from tests.fixtures.make_packages import NEW_ASSET, NEW_EVENT
+    r = import_package(db, PACKAGES / "new_asset", home)
+    assert r.outcome == "applied" and r.events_new == 1 and r.assets_created == 1, r.to_text()
+    assert "임시 매입 단위" in r.to_text() and r.to_dict()["assets_created"] == 1
+    a = dict(db.conn.execute("SELECT * FROM assets WHERE asset_id = ?", (NEW_ASSET["asset_id"],)).fetchone())
+    assert a["resolution_status"] == "pending" and a["label"] == "가상동 4-2" and (a["lon"], a["lat"]) == (126.9996, 37.5705) and a["seed_created_at"] == "2026-09-22"
+    assert "PNU 9999900100100040002" in a["notes"] and "현장에서 만듦 (가상)" in a["notes"] and a["data_mode"] == "synthetic"
+    assert db.get_record(NEW_EVENT)["subject_id"] == NEW_ASSET["asset_id"] and db.status()["counts"]["assets"] == 6 and db.status()["ok"]
+    # 같은 파일 다시: 중복, 물건도 다시 만들지 않음
+    r2 = import_package(db, PACKAGES / "new_asset", home)
+    assert r2.outcome == "duplicate" and r2.assets_created == 0 and db.status()["counts"]["assets"] == 6
+    # 필지를 넣으면 위치점으로 필지 4-2 연결 제안이 나온다
+    load_bundle(db, json.loads((Path(__file__).resolve().parent / "fixtures" / "parcels" / "synthetic.j5parcels.json").read_text(encoding="utf-8")))
+    sug = suggest_links(db, effective_from="2026-09-23")
+    assert any(l["asset_id"] == NEW_ASSET["asset_id"] and l["pnu"] == NEW_ASSET["pnu"] for l in sug["links"])
+    # 파생본 시드에 pending 물건이 들어간다 (폰이 받으면 기기 사본을 정리한다)
+    proj = build_projection(db, home, photos=False)
+    assert proj.outcome == "published", proj.message
+    import zipfile
+    with zipfile.ZipFile(home / proj.output_dir / proj.zip_name) as zf:
+        seed = json.loads(zf.read("assets.seed.json"))
+    assert any(x["asset_id"] == NEW_ASSET["asset_id"] and x["label"] == "가상동 4-2" for x in seed)
+    # asset-confirm CLI: pending → confirmed, 버전 증가. 없는 물건은 오류
+    monkeypatch.setenv("J5_DATA_HOME", str(home))
+    v = db.status()["dataset_version"]
+    db.close()
+    assert cli.main(["db", "asset-confirm", NEW_ASSET["asset_id"], "--label", "가상동 4-2 (확인)"]) == 0
+    out = capsys.readouterr().out
+    assert "pending → confirmed" in out
+    with Db.open(home / "db" / "j5.sqlite3") as d2:
+        row = d2.conn.execute("SELECT resolution_status, label FROM assets WHERE asset_id = ?", (NEW_ASSET["asset_id"],)).fetchone()
+        assert row["resolution_status"] == "confirmed" and row["label"] == "가상동 4-2 (확인)" and d2.status()["dataset_version"] == v + 1
+    assert cli.main(["db", "asset-confirm", NEW_ASSET["asset_id"]]) == 0 and "이미 확인된" in capsys.readouterr().out
+    assert cli.main(["db", "asset-confirm", "1" * 8 + "-0000-4000-8000-000000000000"]) == 1
+
+
+def test_new_asset_already_in_seed_is_not_recreated(db, home, tmp_path):
+    from tests.fixtures.make_packages import ASSETS, NEW_EVENT, event
+    d = write_pkg(tmp_path / "p", [line_bytes(event(NEW_EVENT, ASSETS[0][0], "no_change", None, []))], [], "5e5e0000-0000-4000-8000-0000000000b1")
+    na = [{"asset_id": ASSETS[0][0], "label": "다른 이름", "location_point": [127.0, 37.5], "data_mode": "synthetic", "created_at": "2026-09-22T10:20:00+09:00", "notes": None, "pnu": None, "origin": "device"}]
+    raw = (json.dumps(na, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    (d / "assets.new.json").write_bytes(raw)
+    m = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
+    m["schema_version"] = "1.1.0"
+    m["files"].append({"path": "assets.new.json", "bytes": len(raw), "sha256": sha(raw)})
+    (d / "manifest.json").write_text(json.dumps(m, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    r = import_package(db, d, home)
+    assert r.outcome == "applied" and r.assets_created == 0 and r.events_new == 1
+    a = db.conn.execute("SELECT label, resolution_status FROM assets WHERE asset_id = ?", (ASSETS[0][0],)).fetchone()
+    assert a["label"] == "가상 물건 1" and a["resolution_status"] == "confirmed", "시드 물건은 기기 정의로 바꾸지 않는다"
+
+
+def test_new_asset_rejected_when_file_invalid_changes_nothing(db, home, tmp_path):
+    import shutil
+    d = tmp_path / "bad"
+    shutil.copytree(PACKAGES / "new_asset", d)
+    na = json.loads((d / "assets.new.json").read_text(encoding="utf-8"))
+    na[0]["data_mode"] = "private_real"
+    raw = (json.dumps(na, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    (d / "assets.new.json").write_bytes(raw)
+    m = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
+    for f in m["files"]:
+        if f["path"] == "assets.new.json":
+            f["bytes"], f["sha256"] = len(raw), sha(raw)
+    (d / "manifest.json").write_text(json.dumps(m, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    r = import_package(db, d, home)
+    assert r.outcome == "rejected" and "new_asset_data_mode" in codes(r) and db.status()["counts"]["assets"] == 5 and db.status()["counts"]["records"] == 0

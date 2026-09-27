@@ -4,4 +4,4 @@ APP_VERSION은 이 CLI의 버전이다. package_schema·db_schema 등 다른 역
 """
 
 APP_VERSION = "0.1.0"
-SUPPORTED_PACKAGE_SCHEMA_VERSIONS = frozenset({"1.0.0"})
+SUPPORTED_PACKAGE_SCHEMA_VERSIONS = frozenset({"1.0.0", "1.1.0"})  # 1.1.0: 선택 파일 assets.new.json (J5-028)

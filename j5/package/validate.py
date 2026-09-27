@@ -18,6 +18,7 @@ from j5.schemas_loader import schema_errors
 
 MANIFEST = "manifest.json"
 OBSERVATIONS = "observations.jsonl"
+NEW_ASSETS = "assets.new.json"   # J5-028 (ADR-21): 기기가 만든 임시 매입 단위 (선택 파일)
 EXT_MIME = {"jpg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
 
 
@@ -129,6 +130,31 @@ def _inspect(src, report: Report, seed, study_id, limits: Limits) -> None:
             report.add("reject", "photo_magic_mismatch", name, "JPEG/PNG/WebP 형식이 아님 (HEIC 등 미지원 형식은 변환 후 다시 내보내야 함)")
         elif sniffed != ext:
             report.add("reject", "photo_magic_mismatch", name, f"내용은 {sniffed}인데 확장자는 {ext}")
+    # ---- 2b. 기기가 만든 임시 매입 단위 (선택 파일, J5-028) ----
+    new_assets: list[dict] = []
+    if NEW_ASSETS in names:
+        na_raw, na_digest = src.read(NEW_ASSETS, limits.manifest, code="new_assets_too_large")
+        actual[NEW_ASSETS] = (len(na_raw), na_digest)
+        report.file_digests[NEW_ASSETS] = na_digest
+        try:
+            na = json.loads(na_raw.decode("utf-8"), object_pairs_hook=_no_dup_pairs)
+        except (UnicodeDecodeError, ValueError) as e:
+            report.add("reject", "new_assets_not_json", NEW_ASSETS, f"JSON 해석 실패: {e}")
+            na = None
+        if na is not None:
+            errs = schema_errors("assets_new.schema.json", na)
+            for m in errs:
+                report.add("reject", "new_assets_schema", NEW_ASSETS, m)
+            if not errs:
+                seen_ids: set[str] = set()
+                for i, a in enumerate(na):
+                    if a["asset_id"] in seen_ids:
+                        report.add("reject", "new_asset_duplicate", f"{NEW_ASSETS}[{i}]", f"asset_id {a['asset_id']} 가 두 번 있음")
+                    seen_ids.add(a["asset_id"])
+                    if report.data_mode is not None and a["data_mode"] != report.data_mode:
+                        report.add("reject", "new_asset_data_mode", f"{NEW_ASSETS}[{i}]", f"data_mode {a['data_mode']} 가 패키지 {report.data_mode} 와 다름")
+                new_assets = list(na)
+    report.new_assets = new_assets
     obs_raw: bytes | None = None
     if OBSERVATIONS in names:
         obs_raw, digest = src.read(OBSERVATIONS, limits.uncompressed)
@@ -223,15 +249,22 @@ def _inspect(src, report: Report, seed, study_id, limits: Limits) -> None:
 
     # ---- 4. 시드 ----
     ids_in_pkg = set(id_hash)
+    new_ids = {a["asset_id"] for a in new_assets}
     if seed is not None:
         seed_ids = {a["asset_id"] for a in seed}
         seed_modes = {a["data_mode"] for a in seed}
         for ev in events:
-            if ev["asset_id"] not in seed_ids:
-                report.add("reject", "asset_not_in_seed", ev["event_id"], f"asset_id {ev['asset_id']} 가 시드에 없음")
+            if ev["asset_id"] not in seed_ids and ev["asset_id"] not in new_ids:
+                report.add("reject", "asset_not_in_seed", ev["event_id"], f"asset_id {ev['asset_id']} 가 시드에 없음 (기기가 만든 물건이면 assets.new.json 에 있어야 함)")
+        for a in new_assets:
+            if a["asset_id"] in seed_ids:
+                report.add("info", "new_asset_already_in_seed", a["asset_id"], "기기가 만든 물건이 이미 정본에 있음 (다시 만들지 않음)")
         if report.data_mode and seed_modes and report.data_mode not in seed_modes:
             report.add("warn", "data_mode_differs_from_seed", MANIFEST,
                        f"패키지 data_mode {report.data_mode}, 시드 {sorted(seed_modes)}")
+    for a in new_assets:
+        if a["asset_id"] not in {ev["asset_id"] for ev in events}:
+            report.add("warn", "new_asset_unreferenced", a["asset_id"], "어떤 이벤트도 참조하지 않는 새 물건")
     for ev in events:
         c = ev["corrects_event_id"]
         if c and c != ev["event_id"]:
@@ -247,4 +280,5 @@ def _inspect(src, report: Report, seed, study_id, limits: Limits) -> None:
         "conflicts": n_conflict,
         "photos": len(photo_names),
         "photos_referenced": len(referenced & set(photo_names)),
+        "new_assets": len(new_assets),
     }
