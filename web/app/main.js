@@ -7,7 +7,7 @@ import { uuid4, isUuid } from "./uuid.js";
 import { isoWithOffset, fromDatetimeLocal, toDatetimeLocal, localDate } from "./time.js";
 import { buildEvent, validateEvent, lineBytes, PHOTO_TAGS, PHOTO_TAG_LABEL, CHANGE_STATUS_LABEL, PHOTO_LIMIT, VIEWPOINT_MAX } from "./event.js";
 import { validateSeed } from "./seed.js";
-import { validateParcels, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, attrLines, attrsSummary, ZONE_LABELS, findParcels, parcelAt } from "./parcels.js";
+import { validateParcels, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, attrLines, attrsSummary, ZONE_LABELS, findParcels, parcelAt, interiorPoint } from "./parcels.js";
 import { selectRecords, planBatches, buildPackage, hasRemainingBatches, studyIdError } from "./export.js";
 import { migrationReadiness, migrationText, persistenceText } from "./migrate.js";
 import { createNavigator, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, MODE_LABEL, MODE_SHORT } from "./ui.js";
@@ -18,7 +18,7 @@ import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
 import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.6";
+export const APP_VERSION = "0.2.7";
 const $ = (id) => document.getElementById(id);
 const state = { store: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, zoneColors: false, seedLoadedAt: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
                 nav: null, returnFocus: null, mapSelected: null };
@@ -275,6 +275,10 @@ async function renderAssets() {
       meta.append(el("span", { text: "이 기기에 기록 없음" }));
     }
     meta.append(el("button", { class: "quiet", text: "이력", onclick: () => openAssetHistory(a) }));
+    if (a.origin === "device") {
+      meta.append(el("span", { class: "badge src-device", text: "이 기기에서 만듦 · PC 반영 전" }));
+      if (!s.count) meta.append(el("button", { class: "quiet", text: "삭제", onclick: () => deleteDeviceAsset(a) }));
+    }
     const li = el("li", { class: state.mapSelected === a.asset_id ? "selected" : "" },
       el("span", { class: "title", text: a.label }),
       el("button", { text: "기록하기", onclick: () => startObservation(a) }),
@@ -661,9 +665,39 @@ function showParcel(feature) {
     el("button", { text: "기록하기", onclick: () => startObservation(a) }),
   )));
   if (!linksValid && (p.asset_ids ?? []).length) $("parcel-assets").append(el("li", { class: "warn", text: `정본 연결 ${p.asset_ids.length}건은 시드가 바뀐 뒤 확인되지 않아 표시하지 않는다. 같은 파생본의 시드와 필지 파일을 함께 다시 불러온다.` }));
-  if (!inside.length) $("parcel-assets").append(el("li", { class: "empty", text: "이 필지에 연결되거나 위치점이 들어 있는 물건이 없다. PC 에서 물건 목록·연결을 넣은 뒤 다시 불러온다." }));
+  if (!inside.length) $("parcel-assets").append(el("li", { class: "empty", text: "이 필지에 연결되거나 위치점이 들어 있는 물건이 없다. 아래 버튼으로 이 필지를 물건으로 만들어 바로 기록할 수 있다 (PC 반영 때 임시 매입 단위로 승계)." }));
+  $("parcel-new-asset").hidden = inside.length > 0;
+  $("parcel-new-asset").onclick = () => createAssetFromParcel(feature);
   $("parcel-history").onclick = () => openParcelHistory(feature, inside.map((x) => x.asset));
   $("parcel-panel").hidden = false;
+}
+
+/** 필지에서 물건 만들기 (J5-028, ADR-21): 이 기기에만 있는 임시 매입 단위. 위치점은 필지 안의 점, 이름은 동·지번. 내보내기에 assets.new.json 으로 실려 PC 가 pending 물건으로 만든다. */
+async function createAssetFromParcel(feature) {
+  const pt = interiorPoint(feature);
+  if (!pt) return text($("parcel-search-note"), "이 필지 안의 점을 정하지 못해 물건을 만들 수 없습니다.", "warn");
+  const dataMode = (await state.store.getMeta("data_mode")) ?? "synthetic";
+  const asset = { asset_id: uuid4(), label: parcelTitle(feature.properties), location_point: pt, data_mode: dataMode, created_at: isoWithOffset(), notes: null, pnu: feature.id, origin: "device" };
+  try {
+    await state.store.addDeviceAsset(asset);
+  } catch (e) {
+    return text($("parcel-search-note"), "물건을 저장하지 못했습니다: " + (e?.message || e), "bad");
+  }
+  await renderAssets();
+  closeParcelPanel();
+  text($("parcel-search-note"), `${asset.label} 물건을 이 기기에 만들었습니다 (PC 반영 전). 기록을 내보내면 PC 가 임시 매입 단위로 승계합니다.`, "ok");
+  startObservation(asset);
+}
+
+async function deleteDeviceAsset(asset) {
+  try {
+    await state.store.deleteDeviceAsset(asset.asset_id);
+    text($("seed-note"), `${asset.label} (이 기기에서 만든 물건) 을 지웠습니다.`, "muted");
+  } catch (e) {
+    text($("seed-note"), "지우지 못했습니다: " + (e?.message || e), "warn");
+  }
+  await renderAssets();
+  await renderRecords();
 }
 
 function closeParcelPanel() {
@@ -1004,13 +1038,14 @@ async function exportPrepare() {
     const pkg = await buildPackage(batch, plan.recordsById, {
       loadPhoto: async (sha) => { const p = await state.store.getPhoto(sha); return p ? { blob: p.blob, ext: p.ext } : undefined; },
       studyId: plan.studyId, dataMode: plan.dataMode, k: k + 1, n: plan.batches.length,
+      newAssets: await state.store.listDeviceAssets(),   // 이 묶음의 기록이 가리키는 기기 생성 물건만 assets.new.json 으로 (J5-028)
     });
     plan.package = pkg; plan.attempted = false;
     state.export = plan;
     $("export-save").textContent = `파일 저장 ${k + 1}/${plan.batches.length}`;
     $("export-save").disabled = false;
     $("export-confirm").disabled = true;
-    exportNote(`묶음 ${k + 1}/${plan.batches.length} 준비됨: ${pkg.filename} (${fmtBytes(pkg.bytes)}, 관측 ${pkg.eventIds.length}건, 사진 ${pkg.photoCount}장). 다음은 "파일 저장" 입니다.`, "ok");
+    exportNote(`묶음 ${k + 1}/${plan.batches.length} 준비됨: ${pkg.filename} (${fmtBytes(pkg.bytes)}, 관측 ${pkg.eventIds.length}건, 사진 ${pkg.photoCount}장${pkg.newAssetCount ? `, 기기가 만든 물건 ${pkg.newAssetCount}개` : ""}). 다음은 "파일 저장" 입니다.`, "ok");
   } catch (e) {
     exportNote("묶음 준비 실패: " + (e?.message || e), "bad");
   } finally {

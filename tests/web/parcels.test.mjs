@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { validateParcels, labelPoint, pointInFeature, assetsInParcel, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, polygonsOf, MAX_PARCELS, zoneCategory, ZONE_LABELS, fmtInt, attrLines, attrsSummary, fmtAttrValue, attrChangeText, parseParcelQuery, findParcels, parcelAt } from "../../web/app/parcels.js";
+import { validateParcels, labelPoint, pointInFeature, assetsInParcel, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, polygonsOf, MAX_PARCELS, zoneCategory, ZONE_LABELS, fmtInt, attrLines, attrsSummary, fmtAttrValue, attrChangeText, parseParcelQuery, findParcels, parcelAt, interiorPoint } from "../../web/app/parcels.js";
 import { worldBbox, parcelPathD, parcelLabelVisible, mercator, fitView, FIT_MAX_SCALE, PARCEL_LOCAL_K } from "../../web/app/map.js";
 
 const bundle = () => JSON.parse(readFileSync(new URL("../fixtures/parcels/synthetic.j5parcels.json", import.meta.url), "utf8"));
@@ -224,4 +224,10 @@ test("parseParcelQuery·findParcels·parcelAt (J5-027)", () => {
   assert.equal(parcelAt(feats, [126.9994, 37.5704]), null, "구멍 안은 밖");
   assert.equal(parcelAt(feats, [127.1, 37.6]), null);
   assert.equal(parcelAt(feats, null), null);
+  // interiorPoint (J5-028): 항상 필지 안의 점. 구멍 필지·두 조각 필지도
+  for (const f of feats) { const p = interiorPoint(f); assert.ok(p && pointInFeature(p, f), f.properties.label); }
+  const cshape = { id: "x", geometry: { type: "Polygon", coordinates: [[[0, 0], [3, 0], [3, 3], [0, 3], [0, 2], [2, 2], [2, 1], [0, 1], [0, 0]]] }, properties: { bbox: [0, 0, 3, 3] } };
+  const cp = interiorPoint(cshape);
+  assert.ok(cp && pointInFeature(cp, cshape), "라벨 위치가 밖이면 격자에서 안쪽 점을 찾는다");
+  assert.equal(interiorPoint({ id: "y", geometry: { type: "Polygon", coordinates: [[[0, 0], [1, 0], [0, 0], [0, 0]]] }, properties: {} }), null);
 });

@@ -1,8 +1,9 @@
 // IndexedDB 저장소. 스토어: meta(설정), assets(시드 물건), events(관측: 객체 + 고정 바이트), photos(sha256 → Blob),
-// parcels(필지 번들 한 벌, v2·J5-013B-1), basemap(배경 도형 번들 한 벌, v3·J5-022), view(PC 조회 파생본의 정본 기록·거래, v4·J5-023). 저장 실패(용량 부족 등)는 예외로 올려 화면이 '저장됨'으로 오표시하지 않게 한다. 자동 삭제는 없다.
+// parcels(필지 번들 한 벌, v2·J5-013B-1), basemap(배경 도형 번들 한 벌, v3·J5-022), view(PC 조회 파생본의 정본 기록·거래, v4·J5-023),
+// device_assets(이 기기가 필지에서 만든 임시 매입 단위, v5·J5-028: 시드 교체에도 남고, 정본이 같은 ID 를 돌려주면(파생본 시드) 기기 사본을 지운다). 저장 실패(용량 부족 등)는 예외로 올려 화면이 '저장됨'으로 오표시하지 않게 한다. 자동 삭제는 없다.
 
 export const DB_NAME = "j5";
-export const DB_VERSION = 4; // v3: basemap, v4: view 스토어 추가 (기존 스토어·기록은 그대로)
+export const DB_VERSION = 5; // v3: basemap, v4: view, v5: device_assets 스토어 추가 (기존 스토어·기록은 그대로)
 const PARCELS_KEY = "active";
 const BASEMAP_KEY = "active";
 const VIEW_KEY = "active";
@@ -37,6 +38,7 @@ export async function openDb() {
     if (!db.objectStoreNames.contains("parcels")) db.createObjectStore("parcels");
     if (!db.objectStoreNames.contains("basemap")) db.createObjectStore("basemap");
     if (!db.objectStoreNames.contains("view")) db.createObjectStore("view");
+    if (!db.objectStoreNames.contains("device_assets")) db.createObjectStore("device_assets", { keyPath: "asset_id" });
   };
   return req(r);
 }
@@ -56,24 +58,48 @@ export class Store {
     await done(tx);
   }
 
-  /** 활성 시드를 통째로 교체한다 (한 트랜잭션). events·photos 는 건드리지 않는다. */
+  /** 활성 시드를 통째로 교체한다 (한 트랜잭션). events·photos 는 건드리지 않는다. 시드에 든 ID 의 기기 생성 물건은 정본이 넘겨받은 것이라 기기 사본을 지운다. */
   async replaceAssets(assets, source) {
-    const tx = this.db.transaction(["assets", "meta"], "readwrite");
+    const tx = this.db.transaction(["assets", "meta", "device_assets"], "readwrite");
     const s = tx.objectStore("assets");
     s.clear();
     for (const a of assets) s.add({ ...a, source });
+    for (const a of assets) tx.objectStore("device_assets").delete(a.asset_id);
     tx.objectStore("meta").put(new Date().toISOString(), "seed_loaded_at");
     tx.objectStore("meta").put(source, "seed_source");
     await done(tx);
   }
 
+  /** 시드 물건 + 이 기기가 만든 물건(시드에 없는 것만). 이름순. */
   async listAssets() {
-    const all = await req(this.db.transaction("assets").objectStore("assets").getAll());
-    return all.sort((a, b) => a.label.localeCompare(b.label, "ko"));
+    const tx = this.db.transaction(["assets", "device_assets"]);
+    const [seed, device] = await Promise.all([req(tx.objectStore("assets").getAll()), req(tx.objectStore("device_assets").getAll())]);
+    const ids = new Set(seed.map((a) => a.asset_id));
+    return [...seed, ...device.filter((a) => !ids.has(a.asset_id))].sort((a, b) => a.label.localeCompare(b.label, "ko"));
   }
 
   async getAsset(id) {
-    return req(this.db.transaction("assets").objectStore("assets").get(id));
+    return (await req(this.db.transaction("assets").objectStore("assets").get(id))) ?? req(this.db.transaction("device_assets").objectStore("device_assets").get(id));
+  }
+
+  // ---- 기기가 만든 임시 매입 단위 (J5-028, ADR-21) ----
+  async addDeviceAsset(a) {
+    const tx = this.db.transaction("device_assets", "readwrite");
+    tx.objectStore("device_assets").add(a);
+    await done(tx);
+  }
+
+  async listDeviceAssets() {
+    return req(this.db.transaction("device_assets").objectStore("device_assets").getAll());
+  }
+
+  /** 기록이 하나도 없는 기기 생성 물건만 지운다 (기록이 있으면 거절: 기록의 대상이 사라지지 않게). */
+  async deleteDeviceAsset(id) {
+    const tx = this.db.transaction(["device_assets", "events"], "readwrite");
+    const n = await req(tx.objectStore("events").index("by_asset").count(id));
+    if (n > 0) { tx.abort(); throw new Error(`기록 ${n}건이 이 물건을 가리킨다. 기록이 있는 물건은 지우지 않는다`); }
+    tx.objectStore("device_assets").delete(id);
+    await done(tx);
   }
 
   /** 필지 번들을 통째로 교체한다 (한 벌만 둔다). events·photos·assets 는 건드리지 않는다.
@@ -125,13 +151,14 @@ export class Store {
    * events·photos 는 건드리지 않는다.
    */
   async replaceProjection({ settings = null, assets, parcels = null, view, source }) {
-    const tx = this.db.transaction(["meta", "assets", "parcels", "view"], "readwrite");
+    const tx = this.db.transaction(["meta", "assets", "parcels", "view", "device_assets"], "readwrite");
     const now = new Date().toISOString();
     const meta = tx.objectStore("meta");
     if (settings) for (const [k, v] of Object.entries(settings)) meta.put(v, k);
     const as = tx.objectStore("assets");
     as.clear();
     for (const a of assets) as.add({ ...a, source });
+    for (const a of assets) tx.objectStore("device_assets").delete(a.asset_id);   // 정본이 넘겨받은 기기 생성 물건은 사본을 지운다
     meta.put(now, "seed_loaded_at");
     meta.put(source, "seed_source");
     const ps = tx.objectStore("parcels");

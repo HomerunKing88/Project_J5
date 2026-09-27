@@ -32,14 +32,14 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     // 지도 모듈 로드 실패: map.js 요청을 막고 첫 접속 (서비스 워커가 아직 없을 때). 목록·설정은 그대로 동작하고 지도 절만 안내를 낸다.
     await cdp.send("Network.setBlockedURLs", { urls: ["*/app/map.js"] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.6')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.7')");
     await cdp.waitFor("document.getElementById('map-note').textContent.includes('지도 표시 불가')");
     assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li').length"), 1, "지도 모듈 없이도 목록 절이 그려진다");
     const blockedLogs = cdp.errors.splice(0);
     assert.ok(blockedLogs.every((e) => e.includes("ERR_BLOCKED_BY_CLIENT") || e.includes("Failed to load resource") || e.includes("map.js")), blockedLogs.join("; "));
     await cdp.send("Network.setBlockedURLs", { urls: [] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.6')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.7')");
     await cdp.waitFor("document.getElementById('map-note').textContent === ''");
     // 설정
     await cdp.eval("document.getElementById('study-id').value = 'e2e-study'; document.getElementById('save-settings').click(); 'ok'");
@@ -204,6 +204,28 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.waitFor("document.getElementById('parcel-title').textContent === '가상동 4-2'");
     await search("산1-2");
     await cdp.waitFor("document.getElementById('parcel-title').textContent === '가상동 산1-2'");
+    // 필지에서 물건 만들기 (J5-028): 물건이 없는 필지 → 버튼 → 이 기기 물건 생성·관측 화면. 취소해도 물건은 남고, 시드를 다시 넣어도 남으며, 기록이 없으면 지울 수 있다
+    assert.equal(await cdp.eval("document.getElementById('parcel-new-asset').hidden"), false, "물건이 없는 필지에는 만들기 버튼");
+    await cdp.eval("document.getElementById('parcel-new-asset').click(); 'ok'");
+    await cdp.waitFor("!document.getElementById('sec-observe').hidden && document.getElementById('target-label').textContent === '가상동 산1-2'");
+    assert.match(await cdp.eval("document.getElementById('parcel-search-note').textContent"), /가상동 산1-2 물건을 이 기기에 만들었습니다 \(PC 반영 전\)/);
+    await cdp.eval("document.getElementById('cancel-observation').click(); 'ok'");
+    await cdp.waitFor("document.querySelectorAll('#asset-list li > button').length === 6");
+    const deviceLi = "Array.from(document.querySelectorAll('#asset-list li')).find(li => li.querySelector('.title').textContent === '가상동 산1-2')";
+    assert.match(await cdp.eval(`${deviceLi}.textContent`), /이 기기에서 만듦 · PC 반영 전/);
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.pt').length"), 5, "위치점이 필지 안에 생긴다");
+    await search("산1-2");
+    await cdp.waitFor("document.getElementById('parcel-title').textContent === '가상동 산1-2'");
+    assert.equal(await cdp.eval("document.getElementById('parcel-new-asset').hidden"), true, "물건이 생기면 버튼은 숨는다");
+    assert.match(await cdp.eval("document.getElementById('parcel-assets').textContent"), /가상동 산1-2.*위치점 포함/);
+    await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
+    await cdp.eval("document.getElementById('load-synthetic').click(); 'ok'");
+    await cdp.waitFor("document.getElementById('seed-note').textContent.includes('물건 5개를 불러왔습니다')");
+    assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li > button').length"), 6, "시드를 다시 넣어도 기기 물건은 남는다");
+    await cdp.eval(`${deviceLi}.querySelector('.meta button:last-child').click(); 'ok'`);
+    await cdp.waitFor("document.querySelectorAll('#asset-list li > button').length === 5");
+    await cdp.waitFor("document.getElementById('seed-note').textContent.includes('을 지웠습니다')");
+    await cdp.eval("document.getElementById('nav-map').click(); 'ok'");
     await search("999-9");
     await cdp.waitFor("document.getElementById('parcel-search-note').textContent.includes('맞는 필지가 불러온 6개 안에 없습니다')");
     await search("abc");

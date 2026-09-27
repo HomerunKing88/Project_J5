@@ -303,3 +303,18 @@ export function parcelAt(features, lonlat) {
   for (const f of features) if (pointInFeature(lonlat, f)) return f;
   return null;
 }
+
+/** 필지 안의 점 하나 (기기가 만든 물건의 위치점, J5-028). 라벨 위치가 안이면 그것, 아니면 bbox 격자에서 처음 찾은 안쪽 점, 없으면 null. */
+export function interiorPoint(feature) {
+  const lp = labelPoint(feature);
+  if (lp && pointInFeature(lp, feature)) return [Number(lp[0].toFixed(7)), Number(lp[1].toFixed(7))];
+  const b = feature.properties?.bbox;
+  if (!isBbox(b)) return null;
+  for (const n of [5, 11, 23]) {
+    for (let i = 1; i < n; i++) for (let j = 1; j < n; j++) {
+      const p = [b[0] + ((b[2] - b[0]) * i) / n, b[1] + ((b[3] - b[1]) * j) / n];
+      if (pointInFeature(p, feature)) return [Number(p[0].toFixed(7)), Number(p[1].toFixed(7))];
+    }
+  }
+  return null;
+}

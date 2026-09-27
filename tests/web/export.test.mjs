@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { selectRecords, planBatches, buildPackage, exportFilename, sanitizeStudyId, buildManifest, studyIdError, hasRemainingBatches, STUDY_ID_MAX } from "../../web/app/export.js";
+import { selectRecords, planBatches, buildPackage, exportFilename, sanitizeStudyId, buildManifest, studyIdError, hasRemainingBatches, STUDY_ID_MAX, NEW_ASSETS_NAME } from "../../web/app/export.js";
 import { buildEvent, lineBytes } from "../../web/app/event.js";
 import { uuid4 } from "../../web/app/uuid.js";
 import { LIMITS } from "../../web/app/limits.js";
@@ -130,4 +130,38 @@ test("파일명·manifest", () => {
   const m = buildManifest({ studyId: "s", dataMode: "synthetic", packageId: "p", createdAt: "c", files: [] });
   assert.deepEqual(Object.keys(m), ["format", "schema_version", "study_id", "package_id", "created_at", "data_mode", "files"]);
   assert.equal(exportFilename({ studyId: "s", createdAt: new Date(2026, 0, 2, 3, 4, 5), k: 2, n: 3, packageId: "abcdef12-0000" }), "s-20260102-030405-2of3-abcdef12.j5field.zip");
+});
+
+test("buildPackage: 기기가 만든 물건은 그 묶음의 기록이 가리킬 때만 assets.new.json 으로 싣고 j5 inspect 가 pending 물건으로 받아들인다 (J5-028)", async () => {
+  const deviceId = "8e7d6c5b-4a39-4281-9f0e-1d2c3b4a5968";
+  const device = { asset_id: deviceId, label: "가상동 4-2", location_point: [126.9996, 37.5705], data_mode: "synthetic", created_at: "2026-09-22T10:20:00+09:00", notes: null, pnu: "9999900100100040002", origin: "device", source: "device" };
+  const other = { ...device, asset_id: uuid4(), label: "다른 필지" };
+  const ev = buildEvent({ eventId: uuid4(), assetId: deviceId, observedAt: "2026-09-22", precision: "date", deviceCreatedAt: "2026-09-22T10:21:00+09:00", changeStatus: "no_change", note: "현장에서 만든 물건의 기록", attachments: [] });
+  const r = { event_id: ev.event_id, asset_id: deviceId, event: ev, line: lineBytes(ev), study_id: "j5-synthetic-study", data_mode: "synthetic", status: "saved", exported_in: [], saved_at: "2026-09-22T10:21:00.000Z" };
+  const seedRec = makeRecord(0, []);
+  const byId = new Map([[r.event_id, r], [seedRec.event_id, seedRec]]);
+  const { batches, errors } = planBatches([r, seedRec], new Map());
+  assert.deepEqual(errors, []);
+  const pkg = await buildPackage(batches[0], byId, { loadPhoto: () => undefined, studyId: "j5-synthetic-study", dataMode: "synthetic", now: new Date(2026, 8, 22, 10, 30, 0), newAssets: [device, other] });
+  assert.equal(pkg.newAssetCount, 1, "기록이 가리키지 않는 기기 물건은 싣지 않는다");
+  assert.deepEqual(pkg.files.map((f) => f.path), ["observations.jsonl", NEW_ASSETS_NAME]);
+  const tmp = mkdtempSync(join(tmpdir(), "j5-exp-na-"));
+  const p = join(tmp, pkg.filename);
+  writeFileSync(p, new Uint8Array(await pkg.blob.arrayBuffer()));
+  const py = spawnSync("python3", ["-m", "j5", "inspect", p, "--seed", join(ROOT, "tests/fixtures/assets.seed.synthetic.json"), "--study-id", "j5-synthetic-study", "--json"], { cwd: ROOT, encoding: "utf8" });
+  assert.equal(py.status, 0, py.stdout + py.stderr);
+  const rep = JSON.parse(py.stdout);
+  assert.equal(rep.verdict, "ok", py.stdout);
+  assert.equal(rep.counts.new_assets, 1);
+  assert.equal(rep.counts.events, 2);
+  assert.equal(rep.schema_version, "1.1.0");
+  // 기기 물건이 없는 묶음은 1.0.0 그대로, 파일도 없다
+  const plain = await buildPackage(batches[0], new Map([[seedRec.event_id, seedRec]]), { loadPhoto: () => undefined, studyId: "j5-synthetic-study", dataMode: "synthetic", newAssets: [device] }).catch((e) => e);
+  assert.ok(plain instanceof Error, "묶음의 기록이 없으면 오류");
+  const { batches: b2 } = planBatches([seedRec], new Map());
+  const pkg2 = await buildPackage(b2[0], new Map([[seedRec.event_id, seedRec]]), { loadPhoto: () => undefined, studyId: "j5-synthetic-study", dataMode: "synthetic", newAssets: [device] });
+  assert.equal(pkg2.newAssetCount, 0);
+  assert.deepEqual(pkg2.files.map((f) => f.path), ["observations.jsonl"]);
+  // 자료 종류가 다른 기기 물건은 거절
+  await assert.rejects(buildPackage(batches[0], byId, { loadPhoto: () => undefined, studyId: "s", dataMode: "private_real", newAssets: [device] }), /자료 종류/);
 });
