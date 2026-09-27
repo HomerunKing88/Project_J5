@@ -2,10 +2,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { validateParcels, labelPoint, pointInFeature, assetsInParcel, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, polygonsOf, MAX_PARCELS } from "../../web/app/parcels.js";
+import { validateParcels, labelPoint, pointInFeature, assetsInParcel, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, polygonsOf, MAX_PARCELS, zoneCategory, ZONE_LABELS, fmtInt, attrLines, attrsSummary } from "../../web/app/parcels.js";
 import { worldBbox, parcelPathD, parcelLabelVisible, mercator, fitView, FIT_MAX_SCALE, PARCEL_LOCAL_K } from "../../web/app/map.js";
 
 const bundle = () => JSON.parse(readFileSync(new URL("../fixtures/parcels/synthetic.j5parcels.json", import.meta.url), "utf8"));
+const vwBundle = () => JSON.parse(readFileSync(new URL("../fixtures/parcels/synthetic_vworld.j5parcels.json", import.meta.url), "utf8"));
 const seed = () => JSON.parse(readFileSync(new URL("../fixtures/assets.seed.synthetic.json", import.meta.url), "utf8"));
 const byLabel = (b) => Object.fromEntries(b.features.map((f) => [f.properties.label, f]));
 
@@ -111,4 +112,62 @@ test("map: worldBbox·parcelPathD·parcelLabelVisible", () => {
   assert.equal(parcelLabelVisible(wb, "1", { ...view, tx: view.tx + 10000 }, w, h), false, "화면 밖");
   assert.equal(PARCEL_LOCAL_K, 2 ** 28);
   assert.ok(mercator([127, 37.57]).x > 0.85);
+});
+
+// ---- 필지 속성 (J5-025, ADR-19)
+test("validateParcels: 속성 번들(VWorld 가상 묶음) 통과, attrs·attrs_sources 형식 오류 감지, 개인 필드 없음", () => {
+  const b = vwBundle();
+  assert.deepEqual(validateParcels(b), []);
+  assert.equal(b.features.filter((f) => f.properties.attrs).length, 6);
+  assert.deepEqual(b.attrs_sources.map((a) => a.kind), ["land_feature", "land_plan", "land_ownership"]);
+  const text = JSON.stringify(b);
+  assert.ok(!text.includes("agrde") && !text.includes("resdnc"), "연령대·거주 구분은 번들에 없다");
+  const badSrc = vwBundle(); badSrc.attrs_sources = [{ kind: 1 }];
+  assert.ok(validateParcels(badSrc).some((e) => e.includes("attrs_sources")));
+  const extra = vwBundle(); extra.features[0].properties.attrs.owner_name = "x";
+  assert.ok(validateParcels(extra).some((e) => e.includes("attrs.owner_name")), "소유자 이름 같은 허용되지 않은 필드는 거절");
+  const arr = vwBundle(); arr.features[0].properties.attrs = [];
+  assert.ok(validateParcels(arr).some((e) => e.includes("attrs 가 객체가 아님")));
+  const zones = vwBundle(); zones.features[0].properties.attrs.plan_zones = [{ name: "x" }];
+  assert.ok(validateParcels(zones).some((e) => e.includes("plan_zones")));
+  const neg = vwBundle(); neg.features[0].properties.attrs.official_land_price_krw_m2 = -1;
+  assert.ok(validateParcels(neg).some((e) => e.includes("official_land_price_krw_m2")));
+});
+
+test("zoneCategory·fmtInt·attrLines·attrsSummary", () => {
+  assert.deepEqual(["제1종전용주거지역", "제2종일반주거지역", "준주거지역", "일반상업지역", "준공업지역", "자연녹지지역", "보전관리지역", "농림지역", "개발제한구역", null, "", 3].map(zoneCategory),
+    ["res1", "res2", "res3", "com", "ind", "green", "rural", "rural", "other", null, null, null]);
+  assert.ok(Object.keys(ZONE_LABELS).length === 8);
+  assert.deepEqual([fmtInt(12340000), fmtInt(999), fmtInt(0), fmtInt(null)], ["12,340,000", "999", "0", null]);
+  const by = byLabel(vwBundle());
+  const l1 = Object.fromEntries(attrLines(by["1"].properties.attrs));
+  assert.equal(l1["지목"], "대");
+  assert.equal(l1["공부면적"], "1770.5 ㎡ (토지대장)");
+  assert.equal(l1["공시지가"], "12,340,000원/㎡ (2026년 1월 기준)");
+  assert.equal(l1["용도지역"], "일반상업지역");
+  assert.equal(l1["규제·지역지구"], "도시지역, 일반상업지역, 지구단위계획구역(가상)");
+  assert.equal(l1["소유구분"], "개인 · 변동 2017-01-01");
+  assert.equal(l1["속성 기준일"], "미확인", "변환 번들에는 as_of 가 없고 fallback 도 안 주면 미확인");
+  assert.equal(Object.fromEntries(attrLines(by["1"].properties.attrs, "2026-09-05"))["속성 기준일"], "2026-09-05 (토지 자료 기준, 도형 기준일과 다를 수 있음)");
+  assert.equal(Object.fromEntries(attrLines({ ...by["1"].properties.attrs, as_of: "2026-08-01" }, "2026-09-05"))["속성 기준일"], "2026-08-01 (토지 자료 기준, 도형 기준일과 다를 수 있음)", "파생본의 as_of 가 우선");
+  const badAsOf = vwBundle(); badAsOf.features[0].properties.attrs.as_of = "2026/08/01";
+  assert.ok(validateParcels(badAsOf).some((e) => e.includes("as_of")));
+  const l2 = Object.fromEntries(attrLines(by["2"].properties.attrs));
+  assert.equal(l2["용도지역"], "제3종일반주거지역 · 준주거지역");
+  assert.match(l2["규제·지역지구"], /ZA0014\(저촉\) … \(이름 일부는 원본 열 길이에 잘림/);
+  assert.equal(l2["소유구분"], "개인 · 공유 3인 · 변동 2011-07-07");
+  const l3 = Object.fromEntries(attrLines(by["3"].properties.attrs));
+  assert.equal(l3["공시지가"], "미확인", "빈 값은 미확인 (0 이 아니다)");
+  assert.equal(l3["소유구분"], "미확인");
+  const l42 = Object.fromEntries(attrLines(by["4-2"].properties.attrs));
+  assert.equal(l42["도로접면"], "미확인");
+  assert.equal(l42["소유구분"], "국유지 · 변동 1995-01-01");
+  assert.deepEqual(attrLines(null), []);
+  assert.deepEqual(attrLines(undefined), []);
+  const sm = attrsSummary(vwBundle());
+  assert.equal(sm.withAttrs, 6);
+  assert.deepEqual([...sm.byZone.entries()].sort(), [["com", 1], ["green", 1], ["ind", 1], ["res2", 2], ["rural", 1]]);
+  assert.equal(sm.sources.length, 3);
+  assert.deepEqual(attrsSummary(bundle()).withAttrs, 0, "기존 번들에는 속성이 없다");
+  assert.deepEqual(attrsSummary(null).withAttrs, 0);
 });

@@ -6,7 +6,7 @@
 // 화면 좌표 = 세계 좌표(0~1) × scale + (tx, ty). 마커·라벨은 픽셀 단위라 확대해도 크기가 변하지 않는다.
 // 필지 경로는 번들 중심 기준 로컬 단위(세계 좌표 × PARCEL_LOCAL_K)로 한 번만 만들고, 이동·확대는 그룹 transform 으로 처리한다.
 
-import { labelPoint as labelPointOf } from "./parcels.js";
+import { labelPoint as labelPointOf, zoneCategory } from "./parcels.js";
 import { partsOf as basePartsOf, lineMidpoint, pickRoadLabels } from "./basemap.js";
 import { tileZoom, tilesFor, tileRect, tileUrl } from "./tiles.js";
 
@@ -154,6 +154,7 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}
   const parcels = new Map(); // pnu → { path, text, wb, lp, feature, visible }
   let parcelOrigin = { x: 0, y: 0 };
   let parcelMode = "";
+  let zoneColors = false;        // 용도지역 색 (J5-025): 필지 속성 use_zone_1 의 분류로 채움색
   const roads = []; // { id, name, mid, text, visible } (도로명 라벨 후보)
   let tiles = null;              // { url, minZoom, maxZoom, attribution } 또는 null (꺼짐)
   const tileNodes = new Map();   // key → image
@@ -236,7 +237,10 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}
   };
 
   const setClass = (m) => m.g.setAttribute("class", `pt ${m.asset.data_mode}${m.asset.asset_id === selectedId ? " sel" : ""}`);
-  const setParcelClass = (pc) => pc.path.setAttribute("class", `parcel ${parcelMode}${pc.feature.id === selectedPnu ? " sel" : ""}`);
+  const setParcelClass = (pc) => {
+    const zone = zoneColors ? zoneCategory(pc.feature.properties.attrs?.use_zone_1) : null;
+    pc.path.setAttribute("class", `parcel ${parcelMode}${zone ? ` zone-${zone}` : ""}${pc.feature.id === selectedPnu ? " sel" : ""}`);
+  };
   const fitPoints = () => {
     const pts = [...markers.values()].map((m) => m.world);
     for (const pc of parcels.values()) pts.push({ x: pc.wb.x0, y: pc.wb.y0 }, { x: pc.wb.x1, y: pc.wb.y1 });
@@ -364,6 +368,16 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}
       selectedPnu = pnu ?? null;
       for (const pc of parcels.values()) setParcelClass(pc);
       render();
+    },
+    /** 용도지역 색 켜기/끄기. 속성이 없는 필지는 그대로. 색이 칠해진 필지 수를 돌려준다. */
+    setZoneColors(on) {
+      zoneColors = !!on;
+      let colored = 0;
+      for (const pc of parcels.values()) {
+        setParcelClass(pc);
+        if (zoneColors && zoneCategory(pc.feature.properties.attrs?.use_zone_1)) colored++;
+      }
+      return { enabled: zoneColors, colored };
     },
     fit() {
       measure();

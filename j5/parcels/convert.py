@@ -27,7 +27,7 @@ COORD_DECIMALS = 7           # 약 1cm
 PNU_RE = re.compile(r"^[0-9]{19}$")
 JIBUN_RE = re.compile(r"^\s*(산)?\s*(\d+)(?:\s*-\s*(\d+))?\s*(\D*?)\s*$")
 PNU_FIELD_CANDIDATES = ("PNU", "pnu", "A1")
-JIBUN_FIELD_CANDIDATES = ("JIBUN", "jibun", "A2")
+JIBUN_FIELD_CANDIDATES = ("JIBUN", "jibun", "lnm_lndcgr_smbol", "A2")  # lnm_lndcgr_smbol: VWorld 지번지목부호 (J5-025)
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
@@ -88,6 +88,9 @@ class ConvertOptions:
     data_mode: str = "real"
     layer: str | None = None
     now: datetime | None = None
+    field_map: dict[str, str] | None = None        # .dbf 열 이름 바꾸기 (VWorld 의 A0… → 원래 이름, J5-025)
+    attrs_by_pnu: dict[str, dict] | None = None    # PNU 별 필지 속성(토지특성·이용계획·소유구분) → properties.attrs
+    attrs_sources: list[dict] | None = None        # 속성 자료 출처 목록 → 번들 attrs_sources
 
 
 # ---------------------------------------------------------------- 도형 유틸
@@ -224,8 +227,8 @@ def resolve_crs(src: ShapeSource, crs_arg: str | None) -> tuple[TmCrs | Geograph
 
 # ---------------------------------------------------------------- inspect
 
-def inspect_source(path: Path, *, crs_arg: str | None = None, encoding: str | None = None, layer: str | None = None, sample: int = 3) -> dict:
-    """필드·레코드 수·도형 종류·원본 bbox·좌표계 판정·WGS84 bbox·표본 레코드. 변환 전에 확인용."""
+def inspect_source(path: Path, *, crs_arg: str | None = None, encoding: str | None = None, layer: str | None = None, sample: int = 3, field_map: dict[str, str] | None = None) -> dict:
+    """필드·레코드 수·도형 종류·원본 bbox·좌표계 판정·WGS84 bbox·표본 레코드. 변환 전에 확인용. field_map 은 열 이름 바꾸기(VWorld)."""
     try:
         src = open_source(path, layer=layer)
     except ShapeError as e:
@@ -233,14 +236,15 @@ def inspect_source(path: Path, *, crs_arg: str | None = None, encoding: str | No
     header = read_shp_header(src.shp)
     fields, num_records, _, _ = read_dbf_fields(src.dbf)
     enc = guess_encoding(src, encoding)
+    fm = field_map or {}
     out = {
         "input": src.origin, "name": src.name, "members": src.members, "shp_sha256": src.shp_sha256, "dbf_sha256": src.dbf_sha256,
         "shape_type": header.shape_type, "bbox_source": list(header.bbox), "record_count": num_records,
-        "fields": [{"name": f.name, "type": f.type, "length": f.length, "decimals": f.decimals} for f in fields],
+        "fields": [{"name": fm.get(f.name, f.name), "type": f.type, "length": f.length, "decimals": f.decimals} for f in fields],
         "encoding": enc, "cpg": src.cpg, "prj": (src.prj or "")[:400] or None, "crs": None, "crs_error": None, "bbox_wgs84": None,
-        "pnu_field": None, "jibun_field": None, "samples": [], "sample_errors": [],
+        "pnu_field": None, "jibun_field": None, "samples": [], "sample_errors": [], "field_map_applied": bool(fm),
     }
-    names = [f.name for f in fields]
+    names = [fm.get(f.name, f.name) for f in fields]
     for key, cands in (("pnu_field", PNU_FIELD_CANDIDATES), ("jibun_field", JIBUN_FIELD_CANDIDATES)):
         out[key] = next((c for c in cands if c in names), None)
     try:
@@ -255,7 +259,7 @@ def inspect_source(path: Path, *, crs_arg: str | None = None, encoding: str | No
     try:
         for i, row in enumerate(iter_dbf_records(src.dbf, enc)):
             if row is not None:
-                out["samples"].append(row)
+                out["samples"].append({fm.get(k, k): v for k, v in row.items()})
             if len(out["samples"]) >= sample or i >= 50:
                 break
     except ShapeError as e:
@@ -279,6 +283,8 @@ def inspect_text(r: dict) -> str:
         lines.append("표본: " + json.dumps(s, ensure_ascii=False))
     for e in r["sample_errors"]:
         lines.append(f"표본 읽기 실패: {e}")
+    if r.get("field_map_applied"):
+        lines.append("열 이름: 변경컬럼정보.csv 로 원래 이름을 적용했다 (VWorld 묶음)")
     lines.append("이 출력은 확인용이다. 변환은 `j5 parcels convert` 로 한다.")
     return "\n".join(lines) + "\n"
 
@@ -312,7 +318,8 @@ def convert(path: Path, opts: ConvertOptions) -> dict:
     try:
         src = open_source(path, layer=opts.layer)
         fields, num_records, _, _ = read_dbf_fields(src.dbf)
-        names = [f.name for f in fields]
+        fm = opts.field_map or {}
+        names = [fm.get(f.name, f.name) for f in fields]
         pnu_field = _pick_field(names, opts.pnu_field, PNU_FIELD_CANDIDATES, "PNU")
         jibun_field = _pick_field(names, opts.jibun_field, JIBUN_FIELD_CANDIDATES, "JIBUN") if (opts.jibun_field or any(c in names for c in JIBUN_FIELD_CANDIDATES)) else None
         crs, how = resolve_crs(src, opts.crs_arg)
@@ -326,7 +333,9 @@ def convert(path: Path, opts: ConvertOptions) -> dict:
         if shape_count != num_records:
             raise ConvertError("count_mismatch", f".shp 레코드 {shape_count}개와 .dbf 레코드 {num_records}개가 다르다 (짝이 맞지 않는 파일)")
         shapes = iter_shapes(src.shp)
-        rows = iter_dbf_records(src.dbf, enc)
+        rows = ({fm.get(k, k): v for k, v in r.items()} if r is not None else None for r in iter_dbf_records(src.dbf, enc))
+        attrs_by_pnu = opts.attrs_by_pnu or {}
+        stats["attrs_attached"] = 0
         for (rec_no, rings), row in zip(shapes, rows):
             stats["records"] += 1
             if row is None:
@@ -360,6 +369,9 @@ def convert(path: Path, opts: ConvertOptions) -> dict:
                 props = parcel_props(pnu, row.get(jibun_field) if jibun_field else None, opts.emd_names)
                 if props["jibun_mismatch"]:
                     stats["jibun_mismatch"] += 1
+                if pnu in attrs_by_pnu:
+                    props["attrs"] = attrs_by_pnu[pnu]
+                    stats["attrs_attached"] += 1
                 by_pnu[pnu] = {"polys": polys, "area": area, "props": props}
                 order.append(pnu)
             if len(by_pnu) > opts.max_features:
@@ -404,6 +416,11 @@ def convert(path: Path, opts: ConvertOptions) -> dict:
         "clip": opts.clip.to_dict(), "count": len(features), "bbox": all_bbox, "warnings": warnings, "features": features,
     }
     bundle["source"]["crs"].pop("geographic", None)
+    if opts.attrs_sources:
+        bundle["attrs_sources"] = opts.attrs_sources
+        if stats.get("attrs_attached", 0) < len(features):
+            warnings.append(f"필지 속성이 없는 필지 {len(features) - stats['attrs_attached']}개 (토지특성·이용계획·소유 자료에 해당 PNU 가 없음)")
+            bundle["warnings"] = warnings
     bundle["stats"] = stats
     errs = schema_errors(SCHEMA, {k: v for k, v in bundle.items() if k != "stats"})
     if errs:
@@ -440,7 +457,8 @@ def convert_text(bundle: dict, written: dict | None) -> str:
     s = bundle.get("stats", {})
     src = bundle["source"]
     c = src["crs"]
-    lines = [f"필지 번들: {bundle['count']}개 (원본 {src['record_count']}개 중 범위 밖 {s.get('outside', 0)}, PNU 오류 {s.get('bad_pnu', 0)}, 빈 도형 {s.get('null_shapes', 0)}, 같은 PNU 합침 {s.get('merged_duplicates', 0)})",
+    lines = [f"필지 번들: {bundle['count']}개 (원본 {src['record_count']}개 중 범위 밖 {s.get('outside', 0)}, PNU 오류 {s.get('bad_pnu', 0)}, 빈 도형 {s.get('null_shapes', 0)}, 같은 PNU 합침 {s.get('merged_duplicates', 0)})"
+             + (f" · 필지 속성 {s.get('attrs_attached', 0)}개 ({', '.join(a['name'] for a in bundle.get('attrs_sources', []))})" if bundle.get("attrs_sources") else ""),
              f"자료: {src['name']} · {src['file']} · 도형 기준일 {src['geometry_version']} · 이용허락 {src['license'] or '미확인(null)'}",
              f"좌표계: EPSG:{c['epsg']} {c['name']} ({c['ellipsoid']}, 데이텀 변환 {c['datum_shift'] or '없음'}) · 인코딩 {src['encoding']}",
              f"범위: {bundle['clip']['bbox']}" + (f" (중심 {bundle['clip']['center']}, 반경 {bundle['clip']['radius_m']} m)" if bundle['clip']['center'] else ""),

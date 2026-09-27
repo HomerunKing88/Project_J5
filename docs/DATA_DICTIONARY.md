@@ -29,6 +29,7 @@
 | subjects | subject_id PK, subject_type, UNIQUE(subject_id, subject_type) | R1b |
 | assets | asset_id, label, tracking_status, resolution_status | R1b |
 | parcels / buildings | PNU·외부 건물 ID와 내부 ID 분리 | R2 |
+| parcel_attributes | 필지마다 한 행. VWorld 토지특성·이용계획·소유 자료의 값 그대로(지목·공부면적·공시지가와 기준 연월·용도지역·이용상황·도로접면·지형·지역지구 목록·소유 구분·공유인수·변동일), 출처 목록·출처 문서·기준일·내용 해시. 이름·주소·연령대·거주 구분 없음 [ADR-19] | R2 (J5-025) |
 | asset_components / building_parcels | 구성 관계·적용 기간. 다대다 허용 | R2 |
 | source_catalog / source_documents | 수집 방식·이용조건·원본 위치·해시·시점 | R1b 최소 |
 | records | record_id, subject_id FK, record_type, schema_version, payload_json, 공통 시간, supersedes_id | R1b |
@@ -144,7 +145,7 @@ N 또는 K가 0이면 해당 비율은 null이다. 미방문·확인 불가·당
 
 ## 6. 기초자료와 관찰 기록
 
-필지는 공부면적·도형면적·CRS·도형 버전·주소 확인 상태를 분리한다. 건축물은 총연면적·용적률 산정용 연면적·건축면적·대장상 대지면적·층수·용도·사용승인일·주차·승강기·대장 종류를 저장한다. 총괄표제부와 개별 동을 동시에 합산하지 않는다.
+필지는 공부면적·도형면적·CRS·도형 버전·주소 확인 상태를 분리한다. 공부면적은 토지 자료(VWorld 토지특성)의 값으로 채우고 도형면적과 혼용하지 않는다. 필지 속성(`parcel_attributes`)은 자료의 표기 그대로이며 확인·판단이 아니다. 결측은 null 이고 '지정되지않음' 은 값 없음이다. 건축물은 총연면적·용적률 산정용 연면적·건축면적·대장상 대지면적·층수·용도·사용승인일·주차·승강기·대장 종류를 저장한다. 총괄표제부와 개별 동을 동시에 합산하지 않는다.
 
 규제는 발행기관·고시번호·문서 단계·발표일·효력일·종료일·공간 범위·용적률 체계·높이·건축선·인센티브 조건·적용 검토 상태를 가진다. 보도자료·심의결과를 현재 효력이 확인된 결정고시로 취급하지 않는다.
 

@@ -3,6 +3,8 @@
 - `load_bundle`: `j5 parcels convert` 가 만든 번들(.j5parcels.json)의 필지를 정본 `parcels` 에 반영한다. PNU 가 외부 ID, parcel_id 가 내부 UUID.
   같은 PNU·같은 내용은 변화 없음, 더 새로운 도형 기준일이면 갱신(도형 버전 교체), 같은 기준일·다른 내용은 거절, 더 오래된 기준일은 거절.
   번들의 data_mode(synthetic/real)는 정본(synthetic/private_real)과 맞아야 한다. 반영한 번들은 source_documents 에 출처로 남긴다.
+  번들에 필지 속성(properties.attrs, J5-025·ADR-19)이 있으면 `parcel_attributes` 에 필지마다 한 행으로 넣는다: 같은 내용은 변화 없음, 기준일(as_of = 번들 도형 기준일)이
+  같거나 새로우면 갱신(속성은 소유 변동처럼 도형과 별개로 바뀐다), 더 오래된 기준일은 거절. 공부면적은 parcels.registered_area_m2 에도 채운다.
 - `suggest_links`: 물건의 위치점을 품는 필지를 찾아 연결 제안 파일(asset_components_input)을 만든다. 제안은 정본에 쓰지 않는다.
 - `apply_links`: 검토한 연결 파일을 정본 `asset_components` 에 반영한다(물건·필지가 정본에 있어야 한다). 같은 (물건, 필지, 시작일)은 갱신.
 정본 변경이 있으면 dataset_version 을 1 올린다. 필지 번들·연결 파일은 정본 시각을 정하지 못한다(recorded_at 은 저장소가 부여).
@@ -33,6 +35,9 @@ class ParcelLoadResult:
     inserted: int = 0
     updated: int = 0
     unchanged: int = 0
+    attrs_inserted: int = 0             # J5-025 필지 속성
+    attrs_updated: int = 0
+    attrs_unchanged: int = 0
     dataset_version: int = 0
     source_document_id: str | None = None
     source_name: str = ""
@@ -40,11 +45,13 @@ class ParcelLoadResult:
     message: str = ""
 
     def to_dict(self) -> dict:
-        return {"outcome": self.outcome, "inserted": self.inserted, "updated": self.updated, "unchanged": self.unchanged, "dataset_version": self.dataset_version,
+        return {"outcome": self.outcome, "inserted": self.inserted, "updated": self.updated, "unchanged": self.unchanged,
+                "attrs_inserted": self.attrs_inserted, "attrs_updated": self.attrs_updated, "attrs_unchanged": self.attrs_unchanged, "dataset_version": self.dataset_version,
                 "source_document_id": self.source_document_id, "source_name": self.source_name, "geometry_version": self.geometry_version, "message": self.message}
 
     def to_text(self) -> str:
-        return (f"필지 반영: {'반영됨' if self.outcome == 'applied' else '변화 없음'} · 신규 {self.inserted}, 갱신 {self.updated}, 변화 없음 {self.unchanged}"
+        attrs = f" · 필지 속성 신규 {self.attrs_inserted}, 갱신 {self.attrs_updated}, 변화 없음 {self.attrs_unchanged}" if (self.attrs_inserted or self.attrs_updated or self.attrs_unchanged) else ""
+        return (f"필지 반영: {'반영됨' if self.outcome == 'applied' else '변화 없음'} · 신규 {self.inserted}, 갱신 {self.updated}, 변화 없음 {self.unchanged}{attrs}"
                 f" · dataset_version {self.dataset_version} · {self.source_name} (도형 기준일 {self.geometry_version})\n{self.message}\n")
 
 
@@ -96,6 +103,76 @@ def _parcel_content(feature: dict, src: dict) -> dict:
             "source_shp_sha256": src["shp_sha256"], "source_license": src["license"]}
 
 
+ATTR_FIELDS = ("jimok_name", "registered_area_m2", "official_land_price_krw_m2", "price_base_year", "price_base_month", "use_zone_1", "use_zone_2", "land_use_situation",
+               "road_side", "terrain_height", "terrain_form", "plan_zones", "plan_zones_truncated", "ownership_kind_code", "ownership_kind", "co_owner_count",
+               "ownership_changed_on", "ownership_change_cause_code", "national_institution_code")
+
+
+# 자료 종류별 필드 묶음 (리뷰 반영, PR #71): 번들에 든 자료(attrs_sources.kind)의 묶음만 반영하고 없는 자료의 값은 기존 행을 유지한다.
+# 자료가 없는 것은 "값이 null 이라는 관측" 이 아니다. 자료가 있는데 그 필지의 행이 없으면 null 이다.
+ATTR_GROUPS = {
+    "land_feature": ("jimok_name", "registered_area_m2", "official_land_price_krw_m2", "price_base_year", "price_base_month", "use_zone_1", "use_zone_2", "land_use_situation",
+                     "road_side", "terrain_height", "terrain_form"),
+    "land_plan": ("plan_zones", "plan_zones_truncated"),
+    "land_ownership": ("ownership_kind_code", "ownership_kind", "co_owner_count", "ownership_changed_on", "ownership_change_cause_code", "national_institution_code"),
+}
+
+
+def _empty_attrs() -> dict:
+    c = {k: None for k in ATTR_FIELDS}
+    c["plan_zones"] = []
+    c["plan_zones_truncated"] = False
+    return c
+
+
+def _attrs_content(attrs: dict, as_of: str, kinds: set[str], base: dict | None = None) -> dict:
+    """번들 attrs → 정본 행 내용. kinds 에 든 자료 묶음의 필드만 번들 값으로 두고 나머지는 base(기존 행) 또는 null. 해시는 이 내용으로 계산한다."""
+    c = dict(base) if base else _empty_attrs()
+    for kind in kinds:
+        for k in ATTR_GROUPS[kind]:
+            c[k] = attrs.get(k)
+    c["plan_zones"] = c["plan_zones"] or []
+    c["plan_zones_truncated"] = bool(c["plan_zones_truncated"])
+    c["as_of"] = as_of
+    return c
+
+
+def _attrs_content_from_row(row) -> dict:
+    c = {k: row[k] for k in ATTR_FIELDS if k not in ("plan_zones", "plan_zones_truncated")}
+    c["plan_zones"] = json.loads(row["plan_zones_json"])
+    c["plan_zones_truncated"] = bool(row["plan_zones_truncated"])
+    return c
+
+
+def _attrs_row(parcel_id: str, content: dict, h: str, sources: list[dict], doc_id: str | None, now: str) -> dict:
+    row = {k: content.get(k) for k in ATTR_FIELDS if k not in ("plan_zones", "plan_zones_truncated")}
+    row.update({"parcel_id": parcel_id, "as_of": content["as_of"], "plan_zones_json": _canon(content["plan_zones"]), "plan_zones_truncated": int(content["plan_zones_truncated"]),
+                "sources_json": _canon(sources), "source_document_id": doc_id, "content_hash": h, "now": now})
+    return row
+
+
+_ATTR_COLS = ("as_of", "jimok_name", "registered_area_m2", "official_land_price_krw_m2", "price_base_year", "price_base_month", "use_zone_1", "use_zone_2", "land_use_situation",
+              "road_side", "terrain_height", "terrain_form", "plan_zones_json", "plan_zones_truncated", "ownership_kind_code", "ownership_kind", "co_owner_count",
+              "ownership_changed_on", "ownership_change_cause_code", "national_institution_code", "sources_json", "source_document_id", "content_hash")
+_ATTR_INSERT = (f"INSERT INTO parcel_attributes (parcel_id, {', '.join(_ATTR_COLS)}, recorded_at, updated_at)"
+                f" VALUES (:parcel_id, {', '.join(':' + c for c in _ATTR_COLS)}, :now, :now)")
+_ATTR_UPDATE = f"UPDATE parcel_attributes SET {', '.join(f'{c} = :{c}' for c in _ATTR_COLS)}, updated_at = :now WHERE parcel_id = :parcel_id"
+
+
+_SOURCE_KEYS = ("source_name", "source_crs", "source_ellipsoid", "source_datum_shift", "source_shp_sha256", "source_license")
+
+
+def _parcel_core(content: dict) -> dict:
+    """출처 표기를 뺀 필지 내용 (도형·지번·면적). 같은 기준일 충돌 판정에 쓴다."""
+    return {k: v for k, v in content.items() if k not in _SOURCE_KEYS}
+
+
+def _parcel_content_from_row(row) -> dict:
+    return {"pnu": row["pnu"] if "pnu" in row.keys() else None, "label": row["label"], "emd_code": row["emd_code"], "emd_name": row["emd_name"], "mountain": bool(row["mountain"]),
+            "bon": row["bon"], "bu": row["bu"], "jimok": row["jimok"], "jibun_raw": row["jibun_raw"], "jibun_mismatch": bool(row["jibun_mismatch"]), "geom_area_m2": row["geom_area_m2"],
+            "geom_area_missing_reason": row["geom_area_missing_reason"], "geometry": json.loads(row["geometry_json"]), "bbox": json.loads(row["bbox_json"]), "geometry_version": row["geometry_version"]}
+
+
 def load_bundle(db: Db, doc: dict) -> ParcelLoadResult:
     errs = schema_errors(BUNDLE_SCHEMA, doc)
     if errs:
@@ -120,7 +197,8 @@ def load_bundle(db: Db, doc: dict) -> ParcelLoadResult:
         for feature in doc["features"]:
             content = _parcel_content(feature, src)
             h = _hash(content)
-            cur = db.conn.execute("SELECT parcel_id, content_hash, geometry_version FROM parcels WHERE pnu = ?", (feature["id"],)).fetchone()
+            cur = db.conn.execute("SELECT parcel_id, pnu, content_hash, geometry_version, label, emd_code, emd_name, mountain, bon, bu, jimok, jibun_raw, jibun_mismatch,"
+                                  " geom_area_m2, geom_area_missing_reason, geometry_json, bbox_json FROM parcels WHERE pnu = ?", (feature["id"],)).fetchone()
             if cur is None:
                 plan.append(("insert", content, h, None))
             elif cur["content_hash"] == h:
@@ -128,10 +206,39 @@ def load_bundle(db: Db, doc: dict) -> ParcelLoadResult:
             elif content["geometry_version"] > cur["geometry_version"]:
                 plan.append(("update", content, h, cur))
             elif content["geometry_version"] == cur["geometry_version"]:
-                raise DbError("parcel_conflict", f"PNU {feature['id']}: 같은 도형 기준일({cur['geometry_version']})인데 내용이 다르다. 새 기준일의 자료로 다시 변환하거나 원본을 확인한다")
+                # 같은 기준일에 필지 내용(도형·지번)은 같고 출처 표기(자료명·파일 해시)만 다르면 변화 없음으로 둔다: 구역을 나눠 내려받은 자료는 경계의 필지가 양쪽에 들어 있다 (J5-025 실측)
+                if _parcel_core(content) == _parcel_core(_parcel_content_from_row(cur)):
+                    plan.append(("unchanged", content, h, cur))
+                else:
+                    raise DbError("parcel_conflict", f"PNU {feature['id']}: 같은 도형 기준일({cur['geometry_version']})인데 내용이 다르다. 새 기준일의 자료로 다시 변환하거나 원본을 확인한다")
             else:
                 raise DbError("parcel_older", f"PNU {feature['id']}: 번들 기준일 {content['geometry_version']} 이 정본의 {cur['geometry_version']} 보다 오래됐다. 반영하지 않는다")
-        changed = any(a in ("insert", "update") for a, *_ in plan)
+        # 1b) 필지 속성(J5-025): 필지마다 신규·변화 없음·갱신·거절. as_of 는 attrs.as_of(파생본) 또는 번들 도형 기준일. 정본 parcel_id 는 필지 반영 뒤에 정해지므로 PNU 로 둔다.
+        #     번들에 든 자료 묶음(attrs_sources.kind)만 반영하고, 없는 자료의 값과 출처는 기존 행을 유지한다 (attrs_sources 가 없는 번들은 세 묶음 모두로 본다)
+        attrs_plan = []
+        attrs_sources = doc.get("attrs_sources") or []
+        kinds = {a["kind"] for a in attrs_sources} or set(ATTR_GROUPS)
+        for feature in doc["features"]:
+            attrs = feature["properties"].get("attrs")
+            if not attrs:
+                continue
+            as_of = attrs.get("as_of") or src["geometry_version"]
+            cur = db.conn.execute("SELECT a.* FROM parcel_attributes a JOIN parcels p ON p.parcel_id = a.parcel_id WHERE p.pnu = ?", (feature["id"],)).fetchone()
+            if cur is None:
+                content = _attrs_content(attrs, as_of, kinds)
+                sources = list(attrs_sources)
+                attrs_plan.append(("insert", feature["id"], content, _hash(content), sources))
+                continue
+            if as_of < cur["as_of"]:
+                raise DbError("parcel_attrs_older", f"PNU {feature['id']}: 속성 기준일 {as_of} 이 정본의 {cur['as_of']} 보다 오래됐다. 반영하지 않는다")
+            content = _attrs_content(attrs, as_of, kinds, base=_attrs_content_from_row(cur))
+            h = _hash(content)
+            sources = [s_ for s_ in json.loads(cur["sources_json"]) if s_["kind"] not in kinds] + list(attrs_sources)
+            if cur["content_hash"] == h:
+                attrs_plan.append(("unchanged", feature["id"], content, h, sources))   # 같은 값이면 출처 파일이 달라도 변화 없음 (필지 규칙과 같다)
+            else:
+                attrs_plan.append(("update", feature["id"], content, h, sources))
+        changed = any(a in ("insert", "update") for a, *_ in plan) or any(a in ("insert", "update") for a, *_ in attrs_plan)
         n_insert = sum(1 for a, *_ in plan if a == "insert")
         total_after = db.conn.execute("SELECT COUNT(*) FROM parcels").fetchone()[0] + n_insert
         if total_after > MAX_FEATURES:
@@ -140,7 +247,9 @@ def load_bundle(db: Db, doc: dict) -> ParcelLoadResult:
         if changed:
             db.add_source_document({"document_id": doc_id, "document_kind": "official_file", "title": f"{src['name']} (도형 기준일 {src['geometry_version']}, {src['file']})",
                                     "terms": src["license"], "location": src["file"], "sha256": src["shp_sha256"], "source_published_at": src["geometry_version"],
-                                    "collected_at": doc["generated_at"], "notes": f"j5parcels {doc['j5parcels']} · EPSG:{src['crs'].get('epsg')} · {doc['count']}필지"})
+                                    "collected_at": doc["generated_at"],
+                                    "notes": f"j5parcels {doc['j5parcels']} · EPSG:{src['crs'].get('epsg')} · {doc['count']}필지"
+                                             + (" · 필지 속성: " + ", ".join(f"{a['name']} ({a['dbf_sha256'][:12]})" for a in attrs_sources) if attrs_sources and attrs_plan else "")})
         for action, content, h, cur in plan:
             if action == "unchanged":
                 r.unchanged += 1
@@ -167,6 +276,21 @@ def load_bundle(db: Db, doc: dict) -> ParcelLoadResult:
                     " source_ellipsoid = :source_ellipsoid, source_datum_shift = :source_datum_shift, source_shp_sha256 = :source_shp_sha256, source_license = :source_license, source_document_id = :source_document_id, content_hash = :content_hash,"
                     " updated_at = :now WHERE pnu = :pnu", row)
                 r.updated += 1
+        # 3) 필지 속성: 필지 행이 모두 있는 상태에서 넣는다. 공부면적이 있으면 parcels.registered_area_m2 도 채운다
+        for action, pnu, content, h, sources in attrs_plan:
+            if action == "unchanged":
+                r.attrs_unchanged += 1
+                continue
+            pid = db.conn.execute("SELECT parcel_id FROM parcels WHERE pnu = ?", (pnu,)).fetchone()["parcel_id"]
+            db.conn.execute(_ATTR_INSERT if action == "insert" else _ATTR_UPDATE, _attrs_row(pid, content, h, sources, doc_id, now))
+            if "land_feature" in kinds:   # 공부면적 미러: 토지특성 자료가 든 번들만 바꾼다. 값이 없으면 null + not_collected 로 되돌린다 (리뷰 반영)
+                area = content["registered_area_m2"]
+                db.conn.execute("UPDATE parcels SET registered_area_m2 = ?, registered_area_missing_reason = ?, updated_at = ? WHERE parcel_id = ?",
+                                (area, None if area is not None else "not_collected", now, pid))
+            if action == "insert":
+                r.attrs_inserted += 1
+            else:
+                r.attrs_updated += 1
         if changed:
             r.source_document_id = doc_id
             r.outcome = "applied"
@@ -294,6 +418,21 @@ def parcels_bundle_from_db(db: Db, *, generated_at: str, source_dataset_version:
     rows = [dict(r) for r in db.conn.execute("SELECT * FROM parcels ORDER BY pnu")]
     if not rows:
         return None
+    attrs_by_id: dict[str, dict] = {}
+    attrs_sources: list[dict] = []
+    if db._has_table("parcel_attributes"):
+        seen = set()
+        for a in db.conn.execute("SELECT * FROM parcel_attributes"):
+            a = dict(a)
+            attrs = _attrs_content_from_row(a)
+            attrs["as_of"] = a["as_of"]   # 속성 기준일: 도형 기준일과 별개로 폰이 따로 보인다 (리뷰 반영)
+            attrs_by_id[a["parcel_id"]] = attrs
+            for s_ in json.loads(a["sources_json"]):
+                key = (s_["kind"], s_["dbf_sha256"])
+                if key not in seen:
+                    seen.add(key)
+                    attrs_sources.append(s_)
+        attrs_sources.sort(key=lambda s_: (s_["kind"], s_["dbf_sha256"]))
     today = generated_at[:10]
     links: dict[str, list[str]] = {}
     for l in active_links(db, today):
@@ -304,6 +443,8 @@ def parcels_bundle_from_db(db: Db, *, generated_at: str, source_dataset_version:
                  "jimok": p["jimok"], "jibun_raw": p["jibun_raw"], "jibun_mismatch": bool(p["jibun_mismatch"]), "area_m2_geom": p["geom_area_m2"],
                  "area_missing_reason": p["geom_area_missing_reason"], "bbox": json.loads(p["bbox_json"]), "geometry_version": p["geometry_version"],
                  "asset_ids": sorted(links.get(p["pnu"], []))}
+        if p["parcel_id"] in attrs_by_id:
+            props["attrs"] = attrs_by_id[p["parcel_id"]]
         features.append({"type": "Feature", "id": p["pnu"], "geometry": json.loads(p["geometry_json"]), "properties": props})
     latest = max(rows, key=lambda p: (p["geometry_version"], p["updated_at"]))
     sources = sorted({(p["source_name"], p["geometry_version"]) for p in rows})
@@ -320,7 +461,7 @@ def parcels_bundle_from_db(db: Db, *, generated_at: str, source_dataset_version:
         warnings.append("원본 좌표계가 섞여 있다: " + "; ".join(f"{c or '?'} ({e or '?'}, {d or '변환 없음'})" for c, e, d in crs_mix))
     if any(p["source_datum_shift"] == "korean1985" for p in rows):
         warnings.append(BESSEL_WARNING)
-    return {
+    out = {
         "type": "FeatureCollection", "j5parcels": "1.0.0", "data_mode": "synthetic" if db.data_mode == "synthetic" else "real", "generated_at": generated_at,
         "study_id": db.meta("study_id"), "source_dataset_version": source_dataset_version if source_dataset_version is not None else int(db.meta("dataset_version") or 0),
         "source": {"name": latest["source_name"], "file": "j5.sqlite3 (정본 parcels)", "shp_sha256": latest["source_shp_sha256"] or "0" * 64, "dbf_sha256": "0" * 64,
@@ -329,3 +470,6 @@ def parcels_bundle_from_db(db: Db, *, generated_at: str, source_dataset_version:
                    "encoding": "utf-8", "record_count": len(rows), "geometry_version": latest["geometry_version"], "license": latest["source_license"], "fields": []},
         "clip": {"bbox": bbox, "center": None, "radius_m": None}, "count": len(rows), "bbox": bbox, "warnings": warnings, "features": features,
     }
+    if attrs_sources:
+        out["attrs_sources"] = attrs_sources   # 여러 번들(구역)을 반영했으면 자료별로 여러 개 (kind·dbf 해시로 중복 제거)
+    return out

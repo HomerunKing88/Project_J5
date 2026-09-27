@@ -149,13 +149,15 @@ python -m j5 db [--db 경로] survey-overview [--json]
 
 이후: J5-013B(필지·건축물), R1b 실기기 시험·두 차례 실사용.
 
-## 필지 경계·지번 번들 (R2, J5-013B-1, ADR-13)
+## 필지 경계·지번 번들 (R2, J5-013B-1, ADR-13; VWorld 묶음·필지 속성 J5-025, ADR-19)
 
 ```text
-python -m j5 parcels inspect <연속지적도.shp 또는 .zip> [--crs EPSG:5186] [--encoding cp949] [--layer 이름] [--json]
-python -m j5 parcels convert <연속지적도.shp 또는 .zip> --out <이름>.j5parcels.json --geometry-version YYYY-MM-DD --source-name "연속지적도 서울특별시 종로구" \
-    (--bbox minlon,minlat,maxlon,maxlat | --center lon,lat --radius-m 400) [--crs] [--encoding] [--license "…"] [--emd-name 1111017500=종로5가]… [--json]
+python -m j5 parcels inspect <연속지적도.shp 또는 .zip | VWorld 다운로드.zip> [--crs EPSG:5186] [--encoding cp949] [--layer 이름] [--json]
+python -m j5 parcels convert <연속지적도.shp 또는 .zip | VWorld 다운로드.zip> --out <이름>.j5parcels.json --geometry-version YYYY-MM-DD --source-name "연속지적도 서울특별시 종로구" \
+    (--bbox minlon,minlat,maxlon,maxlat | --center lon,lat --radius-m 400) [--crs] [--encoding] [--license "…"] [--emd-name 1111017500=종로5가]… [--no-land-attrs] [--json]
 ```
+
+- VWorld 묶음(J5-025): 입력이 VWorld 에서 내려받은 ZIP(안에 `…_dt_d002_연속지적도형정보.zip` 등 자료별 ZIP)이거나 자료별 ZIP·SHP 하나(같은 폴더의 다른 자료를 찾음)·풀어 둔 폴더면 자동 인식한다. `변경컬럼정보.csv` 로 열 이름(A0…)을 원래 이름으로 되돌리고(자료마다 열 순서가 다르다) .dbf 는 UTF-8 로 읽으므로 `--pnu-field`·`--jibun-field`·`--encoding` 이 필요 없다. `inspect` 출력의 `vworld` 항목이 인식한 자료 목록이다. `convert` 는 연속지적도(dt_d002)로 필지 도형·지번을 만들고 토지특성(dt_d194: 지목·공부면적·개별공시지가와 기준 연월·용도지역 1·2·이용상황·도로접면·지형)·토지이용계획(dt_d154: 지역지구 코드·이름·포함/접함/저촉 목록)·토지소유(dt_d160: 소유 구분 코드·구분명·공유인수·변동일·원인 코드·국가기관 구분)를 PNU 로 붙여 필지마다 `properties.attrs` 에 싣고 출처를 `attrs_sources` 에 적는다(`--no-land-attrs` 면 도형·지번만). 연령대·거주 구분은 읽지 않는다. '지정되지않음' 과 빈 값은 null 이다. 지역지구 이름 목록은 원본 열 길이(254)에 잘릴 수 있어 코드 목록을 기준으로 두고 `plan_zones_truncated` 로 표시한다. 안쪽 ZIP 은 임시 폴더에 안전하게(경로 탈출·크기·압축비 검사) 풀고 끝나면 지운다. 구역을 나눠 받은 묶음은 각각 변환해 `parcels-load` 를 여러 번 한다(경계 필지는 양쪽에 들어 있어도 된다). VWorld 자료의 이용조건은 배포처에서 확인해 `--license` 로 적는다.
 
 - `inspect`: 필드·레코드 수·도형 종류·원본 bbox·좌표계 판정(.prj → 알려진 EPSG 5173~5188 표)·WGS84 bbox·표본 레코드. 변환 전에 WGS84 bbox 가 종로 부근인지 확인한다(좌표계를 잘못 고르면 수백 m 이상 어긋난다).
 - `convert`: 범위와 겹치는 필지만 WGS84 GeoJSON 번들(`schemas/parcels_bundle.schema.json`)로 만든다. PNU(19자리)·지번 라벨·지목·도형면적(공부면적 아님)·bbox 를 속성으로 두고, 같은 PNU 는 MultiPolygon 으로 합친다. 원본은 수정하지 않고 출력은 임시 파일 검증 뒤 교체하며 덮어쓰지 않는다. 상한 8,000 필지(`--max-features`, 계약 상한 이하만). ZIP 은 항목·합계·압축비 상한을 검사한다.
@@ -169,7 +171,7 @@ python -m j5 db [--db 경로] parcels-suggest [--out 제안.json] [--effective-f
 python -m j5 db [--db 경로] parcels-link <제안.json> [--json]
 ```
 
-  `parcels-load` 는 PNU 기준으로 정본 `parcels`(db_schema 5) 에 넣는다(같은 내용 변화 없음, 더 새로운 도형 기준일이면 갱신, 같은 기준일·다른 내용이나 더 오래된 기준일은 거절). 번들 data_mode 는 정본과 맞아야 하고(synthetic ↔ synthetic, real ↔ private_real), 반영한 번들은 `source_documents` 에 남는다. `parcels-suggest` 는 물건 위치점을 품는 필지를 찾아 연결 제안 파일(`schemas/asset_components_input.schema.json`)을 만들 뿐 정본에 쓰지 않는다. 검토·수정한 파일을 `parcels-link` 로 반영하면 `asset_components` 에 적용 기간·근거와 함께 저장되고 dataset_version 이 오른다. 이후 `project` 의 파생본에 `parcels.geojson`(필지 + 연결 물건 `asset_ids`)이 들어가며 폰의 "필지 파일 불러오기" 로 그대로 넣는다.
+  `parcels-load` 는 PNU 기준으로 정본 `parcels`(db_schema 5) 에 넣는다(같은 내용 변화 없음, 더 새로운 도형 기준일이면 갱신, 같은 기준일·다른 내용이나 더 오래된 기준일은 거절. 같은 기준일에 도형·지번은 같고 자료명·파일 해시만 다르면 변화 없음: 구역을 나눠 받은 경계 필지, J5-025). 번들에 필지 속성(`attrs`)이 있으면 `parcel_attributes`(db_schema 15, 필지마다 한 행)에 함께 넣는다: 같은 내용 변화 없음, 같거나 새로운 기준일이면 갱신, 오래된 기준일은 거절. 번들에 든 자료 묶음(`attrs_sources` 의 종류: 토지특성/이용계획/소유)만 갱신하고 없는 자료의 값·출처는 기존 행을 유지한다(자료가 없는 것은 null 관측이 아니다). 공부면적은 토지특성 자료가 든 번들일 때 `parcels.registered_area_m2` 에도 채우며 값이 없으면 null + `not_collected` 로 되돌린다. 결과에 속성 신규·갱신·변화 없음 수가 함께 나온다. 속성 없는 번들을 다시 넣어도 기존 속성은 지우지 않는다. 파생본의 `attrs.as_of` 가 속성 기준일이며 도형 기준일과 별개다. 번들 data_mode 는 정본과 맞아야 하고(synthetic ↔ synthetic, real ↔ private_real), 반영한 번들은 `source_documents` 에 남는다. `parcels-suggest` 는 물건 위치점을 품는 필지를 찾아 연결 제안 파일(`schemas/asset_components_input.schema.json`)을 만들 뿐 정본에 쓰지 않는다. 검토·수정한 파일을 `parcels-link` 로 반영하면 `asset_components` 에 적용 기간·근거와 함께 저장되고 dataset_version 이 오른다. 이후 `project` 의 파생본에 `parcels.geojson`(필지 + 연결 물건 `asset_ids` + 필지 속성 `attrs`·`attrs_sources`)이 들어가며 폰의 "필지 파일 불러오기" 로 그대로 넣는다.
 
 ## 배경 도형 번들: 도로·건물 윤곽·도로명 (J5-022, ADR-16)
 
