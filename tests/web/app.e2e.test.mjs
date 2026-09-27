@@ -32,14 +32,14 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     // 지도 모듈 로드 실패: map.js 요청을 막고 첫 접속 (서비스 워커가 아직 없을 때). 목록·설정은 그대로 동작하고 지도 절만 안내를 낸다.
     await cdp.send("Network.setBlockedURLs", { urls: ["*/app/map.js"] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.4')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.5')");
     await cdp.waitFor("document.getElementById('map-note').textContent.includes('지도 표시 불가')");
     assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li').length"), 1, "지도 모듈 없이도 목록 절이 그려진다");
     const blockedLogs = cdp.errors.splice(0);
     assert.ok(blockedLogs.every((e) => e.includes("ERR_BLOCKED_BY_CLIENT") || e.includes("Failed to load resource") || e.includes("map.js")), blockedLogs.join("; "));
     await cdp.send("Network.setBlockedURLs", { urls: [] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.4')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.5')");
     await cdp.waitFor("document.getElementById('map-note').textContent === ''");
     // 설정
     await cdp.eval("document.getElementById('study-id').value = 'e2e-study'; document.getElementById('save-settings').click(); 'ok'");
@@ -173,6 +173,47 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.clickRect('#map-svg path.parcel[data-pnu="9999900100100040002"]');
     await cdp.waitFor("!document.getElementById('parcel-panel').hidden && document.getElementById('parcel-title').textContent === '가상동 4-2'");
     assert.deepEqual(await cdp.eval("Array.from(document.querySelectorAll('#parcel-assets li')).map(li => [li.firstChild.textContent, li.querySelectorAll('.badge')[1].textContent])"), [["가상 물건 3", "정본 연결"]], "정본 연결(asset_ids)만으로도 위치점 없는 물건이 뜬다");
+    await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
+    // 필지 속성·용도지역 색 (J5-025): VWorld 가상 묶음에서 만든 번들을 넣으면 속성 수가 안내에 뜨고 "용도지역 색" 버튼이 켜진다. 색은 이 기기에 저장돼 재접속 뒤 유지.
+    assert.equal(await cdp.eval("document.getElementById('map-zones').disabled"), true, "속성 없는 번들에서는 용도지역 색을 켤 수 없다");
+    const vwFile = join(tmp, "parcels-vworld.j5parcels.json");
+    writeFileSync(vwFile, readFileSync(join(ROOT, "tests/fixtures/parcels/synthetic_vworld.j5parcels.json")));
+    await cdp.setFiles("#parcels-file", [vwFile]);
+    await cdp.waitFor("document.getElementById('parcels-note').textContent.includes('file:parcels-vworld.j5parcels.json')");
+    assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /필지 속성 6개 \(토지특성공간정보, 토지이용계획공간정보, 토지소유공간정보\)/);
+    await cdp.waitFor("!document.getElementById('map-zones').disabled");
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel[class*=\"zone-\"]').length"), 0, "켜기 전에는 색 없음");
+    await cdp.clickRect("#map-zones");
+    await cdp.waitFor("document.getElementById('map-zones').getAttribute('aria-pressed') === 'true'");
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel[class*=\"zone-\"]').length"), 6);
+    assert.equal(await cdp.eval("document.querySelector('#map-svg path.parcel[data-pnu=\"9999900100100010000\"]').getAttribute('class')"), "parcel synthetic zone-com");
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel.zone-res2').length"), 2);
+    assert.equal(await cdp.eval("document.getElementById('zone-legend').hidden"), false);
+    assert.match(await cdp.eval("document.getElementById('zone-legend').textContent"), /일반주거 2/);
+    await cdp.clickRect('#map-svg path.parcel[data-pnu="9999900100100010000"]');
+    await cdp.waitFor("!document.getElementById('parcel-panel').hidden && document.getElementById('parcel-title').textContent === '가상동 1'");
+    assert.equal(await cdp.eval("document.querySelector('#map-svg path.parcel[data-pnu=\"9999900100100010000\"]').getAttribute('class')"), "parcel synthetic zone-com sel");
+    assert.equal(await cdp.eval("document.getElementById('parcel-attrs').hidden"), false);
+    assert.deepEqual(await cdp.eval("Array.from(document.querySelectorAll('#parcel-attrs li')).slice(0, 4).map(li => [li.querySelector('.k').textContent, li.querySelector('.v').textContent])"),
+      [["지목", "대"], ["공부면적", "1770.5 ㎡ (토지대장)"], ["공시지가", "12,340,000원/㎡ (2026년 1월 기준)"], ["용도지역", "일반상업지역"]]);
+    assert.match(await cdp.eval("document.getElementById('parcel-attrs').textContent"), /소유구분개인 · 변동 2017-01-01/);
+    assert.ok(!(await cdp.eval("document.getElementById('parcel-panel').textContent")).includes("agrde"));
+    await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
+    // 재접속 뒤에도 색이 켜져 있다 (IndexedDB meta). 그 뒤 속성 없는 번들로 돌아가면 버튼이 꺼지고 색이 없다
+    await cdp.navigate(`${base}/index.html`);
+    await cdp.waitFor("document.querySelectorAll('#map-svg path.parcel[class*=\"zone-\"]').length === 6");
+    assert.equal(await cdp.eval("document.getElementById('map-zones').getAttribute('aria-pressed')"), "true");
+    await cdp.eval("document.getElementById('nav-map').click(); 'ok'");
+    await cdp.waitFor("!document.getElementById('view-map').hidden");
+    await cdp.clickRect("#map-zones");
+    await cdp.waitFor("document.querySelectorAll('#map-svg path.parcel[class*=\"zone-\"]').length === 0");
+    assert.equal(await cdp.eval("document.getElementById('zone-legend').hidden"), true);
+    await cdp.setFiles("#parcels-file", [parcelsFile]);
+    await cdp.waitFor("document.getElementById('parcels-note').textContent.includes('file:parcels.geojson')");
+    assert.equal(await cdp.eval("document.getElementById('map-zones').disabled"), true);
+    await cdp.clickRect('#map-svg path.parcel[data-pnu="9999900100100040002"]');
+    await cdp.waitFor("!document.getElementById('parcel-panel').hidden && document.getElementById('parcel-title').textContent === '가상동 4-2'");
+    assert.equal(await cdp.eval("document.getElementById('parcel-attrs').hidden"), true, "속성 없는 필지에는 속성 목록이 없다");
     await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
     // 관측 (사진 1장, 태그 1개)
     const photo = join(tmp, "front.png");
