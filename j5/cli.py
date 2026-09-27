@@ -41,6 +41,7 @@ from j5.calc.inputs import calc_text, load_calc_input, run_calc
 from j5.calc.plans import plans_csv
 from j5.parcels.convert import Clip, ConvertError, ConvertOptions, convert, convert_text, inspect_source, inspect_text, write_bundle
 from j5.parcels.basemap import BasemapOptions, LayerInput, basemap_text, convert_basemap, write_basemap
+from j5.parcels.vworld import VWorldError, detect_vworld, read_attrs
 from j5.schemas_loader import schema_errors
 
 EXIT = {"ok": 0, "reject": 1, "hold": 2}
@@ -222,16 +223,16 @@ def _build_parser() -> argparse.ArgumentParser:
     vi.add_argument("--db", type=Path, help="비교할 정본 (읽기 전용으로 연다). 생략 시 최신 여부 미확인")
     vi.add_argument("--json", action="store_true")
 
-    pa = sub.add_parser("parcels", help="필지 경계·지번 (ADR-13): 연속지적도 SHP → 폰 지도용 번들(.j5parcels.json)")
+    pa = sub.add_parser("parcels", help="필지 경계·지번 (ADR-13): 연속지적도 SHP → 폰 지도용 번들(.j5parcels.json). VWorld 토지 자료 묶음(ZIP)은 자동 인식해 열 이름을 되돌리고 토지특성·이용계획·소유구분을 함께 읽는다 (ADR-19, J5-025)")
     psub = pa.add_subparsers(dest="parcels_command", required=True)
     pi = psub.add_parser("inspect", help="SHP(.shp 또는 ZIP)의 필드·레코드 수·좌표계·WGS84 범위·표본 레코드를 보여준다 (변환 전 확인)")
-    pi.add_argument("source", type=Path)
+    pi.add_argument("source", type=Path, help=".shp 또는 ZIP, 또는 VWorld 다운로드 ZIP(안에 dt_d002_… 등 자료별 ZIP)")
     pi.add_argument("--crs", help=".prj 가 없거나 못 읽을 때 EPSG:5186 형식으로 지정")
     pi.add_argument("--encoding", help=".dbf 문자 인코딩 (기본 .cpg 또는 cp949)")
     pi.add_argument("--layer", help="ZIP 안에 .shp 가 여럿일 때 기본 이름")
     pi.add_argument("--json", action="store_true")
     pc = psub.add_parser("convert", help="조사 범위의 필지만 WGS84 GeoJSON 번들로 만든다 (원본은 수정하지 않음, 출력은 덮어쓰지 않음)")
-    pc.add_argument("source", type=Path)
+    pc.add_argument("source", type=Path, help=".shp 또는 ZIP, 또는 VWorld 다운로드 ZIP(안에 dt_d002_… 등 자료별 ZIP)")
     pc.add_argument("--out", type=Path, required=True, help="출력 파일 (<이름>.j5parcels.json). 실데이터 홈 안에 둔다")
     pc.add_argument("--geometry-version", required=True, help="도형 기준일 YYYY-MM-DD (배포 자료의 기준 시점)")
     pc.add_argument("--source-name", required=True, help="자료명 (예: '연속지적도 서울특별시 종로구')")
@@ -247,6 +248,7 @@ def _build_parser() -> argparse.ArgumentParser:
     pc.add_argument("--jibun-field", help="지번 필드 이름 (기본 JIBUN)")
     pc.add_argument("--max-features", type=int, default=8000, help="범위 안 필지 상한 (기본이자 최대 8000, 번들 계약과 같다)")
     pc.add_argument("--synthetic", action="store_true", help="가상자료 표시 (data_mode synthetic)")
+    pc.add_argument("--no-land-attrs", action="store_true", help="VWorld 묶음이어도 토지특성·이용계획·소유구분 속성을 읽지 않는다 (도형·지번만)")
     pc.add_argument("--json", action="store_true")
 
     bm = sub.add_parser("basemap", help="배경 도형 (ADR-16, J5-022): 공공 도형 자료(도로명주소 전자지도 등)의 건물 윤곽·실폭도로·도로 중심선 SHP → 폰 지도 배경 번들(.j5basemap.json). inspect 는 `j5 parcels inspect` 를 그대로 쓴다")
@@ -752,9 +754,16 @@ def _basemap_main(args) -> int:
 
 
 def _parcels_main(args) -> int:
+    vw = None
     try:
+        vw = detect_vworld(args.source)
+        source = vw.cadastral if vw else args.source
+        field_map = vw.mappings.get("cadastral") if vw else None
+        encoding = args.encoding or ("utf-8" if vw else None)   # VWorld 자료의 .dbf 는 UTF-8 (실측, .cpg 없음)
         if args.parcels_command == "inspect":
-            r = inspect_source(args.source, crs_arg=args.crs, encoding=args.encoding, layer=args.layer)
+            r = inspect_source(source, crs_arg=args.crs, encoding=encoding, layer=args.layer, field_map=field_map)
+            if vw:
+                r["vworld"] = {"origin": vw.origin, "datasets": sorted(vw.datasets), "cadastral": Path(vw.cadastral).name}
             sys.stdout.write(json.dumps(r, ensure_ascii=False, indent=2) + "\n" if args.json else inspect_text(r))
             return 0 if r["crs"] else 1
         if args.parcels_command == "convert":
@@ -775,19 +784,27 @@ def _parcels_main(args) -> int:
                     print(f"--emd-name 은 10자리코드=이름 형식: {item!r}", file=sys.stderr)
                     return USAGE_ERROR
                 emd[code] = name
-            opts = ConvertOptions(clip=clip, geometry_version=args.geometry_version, source_name=args.source_name, crs_arg=args.crs, encoding=args.encoding,
+            attrs_by_pnu, attrs_sources = ({}, [])
+            if vw and not args.no_land_attrs:
+                attrs_by_pnu, attrs_sources = read_attrs(vw, encoding=encoding)
+            opts = ConvertOptions(clip=clip, geometry_version=args.geometry_version, source_name=args.source_name, crs_arg=args.crs, encoding=encoding,
                                   license=args.license, emd_names=emd, pnu_field=args.pnu_field, jibun_field=args.jibun_field, max_features=args.max_features,
-                                  data_mode="synthetic" if args.synthetic else "real", layer=args.layer)
-            bundle = convert(args.source, opts)
+                                  data_mode="synthetic" if args.synthetic else "real", layer=args.layer, field_map=field_map,
+                                  attrs_by_pnu=attrs_by_pnu or None, attrs_sources=attrs_sources or None)
+            bundle = convert(source, opts)
             written = write_bundle(bundle, args.out)
             if args.json:
-                print(json.dumps({"written": written, "count": bundle["count"], "stats": bundle["stats"], "warnings": bundle["warnings"], "source": bundle["source"], "clip": bundle["clip"]}, ensure_ascii=False, indent=2))
+                print(json.dumps({"written": written, "count": bundle["count"], "stats": bundle["stats"], "warnings": bundle["warnings"], "source": bundle["source"], "clip": bundle["clip"],
+                                  "attrs_sources": bundle.get("attrs_sources", [])}, ensure_ascii=False, indent=2))
             else:
                 sys.stdout.write(convert_text(bundle, written))
             return 0
-    except ConvertError as e:
+    except (ConvertError, VWorldError) as e:
         print(f"필지 변환 실패 [{e.code}]: {e.message}", file=sys.stderr)
         return 1
+    finally:
+        if vw is not None:
+            vw.cleanup()
     return USAGE_ERROR
 
 
