@@ -2,6 +2,7 @@
 // 파생본은 PC 정본의 고정 버전에서 만든 읽기 전용 자료다. 폰은 표시만 하고 정본을 편집하지 않으며, 최신 여부는 파일만으로 알 수 없다.
 
 import { CHANGE_STATUS_LABEL } from "./event.js";
+import { ATTR_KIND_LABELS, attrChangeText } from "./parcels.js";
 
 export const VIEW_FORMAT = "j5view";
 export const VIEW_SCHEMA_VERSIONS = ["1.0.0"];
@@ -165,10 +166,23 @@ export function assetHistory(assetId, { events = [], records = [], transactions 
   return items.sort(byDateDesc);
 }
 
-/** 필지 하나의 이력: 지번이 닿는 거래(같은 필지 / 번지대) + 그 안의 물건들의 이력. */
+/** 필지 속성 변화(attrs_history, J5-026) → 이력 항목. 처음 확인은 "토지특성 (처음 확인)" 등으로 표시하고 값은 자료 그대로다. 날짜는 속성 기준일. */
+export function attrHistoryItems(feature) {
+  const props = feature.properties ?? {};
+  const out = [];
+  for (const [i, c] of (props.attrs_history ?? []).entries()) {
+    const text = attrChangeText(c);
+    if (!text) continue;
+    out.push({ id: `attrs:${feature.id}:${c.kind}:${c.as_of}:${i}`, date: c.as_of, year: String(c.as_of).slice(0, 4), kind: "land_attrs", kindLabel: ATTR_KIND_LABELS[c.kind] ?? c.kind,
+               first: !!c.first, text, source: "pc", superseded: false, subject: null });
+  }
+  return out;
+}
+
+/** 필지 하나의 이력: 지번이 닿는 거래(같은 필지 / 번지대) + 그 안의 물건들의 이력 + 필지 속성 변화(토지 자료). */
 export function parcelHistory(feature, assetsInside, data) {
   const props = feature.properties;
-  const items = [];
+  const items = attrHistoryItems(feature);
   const seenTx = new Set();
   for (const t of data.transactions ?? []) {
     const match = jibunMatch(t, props);

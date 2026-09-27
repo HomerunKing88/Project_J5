@@ -469,8 +469,9 @@ function historyData() {
 }
 
 function historyItemNode(it) {
-  const head = el("span", { class: "tl-head" }, el("span", { class: `badge ${it.kind === "transaction" ? "kind-transaction" : ""}`, text: it.kindLabel }));
+  const head = el("span", { class: "tl-head" }, el("span", { class: `badge ${it.kind === "transaction" ? "kind-transaction" : it.kind === "land_attrs" ? "kind-attrs" : ""}`, text: it.kindLabel }));
   if (it.subject) head.append(el("strong", { text: it.subject }));
+  if (it.kind === "land_attrs") head.append(el("span", { class: "badge", text: it.first ? "토지 자료 처음 확인" : "토지 자료 변경" }));
   if (it.kind === "transaction") {
     if (it.match === "exact") head.append(el("span", { class: "badge match-exact", text: "이 필지" }));
     else if (it.match === "prefix") head.append(el("span", { class: "badge match-prefix", text: "번지대 (필지 미확정)" }));

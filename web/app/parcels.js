@@ -5,6 +5,7 @@ export const PARCELS_FORMAT = "1.0.0";
 export const MAX_PARCELS = 8000;
 const PNU_RE = /^[0-9]{19}$/;
 const TOP_ALLOWED = new Set(["type", "j5parcels", "data_mode", "generated_at", "source", "clip", "count", "bbox", "warnings", "features", "study_id", "source_dataset_version", "attrs_sources"]);
+const ATTR_KINDS = new Set(["land_feature", "land_plan", "land_ownership"]);
 const ATTR_KEYS = new Set(["jimok_name", "registered_area_m2", "official_land_price_krw_m2", "price_base_year", "price_base_month", "use_zone_1", "use_zone_2", "land_use_situation", "road_side",
   "terrain_height", "terrain_form", "plan_zones", "plan_zones_truncated", "ownership_kind_code", "ownership_kind", "co_owner_count", "ownership_changed_on", "ownership_change_cause_code", "national_institution_code", "as_of"]);
 const PROP_REQUIRED = ["pnu", "label", "emd_code", "emd_name", "mountain", "bon", "bu", "jimok", "jibun_raw", "jibun_mismatch", "area_m2_geom", "area_missing_reason", "bbox"];
@@ -67,6 +68,12 @@ export function validateParcels(doc) {
         if ("as_of" in a && !(typeof a.as_of === "string" && /^\d{4}-\d{2}-\d{2}$/.test(a.as_of))) errs.push(`${at} attrs.as_of 는 YYYY-MM-DD`);
       }
     }
+    if ("attrs_history" in p) {
+      const h = p.attrs_history;
+      if (!Array.isArray(h) || h.length > 200) errs.push(`${at} attrs_history 형식`);
+      else if (!h.every((c) => c && typeof c === "object" && /^\d{4}-\d{2}-\d{2}$/.test(c.as_of) && ATTR_KINDS.has(c.kind) && typeof c.first === "boolean" && c.changes && typeof c.changes === "object" && !Array.isArray(c.changes)
+        && Object.values(c.changes).every((d) => d && typeof d === "object" && "from" in d && "to" in d))) errs.push(`${at} attrs_history 항목 형식`);
+    }
   }
   return errs;
 }
@@ -117,6 +124,34 @@ export function attrLines(a, fallbackAsOf = null) {
     ["소유구분", (own ?? miss) + (Number.isFinite(a.co_owner_count) && a.co_owner_count > 1 ? ` · 공유 ${a.co_owner_count}인` : "") + (a.ownership_changed_on ? ` · 변동 ${a.ownership_changed_on}` : "")],
     ["속성 기준일", asOf ? `${asOf} (토지 자료 기준, 도형 기준일과 다를 수 있음)` : miss],
   ];
+}
+
+export const ATTR_FIELD_LABELS = Object.freeze({ jimok_name: "지목", registered_area_m2: "공부면적", official_land_price_krw_m2: "공시지가", price_base_year: "공시 기준연도", price_base_month: "공시 기준월",
+  use_zone_1: "용도지역", use_zone_2: "용도지역 2", land_use_situation: "이용상황", road_side: "도로접면", terrain_height: "지형 높이", terrain_form: "지형 형상", plan_zones: "규제·지역지구",
+  plan_zones_truncated: "이름 목록 잘림", ownership_kind_code: "소유 구분 코드", ownership_kind: "소유구분", co_owner_count: "공유인수", ownership_changed_on: "소유 변동일",
+  ownership_change_cause_code: "변동 원인 코드", national_institution_code: "국가기관 구분" });
+export const ATTR_KIND_LABELS = Object.freeze({ land_feature: "토지특성", land_plan: "토지이용계획", land_ownership: "토지소유" });
+
+/** 속성 값 하나를 글로. 규제 목록은 이름(없으면 코드)·관계, 공시지가는 원/㎡, 없음은 "없음". */
+export function fmtAttrValue(field, v) {
+  if (v == null) return "없음";
+  if (field === "plan_zones") return Array.isArray(v) && v.length ? v.map((z) => (z.name ?? z.code) + (z.relation && z.relation !== "포함" ? `(${z.relation})` : "")).join(", ") : "없음";
+  if (field === "official_land_price_krw_m2") return `${fmtInt(v)}원/㎡`;
+  if (field === "registered_area_m2") return `${v} ㎡`;
+  if (typeof v === "boolean") return v ? "예" : "아니오";
+  return String(v);
+}
+
+/** 이력 글에서 빼는 필드: 이름 필드가 같이 있는 코드, 잘림 표시, 공시 기준 연월(공시지가 변경에 딸림). 정본·PC 조회(parcels-history)에는 모두 있다. */
+const ATTR_HISTORY_SKIP = new Set(["ownership_kind_code", "ownership_change_cause_code", "national_institution_code", "plan_zones_truncated", "price_base_year", "price_base_month"]);
+
+/** 변화 항목(attrs_history 의 한 건) → 한 줄 글. 처음 확인은 "지목 대 · 공시지가 …", 변경은 "공시지가 A → B · …". 필드 순서는 ATTR_FIELD_LABELS 순. */
+export function attrChangeText(c) {
+  const keys = Object.keys(c.changes ?? {}).filter((k) => !ATTR_HISTORY_SKIP.has(k)).sort((a, b) => Object.keys(ATTR_FIELD_LABELS).indexOf(a) - Object.keys(ATTR_FIELD_LABELS).indexOf(b));
+  return keys.map((k) => {
+    const d = c.changes[k], label = ATTR_FIELD_LABELS[k] ?? k;
+    return c.first ? `${label} ${fmtAttrValue(k, d.to)}` : `${label} ${fmtAttrValue(k, d.from)} → ${fmtAttrValue(k, d.to)}`;
+  }).join(" · ");
 }
 
 /** 번들의 속성 요약: 속성 있는 필지 수와 용도지역별 수. */

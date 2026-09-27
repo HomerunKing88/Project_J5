@@ -1,7 +1,7 @@
 // view.js (J5-023, ADR-17): manifest·기록·거래 검증, 금액 표기, 지번 대조, 물건·필지 이력 조립, 연도 묶음. DOM 없음.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, fmtKrw, parseJibun, jibunMatch, assetHistory, parcelHistory, groupByYear, viewSummary } from "../../web/app/view.js";
+import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, fmtKrw, parseJibun, jibunMatch, assetHistory, parcelHistory, attrHistoryItems, groupByYear, viewSummary } from "../../web/app/view.js";
 
 const A0 = "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a50", A1 = "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a51";
 const R = (id, asset, type, at, payload, extra = {}) => ({ record_id: id, asset_id: asset, record_type: type, observed_at: at, payload, attachments: [], supersedes_id: null, ...extra });
@@ -88,4 +88,20 @@ test("parcelHistory·groupByYear: 지번 일치·번지대 거래 + 안의 물�
   const sm = viewSummary({ manifest: manifest(), records, transactions: { transactions }, photos_skipped: 2, source: "view:a.zip", loaded_at: "2026-09-27T03:00:00Z" });
   assert.deepEqual([sm.version, sm.records, sm.transactions, sm.photosSkipped], [8, 1, 5, 2]);
   assert.equal(viewSummary(null), null);
+});
+
+test("attrHistoryItems·parcelHistory: 필지 속성 변화가 기준일 연도에 토지 자료 항목으로 든다 (J5-026)", () => {
+  const feature = { id: "9999900100100010000", properties: { emd_name: "가상동", label: "1", bon: 1, bu: 0, mountain: false,
+    attrs_history: [{ as_of: "2024-09-05", kind: "land_feature", first: true, changes: { jimok_name: { from: null, to: "대" }, official_land_price_krw_m2: { from: null, to: 12340000 } } },
+      { as_of: "2024-09-05", kind: "land_ownership", first: true, changes: { ownership_kind: { from: null, to: "개인" } } },
+      { as_of: "2026-01-15", kind: "land_feature", first: false, changes: { official_land_price_krw_m2: { from: 12340000, to: 13000000 } } },
+      { as_of: "2026-01-15", kind: "land_plan", first: false, changes: {} }] } };
+  const items = attrHistoryItems(feature);
+  assert.deepEqual(items.map((i) => [i.date, i.kindLabel, i.first, i.text]), [["2024-09-05", "토지특성", true, "지목 대 · 공시지가 12,340,000원/㎡"], ["2024-09-05", "토지소유", true, "소유구분 개인"], ["2026-01-15", "토지특성", false, "공시지가 12,340,000원/㎡ → 13,000,000원/㎡"]], "빈 변화는 항목이 없다");
+  assert.ok(items.every((i) => i.kind === "land_attrs" && i.source === "pc" && !i.superseded));
+  const transactions = [T(ID(5), "202508", "1")];
+  const all = parcelHistory(feature, [], { events: [], records: [], transactions });
+  assert.deepEqual(all.map((i) => i.date), ["2026-01-15", "2025-08-01", "2024-09-05", "2024-09-05"]);
+  assert.deepEqual(groupByYear(all).map((g) => [g.year, g.items.length]), [["2026", 1], ["2025", 1], ["2024", 2]]);
+  assert.deepEqual(attrHistoryItems({ id: "x", properties: {} }), []);
 });

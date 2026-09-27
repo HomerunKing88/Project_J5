@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { validateParcels, labelPoint, pointInFeature, assetsInParcel, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, polygonsOf, MAX_PARCELS, zoneCategory, ZONE_LABELS, fmtInt, attrLines, attrsSummary } from "../../web/app/parcels.js";
+import { validateParcels, labelPoint, pointInFeature, assetsInParcel, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, polygonsOf, MAX_PARCELS, zoneCategory, ZONE_LABELS, fmtInt, attrLines, attrsSummary, fmtAttrValue, attrChangeText } from "../../web/app/parcels.js";
 import { worldBbox, parcelPathD, parcelLabelVisible, mercator, fitView, FIT_MAX_SCALE, PARCEL_LOCAL_K } from "../../web/app/map.js";
 
 const bundle = () => JSON.parse(readFileSync(new URL("../fixtures/parcels/synthetic.j5parcels.json", import.meta.url), "utf8"));
@@ -170,4 +170,24 @@ test("zoneCategory·fmtInt·attrLines·attrsSummary", () => {
   assert.equal(sm.sources.length, 3);
   assert.deepEqual(attrsSummary(bundle()).withAttrs, 0, "기존 번들에는 속성이 없다");
   assert.deepEqual(attrsSummary(null).withAttrs, 0);
+});
+
+test("attrs_history 검증·fmtAttrValue·attrChangeText (J5-026)", () => {
+  const withHist = vwBundle();
+  withHist.features[0].properties.attrs_history = [{ as_of: "2026-09-05", kind: "land_feature", first: true, changes: { jimok_name: { from: null, to: "대" } } },
+    { as_of: "2027-01-15", kind: "land_ownership", first: false, changes: { ownership_kind: { from: "개인", to: "법인" } } }];
+  assert.deepEqual(validateParcels(withHist), []);
+  const bad1 = vwBundle(); bad1.features[0].properties.attrs_history = [{ as_of: "2026-09-05", kind: "weather", first: true, changes: { x: { from: null, to: 1 } } }];
+  assert.ok(validateParcels(bad1).some((e) => e.includes("attrs_history 항목")));
+  const bad2 = vwBundle(); bad2.features[0].properties.attrs_history = [{ as_of: "2026-09-05", kind: "land_plan", first: true, changes: { x: { to: 1 } } }];
+  assert.ok(validateParcels(bad2).some((e) => e.includes("attrs_history 항목")));
+  const bad3 = vwBundle(); bad3.features[0].properties.attrs_history = {};
+  assert.ok(validateParcels(bad3).some((e) => e.includes("attrs_history 형식")));
+  assert.deepEqual([fmtAttrValue("official_land_price_krw_m2", 12340000), fmtAttrValue("registered_area_m2", 60.2), fmtAttrValue("jimok_name", null), fmtAttrValue("plan_zones_truncated", true), fmtAttrValue("plan_zones", []),
+    fmtAttrValue("plan_zones", [{ code: "A", name: "도시지역", relation: "포함" }, { code: "ZA0014", name: null, relation: "저촉" }])],
+    ["12,340,000원/㎡", "60.2 ㎡", "없음", "예", "없음", "도시지역, ZA0014(저촉)"]);
+  assert.equal(attrChangeText({ first: true, changes: { official_land_price_krw_m2: { from: null, to: 1000 }, jimok_name: { from: null, to: "대" } } }), "지목 대 · 공시지가 1,000원/㎡", "표시 순서는 필드 순서");
+  assert.equal(attrChangeText({ first: false, changes: { ownership_kind: { from: "개인", to: "법인" }, ownership_changed_on: { from: "2017-01-01", to: "2026-09-24" } } }), "소유구분 개인 → 법인 · 소유 변동일 2017-01-01 → 2026-09-24");
+  assert.equal(attrChangeText({ first: false, changes: {} }), "");
+  assert.equal(attrChangeText({ first: false, changes: { ownership_kind_code: { from: "01", to: "06" }, price_base_year: { from: 2026, to: 2027 } } }), "", "코드·기준 연월만 바뀐 항목은 빈 글 (이력에 넣지 않음)");
 });
