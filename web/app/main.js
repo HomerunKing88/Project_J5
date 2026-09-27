@@ -6,7 +6,7 @@ import { sha256Hex } from "./hash.js";
 import { uuid4, isUuid } from "./uuid.js";
 import { isoWithOffset, fromDatetimeLocal, toDatetimeLocal, localDate } from "./time.js";
 import { buildEvent, validateEvent, lineBytes, PHOTO_TAGS, PHOTO_TAG_LABEL, CHANGE_STATUS_LABEL, PHOTO_LIMIT, VIEWPOINT_MAX } from "./event.js";
-import { validateSeed } from "./seed.js";
+import { validateSeed, filterAssets, hasTracking, isWatchlist, TRACKING_LABEL, ASSET_FILTERS } from "./seed.js";
 import { validateParcels, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, attrLines, attrsSummary, ZONE_LABELS, findParcels, parcelAt, interiorPoint } from "./parcels.js";
 import { selectRecords, planBatches, buildPackage, hasRemainingBatches, studyIdError } from "./export.js";
 import { migrationReadiness, migrationText, persistenceText } from "./migrate.js";
@@ -18,10 +18,10 @@ import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
 import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.7";
+export const APP_VERSION = "0.2.8";
 const $ = (id) => document.getElementById(id);
 const state = { store: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, zoneColors: false, seedLoadedAt: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
-                nav: null, returnFocus: null, mapSelected: null };
+                nav: null, returnFocus: null, mapSelected: null, assetFilter: "all" };
 
 function text(el, value, cls) {
   el.textContent = value;
@@ -30,6 +30,27 @@ function text(el, value, cls) {
 
 function modeBadge(mode) {
   return el("span", { class: `badge mode-${mode}`, text: MODE_SHORT[mode] ?? mode });
+}
+
+/** 관심 단계·확인 상태 배지 (J5-029, ADR-22). 파생본 시드의 정본 출력값이며 폰에서 바꾸지 못한다. 미검토는 배지 없음. */
+function trackingBadges(a) {
+  const out = [];
+  if (typeof a.tracking_status === "string" && a.tracking_status !== "unreviewed") {
+    out.push(el("span", { class: `badge track-${a.tracking_status}` + (isWatchlist(a) ? " track-watchlist" : ""), text: TRACKING_LABEL[a.tracking_status] ?? a.tracking_status,
+                          title: "관심 단계 (PC 정본에서 정함)" }));
+  }
+  if (a.resolution_status === "pending") out.push(el("span", { class: "badge src-pending", text: "확인 전 · PC 에서 확정", title: "기기에서 만든 임시 매입 단위. PC 의 db asset-confirm 으로 확정한다" }));
+  return out;
+}
+
+/** 지금 적용되는 필터. 관심 단계 없는 시드(수동 시드·연습 자료)에서는 필터가 뜻이 없어 전체를 보인다. 저장된 선택(state.assetFilter)은 그대로 두어 파생본 시드가 돌아오면 다시 적용된다. */
+function effectiveFilter() {
+  return hasTracking(state.assets) ? state.assetFilter : "all";
+}
+
+/** 현재 필터(전체/관찰목록만)를 적용한 물건. 목록·지도·다음 대상에 같은 목록을 쓴다. */
+function visibleAssets() {
+  return filterAssets(state.assets, effectiveFilter());
 }
 
 /** 외부 지도 링크 (J5-021, ADR-15): 좌표가 있으면 "다른 지도에서 보기" 링크를 채우고, 없으면 숨긴다. 누르기 전에는 전송 없음. */
@@ -264,8 +285,10 @@ async function renderAssets() {
   state.events = await state.store.listEvents();
   state.seedLoadedAt = (await state.store.getMeta("seed_loaded_at")) ?? null;
   if (state.parcelsRec) parcelsNote(state.parcelsRec);
+  applyAssetFilterUi();
+  const visible = visibleAssets();
   const list = $("asset-list");
-  list.replaceChildren(...state.assets.map((a) => {
+  list.replaceChildren(...visible.map((a) => {
     const s = assetSummary(a.asset_id, state.events);
     const meta = el("span", { class: "meta" });
     if (s.count) {
@@ -276,6 +299,7 @@ async function renderAssets() {
       meta.append(el("span", { text: "이 기기에 기록 없음" }));
     }
     meta.append(el("button", { class: "quiet", text: "이력", onclick: () => openAssetHistory(a) }));
+    meta.append(...trackingBadges(a));
     if (a.origin === "device") {
       meta.append(el("span", { class: "badge src-device", text: "이 기기에서 만듦 · PC 반영 전" }));
       if (!s.count) meta.append(el("button", { class: "quiet", text: "삭제", onclick: () => deleteDeviceAsset(a) }));
@@ -290,10 +314,11 @@ async function renderAssets() {
     return li;
   }));
   if (!state.assets.length) list.append(el("li", { class: "empty", text: "아직 대상이 없습니다. 설정의 자료 관리에서 물건 목록을 가져오세요." }));
+  else if (!visible.length) list.append(el("li", { class: "empty", text: "관찰목록 단계(관찰·상세 검토·매입 준비)인 물건이 없습니다. 관심 단계는 PC 에서 정합니다 (db asset-track). '전체' 로 바꾸면 모두 보입니다." }));
   // 목록을 먼저 채운 뒤 지도를 갱신한다. 지도 실패는 목록에 영향을 주지 않는다.
-  mapCall((m) => mapNote(m.setAssets(state.assets)));
-  // 지도 선택 카드는 현재 목록의 물건 객체에 다시 묶는다. 목록 교체로 사라진 물건이면 카드를 닫는다 (리뷰 반영: 옛 물건으로 기록되지 않게)
-  const selected = state.mapSelected ? state.assets.find((a) => a.asset_id === state.mapSelected) : null;
+  mapCall((m) => mapNote(m.setAssets(visible)));
+  // 지도 선택 카드는 현재 목록의 물건 객체에 다시 묶는다. 목록 교체·필터로 사라진 물건이면 카드를 닫는다 (리뷰 반영: 옛 물건으로 기록되지 않게)
+  const selected = state.mapSelected ? visible.find((a) => a.asset_id === state.mapSelected) : null;
   if (state.mapSelected && !selected) clearMapSelection();
   else if (selected) selectOnMap(selected, { focus: false });
   renderSeedStatus();
@@ -303,7 +328,26 @@ async function renderAssets() {
 function renderSeedStatus() {
   const n = state.assets.length;
   const when = shortWhen(state.seedLoadedAt);
-  text($("seed-status"), n ? `물건 ${n}개 (${MODE_SHORT[state.assets[0].data_mode] ?? ""}) · 마지막 가져오기 ${when ?? "시각 모름"}` : "가져온 물건 목록이 없습니다.");
+  const watch = state.assets.filter(isWatchlist).length;
+  text($("seed-status"), n ? `물건 ${n}개 (${MODE_SHORT[state.assets[0].data_mode] ?? ""})${hasTracking(state.assets) ? ` · 관찰목록 ${watch}개` : ""} · 마지막 가져오기 ${when ?? "시각 모름"}` : "가져온 물건 목록이 없습니다.");
+}
+
+// ---- 관찰목록 필터 (J5-029, ADR-22): 파생본 시드의 관심 단계로 '전체/관찰목록만' 을 고른다. 선택은 이 기기(meta asset_filter)에 남는다. 관심 단계 자체는 PC 에서만 바꾼다 ----
+function applyAssetFilterUi() {
+  const bar = $("asset-filter");
+  const tracked = hasTracking(state.assets);
+  const filter = effectiveFilter();
+  bar.hidden = !tracked;
+  for (const b of bar.querySelectorAll("button[data-filter]")) b.setAttribute("aria-pressed", String(b.dataset.filter === filter));
+  const watch = state.assets.filter(isWatchlist).length;
+  text($("asset-filter-note"), tracked ? (filter === "watchlist" ? `관찰목록 ${watch}개만 표시 (전체 ${state.assets.length}개)` : `전체 ${state.assets.length}개 (관찰목록 ${watch}개)`) : "", "muted");
+}
+
+async function setAssetFilter(filter) {
+  if (!ASSET_FILTERS.includes(filter) || filter === state.assetFilter) return;
+  state.assetFilter = filter;
+  await state.store.setMeta("asset_filter", filter);
+  await renderAssets();
 }
 
 // ---- 필지 (J5-013B-1, ADR-13) ----
@@ -335,7 +379,7 @@ function applyParcels(rec) {
   applyZoneColors();
   applySearchUi();
   parcelsNote(rec);
-  mapCall((m) => mapNote(m.setAssets(state.assets)));
+  mapCall((m) => mapNote(m.setAssets(visibleAssets())));
 }
 
 // ---- 용도지역 색 (J5-025, ADR-19): 필지 속성이 있을 때만 켤 수 있고, 켬 여부는 이 기기에 저장한다 ----
@@ -607,7 +651,7 @@ function applyBasemap(rec) {
   state.basemapCount = rec?.bundle?.features.length ?? 0;
   mapCall((m) => m.setBasemap(rec?.bundle ?? null));
   basemapNote(rec);
-  mapCall((m) => mapNote(m.setAssets(state.assets)));
+  mapCall((m) => mapNote(m.setAssets(visibleAssets())));
 }
 
 function basemapNote(rec) {
@@ -756,6 +800,7 @@ function selectOnMap(asset, { focus = true } = {}) {
   const s = assetSummary(asset.asset_id, state.events);
   $("map-selected-label").textContent = asset.label;
   $("map-selected-sub").textContent = assetSub(asset) + (s.count ? ` · 마지막 기록 ${shortWhen(s.lastAt)} (${CHANGE_STATUS_LABEL[s.lastStatus] ?? ""})` : " · 이 기기에 기록 없음");
+  $("map-selected-badges").replaceChildren(...trackingBadges(asset));
   renderExtLinks($("map-selected-ext"), asset.location_point);
   $("map-selected").hidden = false;
   $("map-selected-start").onclick = () => startObservation(asset);
@@ -980,7 +1025,7 @@ async function doSaveObservation() {
 function showObservationDone(record, photoCount) {
   const asset = state.target;
   $("done-text").textContent = `${asset.label} · ${CHANGE_STATUS_LABEL[record.event.payload.change_status]} · 사진 ${photoCount}장. 이 기기에 저장됐고 아직 내보내지 않았습니다. PC 반영 여부는 이 화면에서 알 수 없습니다.`;
-  const next = nextAsset(state.assets, asset.asset_id, state.events);
+  const next = nextAsset(visibleAssets(), asset.asset_id, state.events);
   $("done-next").hidden = !next;
   if (next) $("done-next").textContent = `다음 대상 기록: ${next.label}`;
   $("done-next").onclick = () => { if (next) startObservation(next); };
@@ -1186,7 +1231,7 @@ function registerSw() {
 
 /** 오늘 화면의 '관측 시작': 이 기기에 기록이 없는 첫 대상, 없으면 첫 대상의 기록 화면을 연다. */
 function startObservingFromHome() {
-  const next = nextAsset(state.assets, null, state.events) ?? state.assets[0];
+  const next = nextAsset(visibleAssets(), null, state.events) ?? visibleAssets()[0] ?? state.assets[0];
   if (next) startObservation(next);
 }
 
@@ -1216,6 +1261,7 @@ async function main() {
   $("home-go-export").addEventListener("click", () => state.nav.show("export"));
   $("map-go-list").addEventListener("click", () => state.nav.show("home"));
   $("start-observing").addEventListener("click", startObservingFromHome);
+  for (const b of $("asset-filter").querySelectorAll("button[data-filter]")) b.addEventListener("click", () => setAssetFilter(b.dataset.filter));
   $("seed-file").addEventListener("change", (e) => loadSeedFile(e.target));
   $("load-synthetic-parcels").addEventListener("click", loadSyntheticParcels);
   $("parcels-file").addEventListener("change", (e) => loadParcelsFile(e.target));
@@ -1267,6 +1313,8 @@ async function main() {
     state.seedLoadedAt = (await state.store.getMeta("seed_loaded_at")) ?? null;
     if (rec) { state.parcelsRec = rec; state.parcels = rec.bundle; state.parcelsCount = rec.bundle.features.length; mapCall((m) => m.setParcels(rec.bundle)); }
     state.zoneColors = (await state.store.getMeta("zone_colors")) === true;
+    const savedFilter = await state.store.getMeta("asset_filter");
+    state.assetFilter = ASSET_FILTERS.includes(savedFilter) ? savedFilter : "all";
     applyZoneColors();
     applySearchUi();
     parcelsNote(rec ?? null);
