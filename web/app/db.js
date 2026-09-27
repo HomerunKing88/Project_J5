@@ -119,6 +119,28 @@ export class Store {
     await done(tx);
   }
 
+  /**
+   * 파생본 한 벌을 한 트랜잭션으로 넣는다 (리뷰 반영): 설정(비어 있을 때만)·물건 목록·필지·정본 기록·거래.
+   * 중간에 실패(용량 부족 등)하면 아무것도 바뀌지 않는다. 파생본에 필지가 없으면 기존 필지를 지운다(같은 정본 버전의 자료만 남게).
+   * events·photos 는 건드리지 않는다.
+   */
+  async replaceProjection({ settings = null, assets, parcels = null, view, source }) {
+    const tx = this.db.transaction(["meta", "assets", "parcels", "view"], "readwrite");
+    const now = new Date().toISOString();
+    const meta = tx.objectStore("meta");
+    if (settings) for (const [k, v] of Object.entries(settings)) meta.put(v, k);
+    const as = tx.objectStore("assets");
+    as.clear();
+    for (const a of assets) as.add({ ...a, source });
+    meta.put(now, "seed_loaded_at");
+    meta.put(source, "seed_source");
+    const ps = tx.objectStore("parcels");
+    if (parcels) ps.put({ bundle: parcels, source, loaded_at: now, seed_loaded_at: now }, PARCELS_KEY);
+    else ps.delete(PARCELS_KEY);
+    tx.objectStore("view").put({ ...view, source, loaded_at: now }, VIEW_KEY);
+    await done(tx);
+  }
+
   async getView() {
     return req(this.db.transaction("view").objectStore("view").get(VIEW_KEY));
   }

@@ -295,9 +295,20 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       assert.equal(await cdp.eval("document.getElementById('history-record').hidden"), true, "필지 이력에는 기록 시작 없음");
       await cdp.eval("document.getElementById('history-close').click(); 'ok'");
       await cdp.waitFor("document.getElementById('sec-history').hidden");
-      // 재접속 뒤 유지, 지우기 뒤 물건·필지·이 기기 기록은 그대로
+      // 재접속 뒤 유지
       await cdp.navigate(`${base}/index.html#settings`);
       await cdp.waitFor("document.getElementById('view-status').textContent.startsWith('정본 v')");
+      // 필지가 없는 파생본으로 바꾸면 기존 필지도 지워진다 (리뷰 반영: 같은 정본 버전의 자료만 남긴다)
+      const noParcels = spawnSync("python3", ["tests/fixtures/make_view.py", tmp, "--no-parcels"], { cwd: ROOT, encoding: "utf8" });
+      assert.equal(noParcels.status, 0, noParcels.stderr);
+      await cdp.setFiles("#view-file", [join(tmp, "synthetic-noparcels.j5view.zip")]);
+      await cdp.waitFor("document.getElementById('view-note').textContent.includes('가져왔습니다')");
+      assert.match(await cdp.eval("document.getElementById('view-note').textContent"), /물건 5개 · 필지 0개 · 정본 기록 4건 · 거래 6건/);
+      assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /^필지 없음/, "파생본에 필지가 없으면 기존 필지를 지운다");
+      assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel').length"), 0);
+      await cdp.setFiles("#view-file", [viewZip]);
+      await cdp.waitFor("document.getElementById('view-note').textContent.includes('필지 6개')");
+      // 지우기 뒤 물건·필지·이 기기 기록은 그대로
       await cdp.eval("document.getElementById('clear-view').click(); 'ok'");
       await cdp.waitFor("document.getElementById('view-status').textContent.startsWith('가져온 PC 자료가 없습니다')");
       await cdp.waitFor("document.querySelectorAll('#asset-list li > button').length === 5");

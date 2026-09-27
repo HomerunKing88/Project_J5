@@ -4,7 +4,7 @@
 범위 규칙·거래 1건 확정 연결 → 목표 매수가 기록) `j5 db project` 로 파생본을 만들어 지정한 폴더에 복사한다. 생성 시각·run_id 가 들어가므로 바이트가
 매번 다르다(저장소에 넣지 않고 시험 때 만든다). 가상자료만 쓰며 외부 통신은 없다(가짜 서버는 127.0.0.1).
 
-    python tests/fixtures/make_view.py <출력 폴더>   → <출력 폴더>/synthetic.j5view.zip 과 요약 JSON 을 표준 출력에
+    python tests/fixtures/make_view.py <출력 폴더> [--no-parcels]   → <출력 폴더>/synthetic.j5view.zip (--no-parcels 면 synthetic-noparcels.j5view.zip, 필지·연결 없음) 과 요약 JSON
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ MONTHS = {
 }
 
 
-def build(out_dir: Path) -> dict:
+def build(out_dir: Path, *, parcels: bool = True) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="j5view-fixture-") as td:
         home = Path(td) / "home"
@@ -65,9 +65,10 @@ def build(out_dir: Path) -> dict:
         db.load_seed(json.loads(SEED.read_text(encoding="utf-8")))
         r = import_package(db, PACKAGE, home)
         assert r.outcome == "applied", r
-        load_bundle(db, json.loads(PARCELS.read_text(encoding="utf-8")))
-        sug = suggest_links(db, effective_from="2026-09-23")
-        apply_links(db, {k: v for k, v in sug.items() if not k.startswith("_")})
+        if parcels:
+            load_bundle(db, json.loads(PARCELS.read_text(encoding="utf-8")))
+            sug = suggest_links(db, effective_from="2026-09-23")
+            apply_links(db, {k: v for k, v in sug.items() if not k.startswith("_")})
         # 가짜 실거래 서버 (127.0.0.1) 로 2개년 수집 → 반영
         srv = HTTPServer(("127.0.0.1", 0), _Handler)
         t = threading.Thread(target=srv.serve_forever, daemon=True)
@@ -97,14 +98,15 @@ def build(out_dir: Path) -> dict:
         proj = build_projection(db, home, photos=False)
         db.close()
         src = home / proj.output_dir / proj.zip_name
-        dst = out_dir / "synthetic.j5view.zip"
+        dst = out_dir / ("synthetic.j5view.zip" if parcels else "synthetic-noparcels.j5view.zip")
         shutil.copyfile(src, dst)
         return {"zip": str(dst), "bytes": dst.stat().st_size, "counts": proj.counts, "source_dataset_version": proj.source_dataset_version}
 
 
 def main() -> None:
-    out = Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / "view")
-    print(json.dumps(build(out), ensure_ascii=False))
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    out = Path(args[0] if args else ROOT / "view")
+    print(json.dumps(build(out, parcels="--no-parcels" not in sys.argv), ensure_ascii=False))
 
 
 if __name__ == "__main__":

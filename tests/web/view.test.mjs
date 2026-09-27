@@ -1,7 +1,7 @@
 // view.js (J5-023, ADR-17): manifest·기록·거래 검증, 금액 표기, 지번 대조, 물건·필지 이력 조립, 연도 묶음. DOM 없음.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, fmtKrw, parseJibun, jibunMatch, assetHistory, parcelHistory, groupByYear, viewSummary } from "../../web/app/view.js";
+import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, fmtKrw, parseJibun, jibunMatch, assetHistory, parcelHistory, groupByYear, viewSummary } from "../../web/app/view.js";
 
 const A0 = "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a50", A1 = "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a51";
 const R = (id, asset, type, at, payload, extra = {}) => ({ record_id: id, asset_id: asset, record_type: type, observed_at: at, payload, attachments: [], supersedes_id: null, ...extra });
@@ -18,6 +18,18 @@ test("validateViewManifest: 형식·버전·필수 파일·설정 대조", () =>
   assert.ok(validateViewManifest(manifest(), { dataMode: "private_real" }).some((e) => e.includes("자료 종류")));
   assert.ok(validateViewManifest({ ...manifest(), files: [] }).some((e) => e.includes("필수 파일")));
   assert.deepEqual(validateViewManifest(null), ["manifest 가 객체가 아님"]);
+});
+
+test("checkProjectionConsistency: 거래·필지 파일의 정본 버전·생성 시각·작업 공간이 manifest 와 같아야 한다", () => {
+  const m = manifest();
+  const tx = { j5transactions: "1.0.0", study_id: "s", data_mode: "synthetic", source_dataset_version: 8, generated_at: m.generated_at, count: 0, transactions: [] };
+  const pc = { study_id: "s", source_dataset_version: 8, generated_at: m.generated_at };
+  assert.deepEqual(checkProjectionConsistency(m, { transactions: tx, parcels: pc }), []);
+  assert.deepEqual(checkProjectionConsistency(m, {}), []);
+  assert.ok(checkProjectionConsistency(m, { transactions: { ...tx, source_dataset_version: 7 } })[0].includes("transactions.json 의 source_dataset_version(7)"));
+  assert.ok(checkProjectionConsistency(m, { transactions: { ...tx, study_id: "other" } })[0].includes("study_id"));
+  assert.ok(checkProjectionConsistency(m, { transactions: { ...tx, data_mode: "private_real" } })[0].includes("data_mode"));
+  assert.ok(checkProjectionConsistency(m, { parcels: { ...pc, generated_at: "2020-01-01T00:00:00Z" } })[0].includes("parcels.geojson 의 generated_at"));
 });
 
 test("parseRecordsJsonl·validateTransactionsDoc", () => {

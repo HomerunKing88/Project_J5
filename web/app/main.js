@@ -14,7 +14,7 @@ import { createNavigator, viewFromHash, shortWhen, assetSummary, nextAsset, expo
 import { externalMapLinks, bboxCenter, LINK_ATTRS } from "./extmap.js";
 import { validateBasemap, LAYERS as BASEMAP_LAYERS, LAYER_LABEL as BASEMAP_LAYER_LABEL } from "./basemap.js";
 import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
-import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL } from "./view.js";
+import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
 export const APP_VERSION = "0.2.3";
@@ -259,19 +259,20 @@ async function loadViewFile(input) {
       const te = validateTransactionsDoc(transactions);
       if (te.length) return text($("view-note"), "파일 안 거래 목록 오류: " + te.slice(0, 5).join("; "), "bad");
     }
-    // 설정이 비어 있으면 파일의 작업 공간·자료 종류를 설정으로 쓴다 (다르면 위에서 거절됨)
-    if (!studyId) {
-      await state.store.setMeta("study_id", manifest.study_id);
-      await state.store.setMeta("data_mode", manifest.data_mode);
-      await loadSettings();
-    }
+    // 파일들이 같은 정본 버전에서 나왔는지 manifest 와 대조한다 (리뷰 반영: 다른 정본의 거래·필지가 섞여 들어오지 않게)
+    const ce = checkProjectionConsistency(manifest, { transactions, parcels });
+    if (ce.length) return text($("view-note"), "PC 자료 파일 오류: " + ce.slice(0, 5).join("; "), "bad");
+    // 설정이 비어 있으면 파일의 작업 공간·자료 종류를 설정으로 쓴다 (다르면 위에서 거절됨). 설정·물건·필지·정본 기록·거래를 한 트랜잭션으로 넣는다 (리뷰 반영):
+    // 중간에 실패하면 이전 상태가 그대로 남고, 파생본에 필지가 없으면 기존 필지는 지운다 (같은 정본 버전의 자료만 남게)
     const source = "view:" + file.name;
-    await state.store.replaceAssets(seed, source);
-    if (parcels) await state.store.replaceParcels(parcels, source);
     const { files: _f, ...manifestMeta } = manifest;
-    await state.store.replaceView({ manifest: manifestMeta, records, transactions, source, photos_skipped: photosSkipped });
+    await state.store.replaceProjection({
+      settings: studyId ? null : { study_id: manifest.study_id, data_mode: manifest.data_mode },
+      assets: seed, parcels, view: { manifest: manifestMeta, records, transactions, photos_skipped: photosSkipped }, source,
+    });
+    if (!studyId) await loadSettings();
     state.view = await state.store.getView();
-    if (parcels) applyParcels(await state.store.getParcels());
+    applyParcels(await state.store.getParcels());
     await renderAssets();
     await renderRecords();
     renderViewStatus();

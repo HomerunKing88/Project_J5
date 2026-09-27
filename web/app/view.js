@@ -76,6 +76,18 @@ export function validateTransactionsDoc(doc) {
   return errs;
 }
 
+/** 파생본 안의 파일들이 같은 정본 버전에서 나왔는지 manifest 와 대조한다 (PC 검증기와 같은 규칙, 리뷰 반영). */
+export function checkProjectionConsistency(manifest, { transactions = null, parcels = null } = {}) {
+  const errs = [];
+  const cmp = (name, doc, keys) => {
+    for (const k of keys) if (doc[k] !== manifest[k]) errs.push(`${name} 의 ${k}(${doc[k]})가 manifest(${manifest[k]})와 다름`);
+  };
+  if (transactions) cmp("transactions.json", transactions, ["study_id", "source_dataset_version", "generated_at"]);
+  if (transactions && transactions.data_mode !== manifest.data_mode) errs.push(`transactions.json 의 data_mode(${transactions.data_mode})가 manifest(${manifest.data_mode})와 다름`);
+  if (parcels) cmp("parcels.geojson", parcels, ["study_id", "source_dataset_version", "generated_at"]);
+  return errs;
+}
+
 /** 원 → 한국식 짧은 표기. null 은 "금액 미확인". */
 export function fmtKrw(n) {
   if (n === null || n === undefined || !Number.isFinite(n)) return "금액 미확인";
