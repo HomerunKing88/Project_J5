@@ -16,6 +16,7 @@ from pathlib import Path
 from j5 import APP_VERSION
 from j5.db.backup import EXIT_BY_OUTCOME as BACKUP_EXIT, BackupError, check_photos, check_photos_text, create_backup, restore_backup, verify_backup_dir
 from j5.db.importer import EXIT_BY_OUTCOME, import_package
+from j5.db.ingest import ingest_vworld
 from j5.db.parcels import BUNDLE_SCHEMA as PARCELS_BUNDLE_SCHEMA, LINKS_SCHEMA as PARCELS_LINKS_SCHEMA, apply_links, attribute_history, history_text, load_bundle, load_json as load_parcels_json, suggest_links
 from j5.db.projection import EXIT_BY_OUTCOME as PROJECT_EXIT, ProjectionError, build_projection, copy_latest
 from j5.db.store import Db, DbError, default_db_path
@@ -135,6 +136,14 @@ def _build_parser() -> argparse.ArgumentParser:
     sc.add_argument("--json", action="store_true")
     so = dsub.add_parser("survey-overview", help="경로·표본틀·세션·점포 현황")
     so.add_argument("--json", action="store_true")
+    pig = dsub.add_parser("parcels-ingest", help="VWorld 토지 자료 묶음(ZIP) 여러 개를 한 번에: 범위 자동(연속지적도 전체) 변환 → 반영 전 백업 → 차례로 parcels-load (J5-031). 변환이 하나라도 실패하면 반영하지 않는다")
+    pig.add_argument("sources", type=Path, nargs="+", help="VWorld 다운로드 ZIP(안에 dt_d002_… 등 자료별 ZIP) 또는 자료 폴더. 여러 구역을 한 번에")
+    pig.add_argument("--geometry-version", required=True, help="자료 기준일 YYYY-MM-DD (내려받은 자료의 기준 시점. 모든 입력에 같게 적용)")
+    pig.add_argument("--source-name", help="자료명 (생략 시 'VWorld 토지 자료 <파일 이름>'. 입력이 여럿이면 뒤에 파일 이름을 붙인다)")
+    pig.add_argument("--license", help="이용허락 유형·출처 표시 문구 (확인한 값만)")
+    pig.add_argument("--data-home", type=Path, help="번들·백업을 둘 실데이터 홈. 생략 시 J5_DATA_HOME")
+    pig.add_argument("--no-backup", action="store_true", help="반영 전 백업을 만들지 않는다 (방금 따로 백업했을 때만)")
+    pig.add_argument("--json", action="store_true")
     pl = dsub.add_parser("parcels-load", help="필지 번들(.j5parcels.json, j5 parcels convert 출력)을 정본 parcels 에 반영한다 (PNU 기준, 새 도형 기준일이면 갱신)")
     pl.add_argument("bundle", type=Path)
     pl.add_argument("--json", action="store_true")
@@ -650,6 +659,13 @@ def _db_main(args) -> int:
                 c = changes_since(db, lawd, args.since_run, zones=tuple(args.zone) if args.zone else None)
                 sys.stdout.write(json.dumps(c, ensure_ascii=False, indent=2) + "\n" if args.json else changes_text(c))
                 return 0
+            if args.db_command == "parcels-ingest":
+                home = _data_home(args)
+                if home is None:
+                    return USAGE_ERROR
+                r = ingest_vworld(db, home, args.sources, geometry_version=args.geometry_version, source_name=args.source_name, license=args.license, backup=not args.no_backup)
+                sys.stdout.write(json.dumps(r.to_dict(), ensure_ascii=False, indent=2) + "\n" if args.json else r.to_text())
+                return 0 if r.outcome != "failed" else 1
             if args.db_command == "parcels-load":
                 if not args.bundle.is_file():
                     print(f"번들 파일이 없음: {args.bundle}", file=sys.stderr)
