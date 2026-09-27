@@ -31,6 +31,10 @@
 - `parcels_bundle.schema.json`: 필지 경계·지번 번들 `.j5parcels.json`(`j5 parcels convert` 출력, 폰 지도 입력). GeoJSON FeatureCollection 에 `j5parcels`·`data_mode(synthetic|real)`·`source`(자료명·파일·해시·좌표계·인코딩·도형 기준일·이용허락)·`clip`·`count`·`bbox`·`warnings` 를 더한 것. 필지 속성은 `pnu`(19자리)·`label`·`emd_code`·`emd_name`·`mountain`·`bon`·`bu`·`jimok`·`jibun_raw`·`jibun_mismatch`·`area_m2_geom`(도형면적, 공부면적 아님. 지리좌표 원본이면 null)·`area_missing_reason`·`bbox`. 상한 8,000 필지(ADR-13). 파생본(`j5 db project` 의 `parcels.geojson`)은 같은 형식에 필지마다 `geometry_version`·정본 연결 물건 `asset_ids` 를 더한다 (J5-013B-2).
 - `asset_components_input.schema.json`: 물건↔필지 구성 연결 입력(`j5 db parcels-link`), `parcels-suggest` 의 출력 형식. `asset_id`·`pnu`·적용 기간·근거(`manual | location_point`)·비고. PNU 는 정본 parcels 에 먼저 있어야 한다.
 
+## 파일 (j5basemap 1.0.0, J5-022, ADR-16)
+
+- `basemap_bundle.schema.json`: 배경 도형 번들 `.j5basemap.json`(`j5 basemap convert` 출력, 폰 지도 입력). GeoJSON FeatureCollection 에 `j5basemap`·`data_mode(synthetic|real)`·`sources`(층마다 자료명·파일·해시·좌표계·인코딩·도형 기준일·이용허락·도로명 필드)·`clip`·`count`·`counts`(층별)·`bbox`·`warnings` 를 더한 것. 층은 `building`(폴리곤)·`road_area`(실폭도로 폴리곤)·`road`(도로 중심선 폴리라인)이고 속성은 `layer`·`name`(도로 층만 도로명, 나머지는 null)·`bbox` 뿐이다. 건물명·주소·소유 정보는 넣지 않는다. 상한 20,000 도형. 정본이 아니며 물건·필지와 연결되지 않는다.
+
 ## 파일 (zone_rules, R3 J5-014B-3)
 
 - `zone_rules.schema.json`: 핵심·비교 범위 규칙 입력(`j5 db rt-zones apply`). `name`·`core`(법정동 이름 목록, 1개 이상)·`comparison`(비워도 됨)·`note`. 같은 법정동은 한 범위에만. 반영하면 새 규칙 버전이 되고 모든 거래를 다시 분류한다.
