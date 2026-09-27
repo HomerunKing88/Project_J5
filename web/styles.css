@@ -153,6 +153,22 @@ textarea { resize: vertical; }
 .badge.status-change_observed { background: var(--sel-soft); color: var(--sel); border-color: transparent; }
 .badge.status-no_change { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
 .badge.status-hard_to_confirm { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.badge.src-device { background: var(--surface-2); color: var(--ink); }
+.badge.src-pc { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+.badge.match-exact { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+.badge.match-prefix { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.badge.kind-transaction { background: var(--sel-soft); color: var(--sel); border-color: transparent; }
+.timeline { display: grid; gap: var(--space-4); }
+.timeline h3 { font-size: 1rem; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+.timeline ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+.timeline li { display: grid; grid-template-columns: 5.6em 1fr; gap: 2px var(--space-3); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: var(--space-2) var(--space-3); box-shadow: var(--shadow); }
+.timeline .tl-date { color: var(--muted); font-size: .86rem; font-variant-numeric: tabular-nums; padding-top: 2px; }
+.timeline .tl-head { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
+.timeline .tl-text { grid-column: 2; font-size: .95rem; overflow-wrap: anywhere; }
+.timeline .tl-where { grid-column: 2; color: var(--muted); font-size: .84rem; }
+.timeline li.superseded { opacity: .6; }
+.timeline li.superseded .tl-text { text-decoration: line-through; }
+ul.cards .meta button.quiet { min-height: var(--touch); padding-inline: 8px; margin-left: auto; }
 
 /* ---- 카드 목록 ---- */
 ul.cards { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--space-2); }
@@ -226,7 +242,8 @@ details.disclosure > :not(summary) { margin-top: var(--space-2); }
 .parcel-label { font-size: 11px; fill: var(--muted); text-anchor: middle; dominant-baseline: middle; paint-order: stroke; stroke: var(--surface-2); stroke-width: 2.5px; pointer-events: none; }
 .parcel-panel { border: 1px solid var(--line); border-left: 4px solid var(--sel); border-radius: 10px; padding: var(--space-3); display: grid; gap: 6px; background: var(--surface); }
 .selected-card { display: flex; align-items: center; gap: var(--space-3); background: var(--surface); border: 2px solid var(--sel); border-radius: var(--radius); padding: var(--space-3) var(--space-4); }
-.selected-card > button { white-space: nowrap; flex: none; }
+.selected-actions { display: grid; gap: 6px; flex: none; }
+.selected-actions button { white-space: nowrap; }
 .selected-body { flex: 1 1 auto; min-width: 0; display: grid; gap: 2px; }
 .selected-body strong { font-size: 1.05rem; overflow-wrap: anywhere; }
 .ext-links { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 4px 0 0; font-size: .85rem; color: var(--muted); }

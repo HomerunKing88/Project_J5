@@ -67,7 +67,10 @@
       <span id="map-selected-sub" class="help"></span>
       <p id="map-selected-ext" class="ext-links" hidden></p>
     </div>
-    <button id="map-selected-start" class="primary">기록 시작</button>
+    <div class="selected-actions">
+      <button id="map-selected-start" class="primary">기록 시작</button>
+      <button id="map-selected-history" class="secondary">이력</button>
+    </div>
   </div>
   <p id="map-note" class="muted" role="status"></p>
   <div id="parcel-panel" class="parcel-panel" hidden>
@@ -76,7 +79,7 @@
     <div class="muted" id="parcel-meta"></div>
     <p id="parcel-ext" class="ext-links" hidden></p>
     <ul id="parcel-assets" class="plain"></ul>
-    <div><button id="parcel-close" class="secondary">닫기</button></div>
+    <div class="row"><button id="parcel-history" class="primary">이 필지 이력</button> <button id="parcel-close" class="secondary">닫기</button></div>
   </div>
   <details class="disclosure">
     <summary>범례와 설명</summary>
@@ -148,6 +151,16 @@
     <h3 id="data-title">자료 관리</h3>
     <p class="help">자료를 바꿔도 이미 저장한 기록은 지워지지 않습니다. 파일은 이 기기에서만 읽고 어디로도 보내지 않습니다.</p>
     <div class="stack">
+      <div>
+        <div class="field-name">PC 자료 파일 (한 번에 가져오기)</div>
+        <p id="view-status" class="muted"></p>
+        <div class="row">
+          <label class="file-btn"><span>PC 자료 파일 선택 (.j5view.zip)</span><input id="view-file" type="file" accept="application/zip,.zip"></label>
+          <button id="clear-view" class="danger">PC 기록·거래 지우기</button>
+        </div>
+        <p id="view-note" class="muted" role="status"></p>
+        <p class="help">PC 의 <code>j5 db project-copy</code> 로 만든 파일입니다. 물건 목록·필지 경계·정본 기록·거래를 한 번에 넣습니다. 사진은 넣지 않습니다. 이 기기의 기록은 지워지지 않으며, 파일이 최신인지는 PC 에서 확인합니다.</p>
+      </div>
       <div>
         <div class="field-name">물건 목록</div>
         <p id="seed-status" class="muted"></p>
@@ -255,6 +268,30 @@
         <button id="done-list" class="secondary">목록으로</button>
         <button id="done-records" class="secondary">기록 보기</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- 이력 화면 (J5-023): 물건·필지의 연도별 거래·기록 -->
+<div id="sec-history" class="sheet" role="dialog" aria-modal="true" aria-labelledby="history-title" hidden>
+  <div class="sheet-inner">
+    <div class="sheet-head">
+      <button id="history-close" class="icon" aria-label="닫기">✕</button>
+      <div class="sheet-title">
+        <h2 id="history-title"></h2>
+        <span id="history-sub" class="help"></span>
+      </div>
+    </div>
+    <p id="history-source" class="help"></p>
+    <div id="history-list" class="timeline"></div>
+    <p id="history-empty" class="empty" hidden>아직 기록이 없습니다. 이 기기의 관측은 저장하면 바로 보이고, PC 의 정본 기록·거래는 설정의 자료 관리에서 PC 자료 파일을 가져오면 보입니다.</p>
+    <details class="disclosure">
+      <summary>표시 기준</summary>
+      <p class="help"><span class="badge src-device">이 기기</span> 이 폰에 저장된 관측. <span class="badge src-pc">정본</span> PC 자료 파일에 든 기록·거래(가져온 시점 기준). <span class="badge match-exact">이 필지</span> 지번이 일치하는 거래. <span class="badge match-prefix">번지대</span> 부번이 가려진 거래로 이 필지의 것인지 확정할 수 없습니다. 동 전체가 가려진 거래는 어느 필지에도 표시하지 않습니다.</p>
+    </details>
+    <div class="row sheet-actions">
+      <button id="history-record" class="primary big" hidden>이 물건 기록 시작</button>
+      <button id="history-close-2" class="secondary">닫기</button>
     </div>
   </div>
 </div>

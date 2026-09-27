@@ -26,7 +26,7 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
       const origAdd = IDBObjectStore.prototype.add;
       IDBObjectStore.prototype.add = function (v, k) { if (this.name === 'events' && window.__failSave) throw new DOMException('저장 공간 부족 (e2e)', 'QuotaExceededError'); return origAdd.call(this, v, k); };` });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor(`${txt("status-line")}.includes('앱 0.2.2')`);
+    await cdp.waitFor(`${txt("status-line")}.includes('앱 0.2.3')`);
 
     // 1. 처음 실행: 오늘 화면, 빈 상태 안내와 두 가지 다음 행동, 기술 용어 없음
     assert.ok(await cdp.eval(visible("view-home")) && await cdp.eval("document.getElementById('view-map').hidden"), "첫 화면은 오늘");
@@ -42,7 +42,7 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     await cdp.eval("document.getElementById('study-id').value = 'ux-study'; document.getElementById('save-settings').click(); 'ok'");
     await cdp.waitFor(`${txt("settings-note")} === '저장됨'`);
     await cdp.eval("document.getElementById('home-load-synthetic').click(); 'ok'");
-    await cdp.waitFor("document.querySelectorAll('#asset-list li button').length === 5");
+    await cdp.waitFor("document.querySelectorAll('#asset-list li > button').length === 5");
     // 2. 대상 카드: 이름·위치 요약·기록 없음 표시, 좌표 숫자 없음, 통계·주요 버튼
     assert.equal(await cdp.eval("document.querySelector('#asset-list li .title').textContent"), "가상 물건 1");
     assert.match(await cdp.eval("document.querySelector('#asset-list li .meta').textContent"), /이 기기에 기록 없음/);
@@ -151,7 +151,7 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     assert.match(await cdp.eval(txt("map-empty")), /지도를 그릴 수 없습니다/);
     await cdp.eval("document.getElementById('map-go-list').click(); 'ok'");
     await cdp.waitFor(visible("view-home"));
-    await cdp.eval("document.querySelectorAll('#asset-list li button')[2].click(); 'ok'");
+    await cdp.eval("document.querySelectorAll('#asset-list li > button')[2].click(); 'ok'");
     await cdp.waitFor(`${visible("sec-observe")} && ${txt("target-label")} === '가상 물건 3'`);
     await cdp.eval("document.getElementById('cancel-observation').click(); 'ok'");
     await cdp.waitFor("document.getElementById('sec-observe').hidden");
@@ -181,14 +181,14 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     const seed2 = join(tmp, "seed2.json");
     writeFileSync(seed2, JSON.stringify(JSON.parse(readFileSync(join(WEB, "data/assets.seed.synthetic.json"), "utf8")).slice(3)));
     await cdp.setFiles("#seed-file", [seed2]);
-    await cdp.waitFor("document.querySelectorAll('#asset-list li button').length === 2");
+    await cdp.waitFor("document.querySelectorAll('#asset-list li > button').length === 2");
     assert.ok(await cdp.eval("document.getElementById('map-selected').hidden"), "사라진 물건의 선택 카드는 닫힌다");
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.pt.sel').length"), 0);
     // 14. 접근성 속성: 입력마다 label, 아이콘 버튼 aria-label, 상태 메시지 live, 제목 순서
     const a11y = await cdp.eval(`(() => {
       const unlabeled = Array.from(document.querySelectorAll('input:not([type=hidden]), select, textarea')).filter(i => !(i.labels && i.labels.length) && !i.getAttribute('aria-label') && !i.getAttribute('aria-labelledby')).map(i => i.id || i.name);
       const iconNoLabel = Array.from(document.querySelectorAll('button.icon')).filter(b => !b.getAttribute('aria-label')).map(b => b.id);
-      const live = ['observe-note', 'export-note', 'settings-note', 'seed-note', 'parcels-note', 'map-note'].filter(id => !document.getElementById(id).getAttribute('role') && !document.getElementById(id).getAttribute('aria-live'));
+      const live = ['observe-note', 'export-note', 'settings-note', 'seed-note', 'parcels-note', 'basemap-note', 'view-note', 'map-note'].filter(id => !document.getElementById(id).getAttribute('role') && !document.getElementById(id).getAttribute('aria-live'));
       const heads = Array.from(document.querySelectorAll('h1, h2, h3')).map(h => Number(h.tagName[1]));
       let bad = false; for (let i = 1; i < heads.length; i++) if (heads[i] - heads[i - 1] > 1) bad = true;
       return { unlabeled, iconNoLabel, live, headingJump: bad, navLabel: document.querySelector('nav').getAttribute('aria-label') };

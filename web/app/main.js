@@ -13,11 +13,13 @@ import { migrationReadiness, migrationText, persistenceText } from "./migrate.js
 import { createNavigator, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, MODE_LABEL, MODE_SHORT } from "./ui.js";
 import { externalMapLinks, bboxCenter, LINK_ATTRS } from "./extmap.js";
 import { validateBasemap, LAYERS as BASEMAP_LAYERS, LAYER_LABEL as BASEMAP_LAYER_LABEL } from "./basemap.js";
+import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
+import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.2";
+export const APP_VERSION = "0.2.3";
 const $ = (id) => document.getElementById(id);
-const state = { store: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, seedLoadedAt: null, basemapRec: null, basemapCount: 0,
+const state = { store: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, seedLoadedAt: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null,
                 nav: null, returnFocus: null, mapSelected: null };
 
 function text(el, value, cls) {
@@ -134,6 +136,7 @@ async function renderAssets() {
     } else {
       meta.append(el("span", { text: "이 기기에 기록 없음" }));
     }
+    meta.append(el("button", { class: "quiet", text: "이력", onclick: () => openAssetHistory(a) }));
     const li = el("li", { class: state.mapSelected === a.asset_id ? "selected" : "" },
       el("span", { class: "title", text: a.label }),
       el("button", { text: "기록하기", onclick: () => startObservation(a) }),
@@ -228,6 +231,131 @@ async function clearParcels() {
   applyParcels(null);
 }
 
+// ---- PC 자료 파일 (조회 파생본 .j5view.zip, J5-023, ADR-17) ----
+// 물건 목록·필지·정본 기록·거래를 한 번에 넣는다. 사진은 넣지 않는다. 이 기기의 관측·사진은 건드리지 않는다. 최신 여부는 파일만으로 모른다.
+async function loadViewFile(input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  input.value = "";
+  if (file.size > VIEW_LIMITS.file) return text($("view-note"), `파일이 너무 큽니다 (${fmtBytes(file.size)}, 한도 ${fmtBytes(VIEW_LIMITS.file)}). PC 에서 사진 없이 다시 만듭니다`, "bad");
+  text($("view-note"), "읽는 중…", "muted");
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const { manifest, files, photosSkipped } = await readViewZip(bytes);
+    const [studyId, dataMode] = await Promise.all([state.store.getMeta("study_id"), state.store.getMeta("data_mode")]);
+    const errs = validateViewManifest(manifest, { studyId: studyId || null, dataMode: dataMode ?? null });
+    if (errs.length) return text($("view-note"), "PC 자료 파일 오류: " + errs.slice(0, 5).join("; "), "bad");
+    const seed = JSON.parse(decodeText(files.get("assets.seed.json")));
+    const seedErrs = validateSeed(seed);
+    if (seedErrs.length) return text($("view-note"), "파일 안 물건 목록 오류: " + seedErrs.slice(0, 5).join("; "), "bad");
+    const parcels = files.has("parcels.geojson") ? JSON.parse(decodeText(files.get("parcels.geojson"))) : null;
+    if (parcels) {
+      const pe = validateParcels(parcels);
+      if (pe.length) return text($("view-note"), "파일 안 필지 오류: " + pe.slice(0, 5).join("; "), "bad");
+    }
+    const records = parseRecordsJsonl(decodeText(files.get("records.jsonl")));
+    const transactions = files.has("transactions.json") ? JSON.parse(decodeText(files.get("transactions.json"))) : null;
+    if (transactions) {
+      const te = validateTransactionsDoc(transactions);
+      if (te.length) return text($("view-note"), "파일 안 거래 목록 오류: " + te.slice(0, 5).join("; "), "bad");
+    }
+    // 설정이 비어 있으면 파일의 작업 공간·자료 종류를 설정으로 쓴다 (다르면 위에서 거절됨)
+    if (!studyId) {
+      await state.store.setMeta("study_id", manifest.study_id);
+      await state.store.setMeta("data_mode", manifest.data_mode);
+      await loadSettings();
+    }
+    const source = "view:" + file.name;
+    await state.store.replaceAssets(seed, source);
+    if (parcels) await state.store.replaceParcels(parcels, source);
+    const { files: _f, ...manifestMeta } = manifest;
+    await state.store.replaceView({ manifest: manifestMeta, records, transactions, source, photos_skipped: photosSkipped });
+    state.view = await state.store.getView();
+    if (parcels) applyParcels(await state.store.getParcels());
+    await renderAssets();
+    await renderRecords();
+    renderViewStatus();
+    const sm = viewSummary(state.view);
+    text($("view-note"), `PC 자료를 가져왔습니다: 정본 v${sm.version} · 물건 ${seed.length}개 · 필지 ${parcels ? parcels.count : 0}개 · 정본 기록 ${records.length}건 · 거래 ${sm.transactions}건` +
+      (photosSkipped ? ` · 사진 ${photosSkipped}장은 넣지 않음` : "") + ". 이 기기의 기록은 그대로입니다.", "ok");
+  } catch (e) {
+    text($("view-note"), (e instanceof UnzipError ? `PC 자료 파일을 읽지 못함 [${e.code}]: ` : "PC 자료 파일을 읽지 못함: ") + (e?.message || e), "bad");
+  }
+}
+
+function renderViewStatus() {
+  const sm = viewSummary(state.view);
+  if (!sm) return text($("view-status"), "가져온 PC 자료가 없습니다. 정본 기록·거래 이력은 PC 자료 파일을 넣으면 보입니다.");
+  const gen = sm.generatedAt ? shortWhen(sm.generatedAt) ?? sm.generatedAt : "?";
+  text($("view-status"), `정본 v${sm.version} (PC 생성 ${gen}) · 정본 기록 ${sm.records}건 · 거래 ${sm.transactions}건 · 가져오기 ${shortWhen(sm.loadedAt) ?? "?"} · 더 새 정본이 있는지는 PC 에서 확인`);
+}
+
+async function clearView() {
+  await state.store.clearView();
+  state.view = null;
+  renderViewStatus();
+  text($("view-note"), "PC 기록·거래를 지웠습니다. 물건 목록·필지·이 기기의 기록은 그대로입니다.", "muted");
+}
+
+function historyData() {
+  return { events: state.events, records: state.view?.records ?? [], transactions: state.view?.transactions?.transactions ?? [] };
+}
+
+function historyItemNode(it) {
+  const head = el("span", { class: "tl-head" }, el("span", { class: `badge ${it.kind === "transaction" ? "kind-transaction" : ""}`, text: it.kindLabel }));
+  if (it.subject) head.append(el("strong", { text: it.subject }));
+  if (it.kind === "transaction") {
+    if (it.match === "exact") head.append(el("span", { class: "badge match-exact", text: "이 필지" }));
+    else if (it.match === "prefix") head.append(el("span", { class: "badge match-prefix", text: "번지대 (필지 미확정)" }));
+    else if (it.match === "linked") head.append(el("span", { class: "badge match-exact", text: LINK_LABEL[it.link] ?? it.link }));
+    if (it.masked && it.match !== "prefix") head.append(el("span", { class: "badge", text: "지번 일부 가려짐" }));
+  }
+  head.append(el("span", { class: `badge ${it.source === "device" ? "src-device" : "src-pc"}`, text: it.source === "device" ? (it.deviceStatus === "exported" ? "이 기기 · 내보냄" : "이 기기") : "정본" }));
+  if (it.superseded) head.append(el("span", { class: "badge", text: "정정으로 대체됨" }));
+  const li = el("li", { class: it.superseded ? "superseded" : "" }, el("span", { class: "tl-date", text: it.date || "날짜 미상" }), head, el("span", { class: "tl-text", text: it.text || "(내용 없음)" }));
+  if (it.where) li.append(el("span", { class: "tl-where", text: it.where }));
+  return li;
+}
+
+function openHistory({ title, sub, items, asset = null }) {
+  if ($("sec-history").hidden) state.historyReturnFocus = document.activeElement;
+  state.historyAsset = asset;
+  $("history-title").textContent = title;
+  $("history-sub").textContent = sub;
+  const sm = viewSummary(state.view);
+  text($("history-source"), sm ? `PC 자료: 정본 v${sm.version} (PC 생성 ${shortWhen(sm.generatedAt) ?? sm.generatedAt}) 기준. 더 새 정본이 있는지는 PC 에서 확인합니다.` : "PC 자료 파일을 아직 넣지 않아 이 기기의 관측만 보입니다.", "help");
+  const groups = groupByYear(items);
+  $("history-list").replaceChildren(...groups.map((g) => el("section", {}, el("h3", { text: g.year }), el("ul", {}, ...g.items.map(historyItemNode)))));
+  $("history-empty").hidden = groups.length > 0;
+  $("history-record").hidden = !asset;
+  $("sec-history").hidden = false;
+  $("history-title").setAttribute("tabindex", "-1");
+  $("history-title").focus();
+}
+
+function openAssetHistory(asset) {
+  const items = assetHistory(asset.asset_id, historyData());
+  openHistory({ title: asset.label, sub: `${assetSub(asset)} · 기록 ${items.length}건`, items, asset });
+}
+
+function openParcelHistory(feature, assetsInside) {
+  const p = feature.properties;
+  const items = parcelHistory(feature, assetsInside, historyData());
+  openHistory({ title: `${parcelTitle(p)} 필지`, sub: `필지 번호 ${feature.id} · 안의 물건 ${assetsInside.length}개 · 기록·거래 ${items.length}건`, items, asset: null });
+}
+
+function closeHistory() {
+  $("sec-history").hidden = true;
+  const back = state.historyReturnFocus;
+  state.historyReturnFocus = null;
+  const usable = back && back !== document.body && back.isConnected && !back.hidden && !back.closest("[hidden]") && typeof back.focus === "function";
+  if (usable) back.focus();
+  else {
+    const h = document.querySelector("section.view:not([hidden]) h2");
+    if (h) { h.setAttribute("tabindex", "-1"); h.focus(); }
+  }
+}
+
 // ---- 배경 도형 (J5-022, ADR-16) ----
 // 배경은 지도의 참고 층이다. 없거나 실패해도 목록·기록·내보내기·필지는 그대로 동작한다. 기록과 연결되지 않는다.
 async function loadBasemapObject(doc, source) {
@@ -298,6 +426,7 @@ function showParcel(feature) {
   )));
   if (!linksValid && (p.asset_ids ?? []).length) $("parcel-assets").append(el("li", { class: "warn", text: `정본 연결 ${p.asset_ids.length}건은 시드가 바뀐 뒤 확인되지 않아 표시하지 않는다. 같은 파생본의 시드와 필지 파일을 함께 다시 불러온다.` }));
   if (!inside.length) $("parcel-assets").append(el("li", { class: "empty", text: "이 필지에 연결되거나 위치점이 들어 있는 물건이 없다. PC 에서 물건 목록·연결을 넣은 뒤 다시 불러온다." }));
+  $("parcel-history").onclick = () => openParcelHistory(feature, inside.map((x) => x.asset));
   $("parcel-panel").hidden = false;
 }
 
@@ -355,6 +484,7 @@ function selectOnMap(asset, { focus = true } = {}) {
   renderExtLinks($("map-selected-ext"), asset.location_point);
   $("map-selected").hidden = false;
   $("map-selected-start").onclick = () => startObservation(asset);
+  $("map-selected-history").onclick = () => openAssetHistory(asset);
   for (const li of $("asset-list").children) li.classList.toggle("selected", li.dataset.assetId === asset.asset_id);
   if (focus) $("map-selected-start").focus();
 }
@@ -363,6 +493,7 @@ function clearMapSelection() {
   state.mapSelected = null;
   $("map-selected").hidden = true;
   $("map-selected-start").onclick = null;
+  $("map-selected-history").onclick = null;
   renderExtLinks($("map-selected-ext"), null);
   mapCall((m) => m.select(null));
   for (const li of $("asset-list").children) li.classList.remove("selected");
@@ -816,6 +947,11 @@ async function main() {
   $("load-synthetic-basemap").addEventListener("click", loadSyntheticBasemap);
   $("basemap-file").addEventListener("change", (e) => loadBasemapFile(e.target));
   $("clear-basemap").addEventListener("click", clearBasemap);
+  $("view-file").addEventListener("change", (e) => loadViewFile(e.target));
+  $("clear-view").addEventListener("click", clearView);
+  $("history-close").addEventListener("click", closeHistory);
+  $("history-close-2").addEventListener("click", closeHistory);
+  $("history-record").addEventListener("click", () => { const a = state.historyAsset; closeHistory(); if (a) startObservation(a); });
   $("parcel-close").addEventListener("click", closeParcelPanel);
   $("photos").addEventListener("change", (e) => addPhotos(e.target));
   $("save-observation").addEventListener("click", saveObservation);
@@ -823,7 +959,11 @@ async function main() {
   $("cancel-observation-2").addEventListener("click", () => closeObservation());
   $("done-list").addEventListener("click", () => closeObservation({ toView: "home" }));
   $("done-records").addEventListener("click", () => closeObservation({ toView: "records" }));
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("sec-observe").hidden) closeObservation(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (!$("sec-history").hidden) closeHistory();
+    else if (!$("sec-observe").hidden) closeObservation();
+  });
   $("export-prepare").addEventListener("click", () => { state.export = null; exportPrepare(); });
   $("export-save").addEventListener("click", exportSave);
   $("export-confirm").addEventListener("click", exportConfirm);
@@ -840,6 +980,12 @@ async function main() {
     parcelsNote(rec ?? null);
   } catch (e) {
     text($("parcels-note"), "저장된 필지를 읽지 못함: " + (e?.message || e), "bad");
+  }
+  try {
+    state.view = (await state.store.getView()) ?? null;
+    renderViewStatus();
+  } catch (e) {
+    text($("view-note"), "저장된 PC 자료를 읽지 못함: " + (e?.message || e), "bad");
   }
   try {
     const rec = await state.store.getBasemap();
