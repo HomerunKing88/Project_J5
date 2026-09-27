@@ -233,7 +233,7 @@ def test_cli_reports_vworld_errors(tmp_path, vw_zip, capsys):
 
 def test_schema_15_and_status_counts(db):
     st = db.status()
-    assert st["db_schema_version"] == S.DB_SCHEMA_VERSION == 15 and st["counts"]["parcel_attributes"] == 0
+    assert st["db_schema_version"] == S.DB_SCHEMA_VERSION >= 15 and st["counts"]["parcel_attributes"] == 0
     cols = [r[1] for r in db.conn.execute("PRAGMA table_info(parcel_attributes)")]
     assert "use_zone_1" in cols and "official_land_price_krw_m2" in cols and not any(c.startswith(("agrde", "resdnc")) for c in cols)
     assert db.conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1

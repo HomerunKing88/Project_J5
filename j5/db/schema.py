@@ -783,6 +783,42 @@ CREATE TABLE parcel_attributes (
 CREATE INDEX parcel_attributes_by_zone ON parcel_attributes (use_zone_1);
 """
 
+# J5-026 필지 속성 스냅샷 (ADR-19 확장). parcel_attributes 는 "현재 값" 한 행이고, 이 표는 자료 종류(kind)·기준일(as_of)마다 그때 읽은 값을 그대로 쌓는다.
+# 연도별 공시지가·소유 변동·용도지역 변경을 정본에서 재구성하기 위한 것이며, 같은 (필지, 종류, 기준일)은 한 행이다(같은 날짜의 재다운로드는 값을 바꾼다).
+# 기존 parcel_attributes 행은 출처 목록(sources_json)에 든 종류만 첫 스냅샷으로 옮긴다.
+ATTR_KINDS = ("land_feature", "land_plan", "land_ownership")
+_SQL_UUID4 = ("lower(printf('%s-%s-4%s-%s%s-%s', hex(randomblob(4)), hex(randomblob(2)), substr(hex(randomblob(2)), 2), "
+              "substr('89ab', abs(random()) % 4 + 1, 1), substr(hex(randomblob(2)), 2), hex(randomblob(6))))")
+_SNAPSHOT_VALUES = {
+    "land_feature": ("json_object('jimok_name', jimok_name, 'registered_area_m2', registered_area_m2, 'official_land_price_krw_m2', official_land_price_krw_m2,"
+                     " 'price_base_year', price_base_year, 'price_base_month', price_base_month, 'use_zone_1', use_zone_1, 'use_zone_2', use_zone_2,"
+                     " 'land_use_situation', land_use_situation, 'road_side', road_side, 'terrain_height', terrain_height, 'terrain_form', terrain_form)"),
+    "land_plan": "json_object('plan_zones', json(plan_zones_json), 'plan_zones_truncated', json(CASE WHEN plan_zones_truncated THEN 'true' ELSE 'false' END))",
+    "land_ownership": ("json_object('ownership_kind_code', ownership_kind_code, 'ownership_kind', ownership_kind, 'co_owner_count', co_owner_count,"
+                       " 'ownership_changed_on', ownership_changed_on, 'ownership_change_cause_code', ownership_change_cause_code, 'national_institution_code', national_institution_code)"),
+}
+MIGRATION_0016 = f"""
+CREATE TABLE parcel_attribute_snapshots (
+  snapshot_id        TEXT NOT NULL PRIMARY KEY CHECK (snapshot_id GLOB '{UUID_GLOB}'),
+  parcel_id          TEXT NOT NULL REFERENCES parcels (parcel_id),
+  kind               TEXT NOT NULL CHECK (kind {_in(ATTR_KINDS)}),
+  as_of              TEXT NOT NULL CHECK (as_of GLOB '{DATE_GLOB}'),
+  values_json        TEXT NOT NULL CHECK (json_valid(values_json) AND json_type(values_json) = 'object'),
+  source_json        TEXT CHECK (source_json IS NULL OR (json_valid(source_json) AND json_type(source_json) = 'object')),
+  source_document_id TEXT REFERENCES source_documents (document_id),
+  recorded_at        TEXT NOT NULL CHECK (recorded_at GLOB '{UTC_GLOB}'),
+  updated_at         TEXT NOT NULL CHECK (updated_at GLOB '{UTC_GLOB}'),
+  UNIQUE (parcel_id, kind, as_of)
+) STRICT;
+CREATE INDEX parcel_attribute_snapshots_by_parcel ON parcel_attribute_snapshots (parcel_id, kind, as_of);
+""" + "".join(
+    f"""INSERT INTO parcel_attribute_snapshots (snapshot_id, parcel_id, kind, as_of, values_json, source_json, source_document_id, recorded_at, updated_at)
+SELECT {_SQL_UUID4}, parcel_id, '{kind}', as_of, {expr},
+       (SELECT value FROM json_each(sources_json) WHERE json_extract(value, '$.kind') = '{kind}' LIMIT 1), source_document_id, recorded_at, updated_at
+FROM parcel_attributes WHERE EXISTS (SELECT 1 FROM json_each(sources_json) WHERE json_extract(value, '$.kind') = '{kind}');
+"""
+    for kind, expr in _SNAPSHOT_VALUES.items())
+
 # (버전, 이름, SQL). 새 릴리스의 테이블은 새 항목으로 추가하고 기존 항목은 고치지 않는다.
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "r1b_minimum", MIGRATION_0001),
@@ -800,6 +836,7 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (13, "r7_acquisition_review", MIGRATION_0013),
     (14, "r7_stage_rechecks", MIGRATION_0014),
     (15, "r8_parcel_attributes", MIGRATION_0015),
+    (16, "r8_parcel_attribute_snapshots", MIGRATION_0016),
 )
 # 표 재작성이 필요한 마이그레이션: 외래키 검사를 끈 채 한 트랜잭션으로 실행하고 foreign_key_check 가 비어야 커밋한다 (store._migrate).
 FK_OFF_MIGRATIONS = frozenset({9, 12, 13})

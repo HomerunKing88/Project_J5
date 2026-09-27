@@ -503,6 +503,14 @@
             },
             "attrs": {
               "$ref": "#/$defs/attrs"
+            },
+            "attrs_history": {
+              "description": "J5-026: 속성 변화 이력 (파생본에만, 오래된 것부터). 없으면 생략",
+              "type": "array",
+              "maxItems": 200,
+              "items": {
+                "$ref": "#/$defs/attrs_change"
+              }
             }
           }
         }
@@ -681,6 +689,67 @@
           "description": "속성 기준일 (파생본에만: 정본 parcel_attributes.as_of). 변환 번들에는 없고 번들의 도형 기준일이 기준일이다",
           "type": "string",
           "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        }
+      }
+    },
+    "attrs_change": {
+      "description": "J5-026: 필지 속성이 바뀐 지점 (정본 parcel_attribute_snapshots 에서 계산). first 가 true 면 그 자료 종류의 처음 확인이며 from 은 null",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "as_of",
+        "kind",
+        "first",
+        "changes"
+      ],
+      "properties": {
+        "as_of": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "land_feature",
+            "land_plan",
+            "land_ownership"
+          ]
+        },
+        "first": {
+          "type": "boolean"
+        },
+        "changes": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 20,
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "from",
+              "to"
+            ],
+            "properties": {
+              "from": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "array",
+                  "null"
+                ]
+              },
+              "to": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "array",
+                  "null"
+                ]
+              }
+            }
+          }
         }
       }
     }
