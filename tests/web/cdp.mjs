@@ -25,10 +25,11 @@ export function findChrome() {
   return null;
 }
 
-export function serve(dir) {
+export function serve(dir, extra = null) {
   return new Promise((res) => {
     const srv = createServer((req, resp) => {
       const path = decodeURIComponent(new URL(req.url, "http://x").pathname);
+      if (extra) { const r = extra(path); if (r) { resp.writeHead(r.status ?? 200, { "content-type": r.type, "cache-control": "no-store" }); return resp.end(r.body); } }
       const file = join(dir, path === "/" ? "index.html" : path);
       if (!file.startsWith(dir) || !existsSync(file)) { resp.writeHead(404); return resp.end(); }
       resp.writeHead(200, { "content-type": MIME[extname(file)] || "application/octet-stream", "cache-control": "no-store" });

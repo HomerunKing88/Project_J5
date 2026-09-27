@@ -13,13 +13,14 @@ import { migrationReadiness, migrationText, persistenceText } from "./migrate.js
 import { createNavigator, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, MODE_LABEL, MODE_SHORT } from "./ui.js";
 import { externalMapLinks, bboxCenter, LINK_ATTRS } from "./extmap.js";
 import { validateBasemap, LAYERS as BASEMAP_LAYERS, LAYER_LABEL as BASEMAP_LAYER_LABEL } from "./basemap.js";
+import { PROVIDERS, resolveTileConfig, maskUrl, prefetchPlan, padBbox, tileUrl, TILE_CACHE, PREFETCH_ZOOMS } from "./tiles.js";
 import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
 import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.3";
+export const APP_VERSION = "0.2.4";
 const $ = (id) => document.getElementById(id);
-const state = { store: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, seedLoadedAt: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null,
+const state = { store: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, seedLoadedAt: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
                 nav: null, returnFocus: null, mapSelected: null };
 
 function text(el, value, cls) {
@@ -60,6 +61,121 @@ async function loadSettings() {
   $("data-mode").value = dataMode ?? "synthetic";
   $("route-version").value = route ?? "";
   renderModeBadge(dataMode ?? "synthetic");
+}
+
+// ---- 배경 지도 타일 (J5-024, ADR-18) ----
+// 사용자가 켠 제공자에서만 타일을 받는다. 키는 IndexedDB meta 에만 두고 화면에는 가려서 보인다. 실패해도 위치점·필지·도로 배경은 그대로다.
+async function loadTileSettings() {
+  const [provider, key, template] = await Promise.all([state.store.getMeta("tiles_provider"), state.store.getMeta("tiles_key"), state.store.getMeta("tiles_template")]);
+  $("tiles-provider").value = provider ?? "";
+  $("tiles-key").value = key ?? "";
+  $("tiles-template").value = template ?? "";
+  updateTileFields();
+  applyTileSettings({ provider: provider ?? "", key: key ?? "", template: template ?? "" }, { quiet: true });
+  renderTileCacheStatus();
+}
+
+function updateTileFields() {
+  const p = $("tiles-provider").value;
+  $("tiles-key-field").hidden = !(PROVIDERS[p]?.needsKey);
+  $("tiles-template-field").hidden = p !== "custom";
+}
+
+function applyTileSettings({ provider, key, template }, { quiet = false } = {}) {
+  if (!provider) {
+    state.tiles = null;
+    mapCall((m) => m.setTiles(null));
+    if (!quiet) text($("tiles-note"), "배경 타일을 끄고 저장했습니다.", "ok");
+    return true;
+  }
+  const cfg = resolveTileConfig({ provider, key, template });
+  if (cfg.errors) {
+    state.tiles = null;
+    mapCall((m) => m.setTiles(null));
+    text($("tiles-note"), "배경 지도 설정 오류: " + cfg.errors.join("; "), "bad");
+    return false;
+  }
+  state.tiles = cfg;
+  mapCall((m) => m.setTiles({ url: cfg.url, minZoom: cfg.minZoom, maxZoom: cfg.maxZoom, attribution: cfg.attribution }));
+  if (!quiet) text($("tiles-note"), `저장했습니다: ${PROVIDERS[provider].name} · ${maskUrl(cfg.url, key)}` + (PROVIDERS[provider].verified ? "" : " · 주소 형식은 공식 문서로 미확인 (안 보이면 제공자 문서의 형식으로 직접 입력)"), "ok");
+  return true;
+}
+
+async function saveTileSettings() {
+  const provider = $("tiles-provider").value, key = $("tiles-key").value.trim(), template = $("tiles-template").value.trim();
+  if (!applyTileSettings({ provider, key, template })) return;
+  mapNote(state.lastMapCounts);
+  await state.store.setMeta("tiles_provider", provider || null);
+  await state.store.setMeta("tiles_key", key || null);
+  await state.store.setMeta("tiles_template", template || null);
+  renderTileCacheStatus();
+}
+
+function onTileStatus(st) {
+  if (st.failed && st.failed % 8 === 1) mapNote(state.lastMapCounts);
+}
+
+async function tileCacheCount() {
+  try {
+    if (typeof caches === "undefined") return null;
+    const c = await caches.open(TILE_CACHE);
+    return (await c.keys()).length;
+  } catch { return null; }
+}
+
+async function renderTileCacheStatus() {
+  const n = await tileCacheCount();
+  const sw = "serviceWorker" in navigator && window.isSecureContext;
+  text($("tiles-cache-status"), n === null ? "이 브라우저에서는 타일 저장 수를 셀 수 없습니다." : `${n}장 저장됨` + (sw ? "" : " · 저장은 보안 컨텍스트(https 또는 localhost)에서만 됩니다. 지금은 받아도 저장되지 않습니다."));
+}
+
+function prefetchBbox() {
+  const pts = [];
+  for (const a of state.assets) if (Array.isArray(a.location_point) && a.location_point.length === 2) pts.push(a.location_point);
+  const bb = state.parcels?.bbox;
+  if (bb) pts.push([bb[0], bb[1]], [bb[2], bb[3]]);
+  if (!pts.length) return null;
+  const lons = pts.map((p) => p[0]), lats = pts.map((p) => p[1]);
+  return padBbox([Math.min(...lons), Math.min(...lats), Math.max(...lons), Math.max(...lats)], 300);
+}
+
+async function prefetchTiles() {
+  if (state.prefetching) return;
+  if (!state.tiles) return text($("tiles-prefetch-note"), "먼저 배경 지도를 켜고 저장합니다.", "warn");
+  if (!navigator.onLine) return text($("tiles-prefetch-note"), "오프라인이라 받을 수 없습니다.", "warn");
+  const bbox = prefetchBbox();
+  if (!bbox) return text($("tiles-prefetch-note"), "범위를 정할 대상·필지가 없습니다. 물건 목록이나 필지를 먼저 넣습니다.", "warn");
+  const plan = prefetchPlan(bbox, { minZoom: Math.max(PREFETCH_ZOOMS.min, state.tiles.minZoom), maxZoom: Math.min(PREFETCH_ZOOMS.max, state.tiles.maxZoom) });
+  if (plan.tooMany) return text($("tiles-prefetch-note"), `범위가 넓어 타일이 ${plan.count}장을 넘습니다 (한도 ${plan.cap}). 대상 범위를 좁힙니다.`, "warn");
+  state.prefetching = true;
+  $("tiles-prefetch").disabled = true;
+  let done = 0, failed = 0;
+  const load = (t) => new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => { done += 1; resolve(); };
+    img.onerror = () => { failed += 1; resolve(); };
+    img.src = tileUrl(state.tiles.url, t.z, t.x, t.y);
+  });
+  try {
+    const queue = plan.tiles.slice();
+    const workers = Array.from({ length: 4 }, async () => { while (queue.length) { await load(queue.shift()); if ((done + failed) % 25 === 0) text($("tiles-prefetch-note"), `받는 중 ${done + failed}/${plan.count}`, "muted"); } });
+    await Promise.all(workers);
+    text($("tiles-prefetch-note"), `받기 끝: ${done}장 성공 · ${failed}장 실패 (확대 ${plan.tiles[0]?.z ?? "?"}~${plan.tiles[plan.tiles.length - 1]?.z ?? "?"} 단계, 범위 여유 300 m)` + (failed ? ". 실패한 타일은 다음에 다시 받습니다" : ""), failed ? "warn" : "ok");
+  } finally {
+    state.prefetching = false;
+    $("tiles-prefetch").disabled = false;
+    renderTileCacheStatus();
+  }
+}
+
+async function clearTileCache() {
+  try {
+    if (typeof caches !== "undefined") await caches.delete(TILE_CACHE);
+    text($("tiles-prefetch-note"), "저장된 타일을 지웠습니다. 다음에 볼 때 다시 받습니다.", "muted");
+  } catch (e) {
+    text($("tiles-prefetch-note"), "지우지 못함: " + (e?.message || e), "bad");
+  }
+  renderTileCacheStatus();
 }
 
 function renderModeBadge(mode) {
@@ -442,7 +558,7 @@ function closeParcelPanel() {
 async function initMap() {
   try {
     const { createMap } = await import("./map.js");
-    state.map = createMap($("map-svg"), { onSelect: selectOnMap, onSelectParcel: showParcel });
+    state.map = createMap($("map-svg"), { onSelect: selectOnMap, onSelectParcel: showParcel, onTileStatus });
     $("map-zoom-in").addEventListener("click", () => mapCall((m) => m.zoomBy(2)));
     $("map-zoom-out").addEventListener("click", () => mapCall((m) => m.zoomBy(0.5)));
     $("map-fit").addEventListener("click", () => mapCall((m) => m.fit()));
@@ -466,8 +582,11 @@ function mapCall(fn) {
 
 function mapNote(c) {
   if (!c) return;
-  $("map-empty").hidden = c.total > 0 || state.parcelsCount > 0 || state.basemapCount > 0;
-  const parcels = (state.parcelsCount ? ` · 필지 ${state.parcelsCount}개` : "") + (state.basemapCount ? ` · 배경 ${state.basemapCount}개` : "");
+  state.lastMapCounts = c;
+  $("map-empty").hidden = c.total > 0 || state.parcelsCount > 0 || state.basemapCount > 0 || !!state.tiles;
+  const ts = state.tiles ? mapCall((m) => m.tileStatus()) : null;
+  const tileNote = state.tiles ? (ts?.failed ? ` · 배경 타일 ${ts.failed}장 못 받음 (${navigator.onLine ? "제공자 응답 없음 또는 키·주소 확인" : "오프라인, 저장된 타일만 보임"})` : " · 배경 타일 켜짐") : "";
+  const parcels = (state.parcelsCount ? ` · 필지 ${state.parcelsCount}개` : "") + (state.basemapCount ? ` · 배경 ${state.basemapCount}개` : "") + tileNote;
   if (c.total === 0) return text($("map-note"), parcels ? `물건 없음${parcels}` : "", "muted");
   if (c.located === 0) return text($("map-note"), `위치점 있는 물건이 없다. 목록에서 선택한다${parcels}`, "muted");
   let msg = `위치점 ${c.located}개 표시 (가상 ${c.synthetic} · 실제 ${c.privateReal})`;
@@ -948,6 +1067,10 @@ async function main() {
   $("load-synthetic-basemap").addEventListener("click", loadSyntheticBasemap);
   $("basemap-file").addEventListener("change", (e) => loadBasemapFile(e.target));
   $("clear-basemap").addEventListener("click", clearBasemap);
+  $("tiles-provider").addEventListener("change", updateTileFields);
+  $("tiles-save").addEventListener("click", saveTileSettings);
+  $("tiles-prefetch").addEventListener("click", prefetchTiles);
+  $("tiles-clear").addEventListener("click", clearTileCache);
   $("view-file").addEventListener("change", (e) => loadViewFile(e.target));
   $("clear-view").addEventListener("click", clearView);
   $("history-close").addEventListener("click", closeHistory);
@@ -974,6 +1097,11 @@ async function main() {
   window.addEventListener("online", refreshStatus);
   window.addEventListener("offline", refreshStatus);
   await initMap();
+  try {
+    await loadTileSettings();
+  } catch (e) {
+    text($("tiles-note"), "배경 지도 설정을 읽지 못함: " + (e?.message || e), "bad");
+  }
   try {
     const rec = await state.store.getParcels();
     state.seedLoadedAt = (await state.store.getMeta("seed_loaded_at")) ?? null;

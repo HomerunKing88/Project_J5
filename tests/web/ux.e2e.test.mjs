@@ -26,7 +26,7 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
       const origAdd = IDBObjectStore.prototype.add;
       IDBObjectStore.prototype.add = function (v, k) { if (this.name === 'events' && window.__failSave) throw new DOMException('저장 공간 부족 (e2e)', 'QuotaExceededError'); return origAdd.call(this, v, k); };` });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor(`${txt("status-line")}.includes('앱 0.2.3')`);
+    await cdp.waitFor(`${txt("status-line")}.includes('앱 0.2.4')`);
 
     // 1. 처음 실행: 오늘 화면, 빈 상태 안내와 두 가지 다음 행동, 기술 용어 없음
     assert.ok(await cdp.eval(visible("view-home")) && await cdp.eval("document.getElementById('view-map').hidden"), "첫 화면은 오늘");
@@ -188,7 +188,7 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     const a11y = await cdp.eval(`(() => {
       const unlabeled = Array.from(document.querySelectorAll('input:not([type=hidden]), select, textarea')).filter(i => !(i.labels && i.labels.length) && !i.getAttribute('aria-label') && !i.getAttribute('aria-labelledby')).map(i => i.id || i.name);
       const iconNoLabel = Array.from(document.querySelectorAll('button.icon')).filter(b => !b.getAttribute('aria-label')).map(b => b.id);
-      const live = ['observe-note', 'export-note', 'settings-note', 'seed-note', 'parcels-note', 'basemap-note', 'view-note', 'map-note'].filter(id => !document.getElementById(id).getAttribute('role') && !document.getElementById(id).getAttribute('aria-live'));
+      const live = ['observe-note', 'export-note', 'settings-note', 'seed-note', 'parcels-note', 'basemap-note', 'view-note', 'tiles-note', 'tiles-prefetch-note', 'map-note'].filter(id => !document.getElementById(id).getAttribute('role') && !document.getElementById(id).getAttribute('aria-live'));
       const heads = Array.from(document.querySelectorAll('h1, h2, h3')).map(h => Number(h.tagName[1]));
       let bad = false; for (let i = 1; i < heads.length; i++) if (heads[i] - heads[i - 1] > 1) bad = true;
       return { unlabeled, iconNoLabel, live, headingJump: bad, navLabel: document.querySelector('nav').getAttribute('aria-label') };
