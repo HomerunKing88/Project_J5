@@ -165,6 +165,17 @@ python -m j5 db [--db 경로] survey-overview [--json]
 
 ## 필지 경계·지번 번들 (R2, J5-013B-1, ADR-13; VWorld 묶음·필지 속성 J5-025, ADR-19)
 
+VWorld 묶음 한 번에 넣기 (J5-031):
+
+```text
+python -m j5 db [--db 경로] parcels-ingest <VWorld 다운로드.zip> [<구역2.zip> …] --geometry-version YYYY-MM-DD [--source-name "…"] [--license "…"] [--data-home 경로] [--no-backup] [--json]
+```
+
+- 구역마다 `inspect` 로 범위를 읽어 `convert --bbox` 에 옮겨 적고 `parcels-load` 하던 세 단계를 한 번에 한다. 범위는 각 묶음의 연속지적도 WGS84 범위 전체다. VWorld 묶음이 아닌 SHP 는 거절한다(`parcels convert --bbox` 로 따로 변환).
+- 순서: 모든 입력 변환(정본에 쓰지 않음, 하나라도 실패하면 멈춤) → 반영 전 백업(기본, 실패하면 멈춤, `--no-backup` 은 방금 따로 백업했을 때만) → 번들마다 `parcels-load` 와 같은 트랜잭션으로 반영. 중간에 실패하면 앞 번들은 반영된 채 남고 결과에 적는다. 다시 실행하면 반영된 것은 변화 없음이다.
+- 번들은 `J5_DATA_HOME/parcels/bundles/<입력 이름>-<도형 기준일>-<입력 sha256 앞 8자>.j5parcels.json` 에 둔다. 같은 입력·같은 기준일이면 있는 번들을 다시 쓴다. 구역을 나눠 받아 경계가 겹친 필지는 변화 없음으로 들어간다.
+- 끝나면 `project` → `project-copy` 로 폰 파일을 만든다. 토지소유 자료의 연령대·거주 구분은 읽지 않는다.
+
 ```text
 python -m j5 parcels inspect <연속지적도.shp 또는 .zip | VWorld 다운로드.zip> [--crs EPSG:5186] [--encoding cp949] [--layer 이름] [--json]
 python -m j5 parcels convert <연속지적도.shp 또는 .zip | VWorld 다운로드.zip> --out <이름>.j5parcels.json --geometry-version YYYY-MM-DD --source-name "연속지적도 서울특별시 종로구" \
