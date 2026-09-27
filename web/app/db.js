@@ -1,10 +1,11 @@
 // IndexedDB 저장소. 스토어: meta(설정), assets(시드 물건), events(관측: 객체 + 고정 바이트), photos(sha256 → Blob),
-// parcels(필지 번들 한 벌, v2·J5-013B-1), basemap(배경 도형 번들 한 벌, v3·J5-022). 저장 실패(용량 부족 등)는 예외로 올려 화면이 '저장됨'으로 오표시하지 않게 한다. 자동 삭제는 없다.
+// parcels(필지 번들 한 벌, v2·J5-013B-1), basemap(배경 도형 번들 한 벌, v3·J5-022), view(PC 조회 파생본의 정본 기록·거래, v4·J5-023). 저장 실패(용량 부족 등)는 예외로 올려 화면이 '저장됨'으로 오표시하지 않게 한다. 자동 삭제는 없다.
 
 export const DB_NAME = "j5";
-export const DB_VERSION = 3; // v3: basemap 스토어 추가 (기존 스토어·기록은 그대로)
+export const DB_VERSION = 4; // v3: basemap, v4: view 스토어 추가 (기존 스토어·기록은 그대로)
 const PARCELS_KEY = "active";
 const BASEMAP_KEY = "active";
+const VIEW_KEY = "active";
 
 function req(r) {
   return new Promise((resolve, reject) => {
@@ -35,6 +36,7 @@ export async function openDb() {
     if (!db.objectStoreNames.contains("photos")) db.createObjectStore("photos", { keyPath: "sha256" });
     if (!db.objectStoreNames.contains("parcels")) db.createObjectStore("parcels");
     if (!db.objectStoreNames.contains("basemap")) db.createObjectStore("basemap");
+    if (!db.objectStoreNames.contains("view")) db.createObjectStore("view");
   };
   return req(r);
 }
@@ -107,6 +109,23 @@ export class Store {
   async clearBasemap() {
     const tx = this.db.transaction("basemap", "readwrite");
     tx.objectStore("basemap").delete(BASEMAP_KEY);
+    await done(tx);
+  }
+
+  /** PC 조회 파생본(manifest·정본 기록·거래)을 통째로 교체한다 (한 벌만). 이 기기의 관측(events)·사진은 건드리지 않는다. */
+  async replaceView(rec) {
+    const tx = this.db.transaction("view", "readwrite");
+    tx.objectStore("view").put({ ...rec, loaded_at: new Date().toISOString() }, VIEW_KEY);
+    await done(tx);
+  }
+
+  async getView() {
+    return req(this.db.transaction("view").objectStore("view").get(VIEW_KEY));
+  }
+
+  async clearView() {
+    const tx = this.db.transaction("view", "readwrite");
+    tx.objectStore("view").delete(VIEW_KEY);
     await done(tx);
   }
 
