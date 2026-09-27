@@ -45,6 +45,11 @@
     <button id="home-go-export" class="secondary">내보내기</button>
   </div>
   <h3 id="targets-title" class="list-title">대상 목록</h3>
+  <div id="asset-filter" class="row seg" role="group" aria-label="대상 목록 필터" hidden>
+    <button type="button" class="secondary" data-filter="all" aria-pressed="true">전체</button>
+    <button type="button" class="secondary" data-filter="watchlist" aria-pressed="false">관찰목록만</button>
+    <span id="asset-filter-note" class="muted" role="status"></span>
+  </div>
   <ul id="asset-list" class="cards" aria-labelledby="targets-title"></ul>
 </section>
 
@@ -73,6 +78,7 @@
   <div id="map-selected" class="selected-card" hidden>
     <div class="selected-body">
       <strong id="map-selected-label"></strong>
+      <span id="map-selected-badges" class="badges"></span>
       <span id="map-selected-sub" class="help"></span>
       <p id="map-selected-ext" class="ext-links" hidden></p>
     </div>

@@ -1,7 +1,7 @@
 """가상 조회 파생본(.j5view.zip) 생성기 (J5-023). 폰 앱의 "PC 자료 파일 가져오기" 와 이력 화면 시험용.
 
 임시 실데이터 홈에 가상 정본을 만들고(가상 시드 5개 → 관측 패키지 반영 → 가상 필지 6개 반영·위치점 연결 → 가상 VWorld 속성 번들 반영과 나중 기준일의
-공시지가·소유 변경(J5-026 속성 이력) → 가상 실거래 2개년(로컬 가짜 서버) 반영·범위 규칙·거래 1건 확정 연결 → 목표 매수가 기록) `j5 db project` 로 파생본을 만들어 지정한 폴더에 복사한다. 생성 시각·run_id 가 들어가므로 바이트가
+공시지가·소유 변경(J5-026 속성 이력) → 가상 실거래 2개년(로컬 가짜 서버) 반영·범위 규칙·거래 1건 확정 연결 → 목표 매수가 기록 → 관심 단계 4건(J5-029)) `j5 db project` 로 파생본을 만들어 지정한 폴더에 복사한다. 생성 시각·run_id 가 들어가므로 바이트가
 매번 다르다(저장소에 넣지 않고 시험 때 만든다). 가상자료만 쓰며 외부 통신은 없다(가짜 서버는 127.0.0.1).
 
     python tests/fixtures/make_view.py <출력 폴더> [--no-parcels]   → <출력 폴더>/synthetic.j5view.zip (--no-parcels 면 synthetic-noparcels.j5view.zip, 필지·연결 없음) 과 요약 JSON
@@ -28,6 +28,7 @@ from j5.db.judgment import apply_record_input  # noqa: E402
 from j5.db.parcels import apply_links, load_bundle, suggest_links  # noqa: E402
 from j5.db.projection import build_projection  # noqa: E402
 from j5.db.store import Db  # noqa: E402
+from j5.db.tracking import set_status  # noqa: E402
 from j5.db.transactions import load_run  # noqa: E402
 from j5.db.txlinks import apply_decisions, candidates  # noqa: E402
 from j5.db.zones import apply_rules, load_rules  # noqa: E402
@@ -104,6 +105,11 @@ def build(out_dir: Path, *, parcels: bool = True) -> dict:
                                 "evidence": [], "payload": {"price_kind": "target_buy", "price_krw": 1_500_000_000, "decided_on": "2026-09-20", "strategy": "보유 후 리모델링 (가상)",
                                                             "composition_as_of": "2026-09-20", "assumptions": ["가상 가정"], "comparison_basis": [{"kind": "personal_estimate", "ref_id": None, "note": "가상 추정"}],
                                                             "valid_conditions": ["가상 조건"], "revision_reason": None}})
+        # 관심 단계 (J5-029): 관찰 2개(물건 1·2, 관찰목록), 보류 1개(물건 4), 제외 1개(물건 5), 물건 3(주소만)은 미검토 그대로
+        set_status(db, A[0], "watch", reason="가상 관찰", changed_on="2026-09-21")
+        set_status(db, A[1], "detailed_review", reason="가상 상세 검토", changed_on="2026-09-22")
+        set_status(db, A[3], "hold", reason="가상 보류", changed_on="2026-09-23")
+        set_status(db, A[4], "excluded", reason="가상 제외", changed_on="2026-09-24")
         proj = build_projection(db, home, photos=False)
         db.close()
         src = home / proj.output_dir / proj.zip_name

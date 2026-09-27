@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+DEC = "0d1e2f3a-4b5c-4d6e-8f90-a1b2c3d4e5f6"  # 버전 13 정본이 남긴 승인 결정 ID (J5-029 백필 시험)
+
 from j5 import cli
 from j5.db import schema as S
 from j5.db.cases import CSV_COLUMNS, case_bundle, export_cases
@@ -78,7 +80,14 @@ def test_migration_14_adds_rechecks_table(home, monkeypatch):
         d.add_source_document({"document_id": DOC, "document_kind": "manual_entry", "title": "가상 근거 메모", "collected_at": "2026-09-01T10:00:00+09:00"})
     refs = _plans(d)
     r = apply_case_input(d, case(refs=refs))
-    approve(d, A[0], TODAY)
+    # 버전 13 정본이 하던 대로 승인 결정을 남긴다 (현재 approve 는 마이그레이션 17 의 tracking_changes 도 쓰므로 여기서는 옛 정본의 쓰기를 직접 흉내낸다)
+    ev = evaluate(d, A[0], today=TODAY)
+    assert ev["ready"]
+    with d.transaction():
+        d.conn.execute("INSERT INTO readiness_decisions (decision_id, asset_id, record_id, decision, decided_on, previous_status, new_status, reason, evaluation_json, recorded_at)"
+                       " VALUES (?, ?, ?, 'approve', ?, 'unreviewed', 'purchase_ready', NULL, '{}', ?)", (DEC, A[0], r["record_id"], TODAY, d.now()))
+        d.conn.execute("UPDATE assets SET tracking_status = 'purchase_ready', updated_at = ? WHERE asset_id = ?", (d.now(), A[0]))
+        d.bump_dataset_version()
     before = [dict(x) for x in d.conn.execute("SELECT * FROM records ORDER BY record_id")]
     assert d.schema_version() == 13 and not d._has_table("readiness_rechecks") and evaluate(d, A[0], today=TODAY)["stage_rechecks"] == []
     d.close()
@@ -89,6 +98,9 @@ def test_migration_14_adds_rechecks_table(home, monkeypatch):
         assert st["ok"] and st["db_schema_version"] == S.DB_SCHEMA_VERSION >= 14 and d2._has_table("readiness_rechecks")
         assert [dict(x) for x in d2.conn.execute("SELECT * FROM records ORDER BY record_id")] == before
         assert d2.conn.execute("SELECT COUNT(*) FROM readiness_decisions").fetchone()[0] == 1 and d2.conn.execute("SELECT tracking_status FROM assets WHERE asset_id = ?", (A[0],)).fetchone()[0] == "purchase_ready"
+        # 마이그레이션 17 (J5-029) 이 옛 결정을 관심 단계 변경 이력으로 백필한다
+        tc = [dict(x) for x in d2.conn.execute("SELECT previous_status, new_status, changed_on, source, decision_id FROM tracking_changes WHERE asset_id = ?", (A[0],))]
+        assert tc == [{"previous_status": "unreviewed", "new_status": "purchase_ready", "changed_on": TODAY, "source": "readiness", "decision_id": DEC}]
         rr = apply_stage_recheck(d2, recheck())
         assert rr["record_id"] == r["record_id"] and rr["withdrawn"] is None
     finally:

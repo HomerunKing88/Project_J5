@@ -54,7 +54,10 @@ def test_publish_full_projection_and_pointer(db, home):
     assert manifest["generated_at"] == r.generated_at and manifest["run_id"] == r.run_id
     # assets.seed.json 은 시드 스키마 그대로라 폰 앱이 바로 불러올 수 있다
     seed = json.loads((out / "assets.seed.json").read_text(encoding="utf-8"))
-    assert seed == json.loads(SEED_PATH.read_text(encoding="utf-8")), "정본에서 복원한 물건 목록이 원 시드와 같다"
+    # 관심 단계·확인 상태(J5-029)는 정본 출력값으로 붙는다. 그것을 빼면 원 시드와 같다
+    assert all(a["tracking_status"] == "unreviewed" and a["resolution_status"] == "confirmed" for a in seed)
+    stripped = [{k: v for k, v in a.items() if k not in ("tracking_status", "resolution_status")} for a in seed]
+    assert stripped == json.loads(SEED_PATH.read_text(encoding="utf-8")), "정본에서 복원한 물건 목록이 원 시드와 같다"
     geo = json.loads((out / "assets.geojson").read_text(encoding="utf-8"))
     assert geo["type"] == "FeatureCollection" and len(geo["features"]) == 4 and len(geo["unlocated_asset_ids"]) == 1
     assert geo["source_dataset_version"] == 1 and geo["features"][0]["geometry"]["type"] == "Point"

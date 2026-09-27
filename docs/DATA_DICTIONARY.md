@@ -24,7 +24,7 @@
 
 | 테이블·객체 | 핵심 필드·책임 | 시작 |
 |---|---|---|
-| assets.seed.json | asset_id(UUID), label, location_point 또는 address, data_mode, created_at, notes | R1a |
+| assets.seed.json | asset_id(UUID), label, location_point 또는 address, data_mode, created_at, notes. 파생본 시드에는 정본 출력값 tracking_status·resolution_status 가 붙는다(폰 표시용, `load-seed` 는 거절) [ADR-22] | R1a |
 | schema_migrations / meta | 스키마 버전·study_id·dataset_version | R1b |
 | subjects | subject_id PK, subject_type, UNIQUE(subject_id, subject_type) | R1b |
 | assets | asset_id, label, tracking_status, resolution_status | R1b |
@@ -40,8 +40,9 @@
 | projection_runs | source_dataset_version, projection_schema_version, 생성 상태·산출물 위치 | R1b |
 | parcel_lineage / parcel_adjacencies | 분할·합필 이력, 도형 버전별 인접 관계 | R2·R5 |
 | review_decisions | 거래 연결·대표값 선택·철회와 그 판단 시각 | R3 |
+| tracking_changes | 관심 단계 변경 이력. 물건·이전 단계·새 단계·변경일·사유·출처(asset_track / readiness)·준비 결정 ID. 불변이며 `db asset-track` 과 준비 결정이 남긴다 [ADR-22] | R2 (J5-029) |
 
-subjects의 초기 타입은 `asset / parcel / building / survey_unit`이다. 관심 단계는 `unreviewed / background / watch / detailed_review / purchase_ready / hold / excluded / archived`로 구분하고, 매물 출회 상태와 분리한다. 실제로 사용하는 타입·단계만 해당 릴리스에 구현한다.
+subjects의 초기 타입은 `asset / parcel / building / survey_unit`이다. 관심 단계는 `unreviewed / background / watch / detailed_review / purchase_ready / hold / excluded / archived`로 구분하고, 매물 출회 상태와 분리한다. 관심 단계는 PC 에서만 바꾸고(`db asset-track`, purchase_ready 는 readiness 명령), 관찰목록은 `watch / detailed_review / purchase_ready` 다 [ADR-22]. 실제로 사용하는 타입·단계만 해당 릴리스에 구현한다.
 
 하위 테이블의 고정 subject_type은 CHECK, 부모의 `(subject_id, subject_type)`는 복합 FK로 검증한다. 기록 종류별 허용 대상은 공통 검증 함수에서 검사한다. 모든 연결은 외래키를 활성화한다. 범용 `subject_type + subject_id`만으로 FK를 대체하지 않는다. [ADR E06]
 

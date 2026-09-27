@@ -72,7 +72,7 @@ def snaps(db, pnu):
 
 def test_schema_16_and_status_counts(db):
     st = db.status()
-    assert st["db_schema_version"] == S.DB_SCHEMA_VERSION == 16 and st["counts"]["parcel_attribute_snapshots"] == 0 and db.conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+    assert st["db_schema_version"] == S.DB_SCHEMA_VERSION == 17 and st["counts"]["parcel_attribute_snapshots"] == 0 and db.conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
 
 
 def test_first_load_writes_one_snapshot_per_kind_and_migration_backfills_from_v15(db, home):
@@ -90,11 +90,12 @@ def test_first_load_writes_one_snapshot_per_kind_and_migration_backfills_from_v1
     db.close()
     conn = sqlite3.connect(str(path))
     conn.execute("DROP TABLE parcel_attribute_snapshots")
-    conn.execute("DELETE FROM schema_migrations WHERE version = 16")
+    conn.execute("DROP TABLE tracking_changes")  # 마이그레이션 17 (J5-029) 도 없던 정본
+    conn.execute("DELETE FROM schema_migrations WHERE version >= 16")
     conn.commit()
     conn.close()
     with Db.open(path) as d2:
-        assert d2.schema_version() == 16 and d2.status()["counts"]["parcel_attribute_snapshots"] == 18 and d2.status()["ok"]
+        assert d2.schema_version() == S.DB_SCHEMA_VERSION == 17 and d2.status()["counts"]["parcel_attribute_snapshots"] == 18 and d2.status()["ok"]
         rows = snaps(d2, P1)
         assert json.loads(rows[0]["values_json"]) == {"jimok_name": "대", "registered_area_m2": 1770.5, "official_land_price_krw_m2": 12340000, "price_base_year": 2026, "price_base_month": 1,
                                                        "use_zone_1": "일반상업지역", "use_zone_2": None, "land_use_situation": "상업용", "road_side": "광대로한면", "terrain_height": "평지", "terrain_form": "세로장방"}

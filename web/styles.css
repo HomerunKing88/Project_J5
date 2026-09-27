@@ -155,6 +155,17 @@ textarea { resize: vertical; }
 .badge.status-hard_to_confirm { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
 .badge.src-device { background: var(--surface-2); color: var(--ink); }
 .badge.src-pc { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+/* 관심 단계·확인 상태 (J5-029): 파생본 시드의 정본 출력값. 관찰목록 단계는 강조, 보류·제외·보관은 흐리게 */
+.badge.track-watchlist { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+.badge.track-purchase_ready { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+.badge.track-background { background: var(--surface-2); color: var(--muted); }
+.badge.track-hold { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.badge.track-excluded, .badge.track-archived { background: var(--surface-2); color: var(--muted); text-decoration: line-through; }
+.badge.src-pending { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.badges:empty { display: none; }
+.badges { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.seg .muted { font-size: .85rem; }
 .badge.match-exact { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
 .badge.match-prefix { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
 .badge.kind-transaction { background: var(--sel-soft); color: var(--sel); border-color: transparent; }

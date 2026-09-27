@@ -819,6 +819,37 @@ FROM parcel_attributes WHERE EXISTS (SELECT 1 FROM json_each(sources_json) WHERE
 """
     for kind, expr in _SNAPSHOT_VALUES.items())
 
+# J5-029 관심 단계 변경 이력 (ADR-22, 데이터 사전 §2). assets.tracking_status 를 바꾸는 모든 변경은 불변 행을 남긴다.
+# - source=asset_track: `j5 db asset-track` 의 사람 결정(사유). source=readiness: 준비 상태 결정(readiness_decisions 의 승인·철회)이 남긴 변경이며 decision_id 로 연결한다.
+# - 기존 readiness_decisions 행을 백필해 이 표 하나로 관심 단계 이력을 읽는다. purchase_ready 로의 전환·철회는 readiness 명령으로만 한다(asset-track 은 거절).
+TRACKING_CHANGE_SOURCES = ("asset_track", "readiness")
+WATCHLIST_STATUSES = ("watch", "detailed_review", "purchase_ready")
+MIGRATION_0017 = f"""
+CREATE TABLE tracking_changes (
+  change_id       TEXT NOT NULL PRIMARY KEY CHECK (change_id GLOB '{UUID_GLOB}'),
+  asset_id        TEXT NOT NULL REFERENCES assets (asset_id),
+  previous_status TEXT NOT NULL CHECK (previous_status {_in(TRACKING_STATUSES)}),
+  new_status      TEXT NOT NULL CHECK (new_status {_in(TRACKING_STATUSES)}),
+  changed_on      TEXT NOT NULL CHECK (changed_on GLOB '{DATE_GLOB}'),
+  reason          TEXT,
+  source          TEXT NOT NULL CHECK (source {_in(TRACKING_CHANGE_SOURCES)}),
+  decision_id     TEXT REFERENCES readiness_decisions (decision_id),
+  recorded_at     TEXT NOT NULL CHECK (recorded_at GLOB '{UTC_GLOB}'),
+  CHECK (previous_status <> new_status),
+  CHECK ((source = 'readiness') = (decision_id IS NOT NULL))
+) STRICT;
+CREATE INDEX tracking_changes_by_asset ON tracking_changes (asset_id, recorded_at);
+CREATE TRIGGER tracking_changes_no_update BEFORE UPDATE ON tracking_changes BEGIN
+  SELECT RAISE(ABORT, 'tracking_changes 는 불변이다');
+END;
+CREATE TRIGGER tracking_changes_no_delete BEFORE DELETE ON tracking_changes BEGIN
+  SELECT RAISE(ABORT, 'tracking_changes 는 삭제하지 않는다');
+END;
+INSERT INTO tracking_changes (change_id, asset_id, previous_status, new_status, changed_on, reason, source, decision_id, recorded_at)
+SELECT {_SQL_UUID4}, asset_id, previous_status, new_status, decided_on, reason, 'readiness', decision_id, recorded_at
+FROM readiness_decisions WHERE previous_status <> new_status ORDER BY recorded_at, decision_id;
+"""
+
 # (버전, 이름, SQL). 새 릴리스의 테이블은 새 항목으로 추가하고 기존 항목은 고치지 않는다.
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "r1b_minimum", MIGRATION_0001),
@@ -837,6 +868,7 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (14, "r7_stage_rechecks", MIGRATION_0014),
     (15, "r8_parcel_attributes", MIGRATION_0015),
     (16, "r8_parcel_attribute_snapshots", MIGRATION_0016),
+    (17, "r8_tracking_changes", MIGRATION_0017),
 )
 # 표 재작성이 필요한 마이그레이션: 외래키 검사를 끈 채 한 트랜잭션으로 실행하고 foreign_key_check 가 비어야 커밋한다 (store._migrate).
 FK_OFF_MIGRATIONS = frozenset({9, 12, 13})
