@@ -387,6 +387,14 @@ def _db_main(args) -> int:
                 st = db.status()
             print(f"정본 생성: {path} (db_schema {st['db_schema_version']}, study {st['study_id']}, {st['data_mode']})")
             return 0
+        if args.db_command == "parcels-ingest":
+            # 정본을 여기서 열지 않는다: Db.open 은 대기 중인 마이그레이션을 바로 적용하므로, 변환·반영 전 백업을 먼저 끝낸 뒤 ingest 가 쓰기 모드로 연다 (리뷰 반영 PR #77)
+            home = _data_home(args)
+            if home is None:
+                return USAGE_ERROR
+            r = ingest_vworld(path, home, args.sources, geometry_version=args.geometry_version, source_name=args.source_name, license=args.license, backup=not args.no_backup)
+            sys.stdout.write(json.dumps(r.to_dict(), ensure_ascii=False, indent=2) + "\n" if args.json else r.to_text())
+            return 0 if r.outcome != "failed" else 1
         with Db.open(path) as db:
             if args.db_command == "status":
                 home = args.data_home or (Path(os.environ["J5_DATA_HOME"]) if os.environ.get("J5_DATA_HOME") else None)
@@ -659,13 +667,6 @@ def _db_main(args) -> int:
                 c = changes_since(db, lawd, args.since_run, zones=tuple(args.zone) if args.zone else None)
                 sys.stdout.write(json.dumps(c, ensure_ascii=False, indent=2) + "\n" if args.json else changes_text(c))
                 return 0
-            if args.db_command == "parcels-ingest":
-                home = _data_home(args)
-                if home is None:
-                    return USAGE_ERROR
-                r = ingest_vworld(db, home, args.sources, geometry_version=args.geometry_version, source_name=args.source_name, license=args.license, backup=not args.no_backup)
-                sys.stdout.write(json.dumps(r.to_dict(), ensure_ascii=False, indent=2) + "\n" if args.json else r.to_text())
-                return 0 if r.outcome != "failed" else 1
             if args.db_command == "parcels-load":
                 if not args.bundle.is_file():
                     print(f"번들 파일이 없음: {args.bundle}", file=sys.stderr)
