@@ -29,7 +29,7 @@
 | subjects | subject_id PK, subject_type, UNIQUE(subject_id, subject_type) | R1b |
 | assets | asset_id, label, tracking_status, resolution_status | R1b |
 | parcels / buildings | PNU·외부 건물 ID와 내부 ID 분리 | R2 |
-| parcel_attributes | 필지마다 한 행. VWorld 토지특성·이용계획·소유 자료의 값 그대로(지목·공부면적·공시지가와 기준 연월·용도지역·이용상황·도로접면·지형·지역지구 목록·소유 구분·공유인수·변동일), 출처 목록·출처 문서·기준일·내용 해시. 이름·주소·연령대·거주 구분 없음 [ADR-19] | R2 (J5-025) |
+| parcel_attributes | 필지마다 한 행. VWorld 토지특성·이용계획·소유 자료의 값 그대로(지목·공부면적·공시지가와 기준 연월·용도지역·이용상황·도로접면·지형·지역지구 코드·관계 목록과 짝짓지 않은 지역지구 이름 목록(J5-032)·소유 구분·공유인수·변동일), 출처 목록·출처 문서·기준일·내용 해시. 이름·주소·연령대·거주 구분 없음 [ADR-19] | R2 (J5-025) |
 | parcel_attribute_snapshots | 필지·자료 종류·기준일마다 그때 읽은 값(JSON)·출처. 현재 값과 별개로 쌓이며 연도별 변화(공시지가·소유·용도지역)를 재구성한다 [ADR-19] | R2 (J5-026) |
 | asset_components / building_parcels | 구성 관계·적용 기간. 다대다 허용 | R2 |
 | source_catalog / source_documents | 수집 방식·이용조건·원본 위치·해시·시점 | R1b 최소 |
