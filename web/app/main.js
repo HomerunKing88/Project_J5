@@ -7,7 +7,7 @@ import { uuid4, isUuid } from "./uuid.js";
 import { isoWithOffset, fromDatetimeLocal, toDatetimeLocal, localDate } from "./time.js";
 import { buildEvent, validateEvent, lineBytes, PHOTO_TAGS, PHOTO_TAG_LABEL, CHANGE_STATUS_LABEL, PHOTO_LIMIT, VIEWPOINT_MAX } from "./event.js";
 import { validateSeed, filterAssets, hasTracking, isWatchlist, TRACKING_LABEL, ASSET_FILTERS } from "./seed.js";
-import { validateParcels, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, attrLines, attrsSummary, ZONE_LABELS, findParcels, parcelAt, interiorPoint } from "./parcels.js";
+import { validateParcels, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, attrLines, attrsSummary, ZONE_LABELS, findParcels, parcelAt, interiorPoint, priceTrend, priceTrendRow } from "./parcels.js";
 import { selectRecords, planBatches, buildPackage, hasRemainingBatches, studyIdError } from "./export.js";
 import { migrationReadiness, migrationText, persistenceText } from "./migrate.js";
 import { createNavigator, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, MODE_LABEL, MODE_SHORT } from "./ui.js";
@@ -18,7 +18,7 @@ import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
 import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.8";
+export const APP_VERSION = "0.2.9";
 const $ = (id) => document.getElementById(id);
 const state = { store: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, zoneColors: false, seedLoadedAt: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
                 nav: null, returnFocus: null, mapSelected: null, assetFilter: "all" };
@@ -703,6 +703,14 @@ function showParcel(feature) {
   $("parcel-attrs").replaceChildren(...lines.map(([k, v]) => el("li", {}, el("span", { class: "k", text: k }), el("span", { class: "v", text: v }))));
   $("parcel-attrs").hidden = !lines.length;
   $("parcel-attrs-note").hidden = !lines.length;
+  // 공시지가 추이 (J5-030): 값이 바뀐 지점이 둘 이상일 때만 표로 보인다. 하나면 위 속성 목록의 공시지가가 전부다
+  const trend = priceTrend(p.attrs, p.attrs_history);
+  $("parcel-price").hidden = trend.length < 2;
+  $("parcel-price-list").replaceChildren(...(trend.length < 2 ? [] : trend.map((q) => {
+    const [base, value, delta, seen] = priceTrendRow(q);
+    return el("li", {}, el("span", { class: "k", text: base }),
+      el("span", { class: "v" }, el("strong", { text: value }), document.createTextNode(delta ? ` (${delta})` : ""), el("span", { class: "muted", text: ` · ${seen}` })));
+  })));
   const linksValid = parcelLinksValid();
   const inside = parcelAssets(feature, state.assets, { linksValid });
   $("parcel-assets").replaceChildren(...inside.map(({ asset: a, basis }) => el("li", {},

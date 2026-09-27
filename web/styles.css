@@ -280,6 +280,8 @@ ul.attrs { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; fon
 ul.attrs li { display: grid; grid-template-columns: 5.5em 1fr; gap: 6px; }
 ul.attrs .k { color: var(--muted); }
 ul.attrs .v { overflow-wrap: anywhere; }
+ul.attrs.price-trend li { grid-template-columns: 8.5em 1fr; }
+.sub-title { margin: 4px 0 2px; font-size: .92rem; }
 .parcel-label { font-size: 11px; fill: var(--muted); text-anchor: middle; dominant-baseline: middle; paint-order: stroke; stroke: var(--surface-2); stroke-width: 2.5px; pointer-events: none; }
 .parcel-panel { border: 1px solid var(--line); border-left: 4px solid var(--sel); border-radius: 10px; padding: var(--space-3); display: grid; gap: 6px; background: var(--surface); }
 .selected-card { display: flex; align-items: center; gap: var(--space-3); background: var(--surface); border: 2px solid var(--sel); border-radius: var(--radius); padding: var(--space-3) var(--space-4); }

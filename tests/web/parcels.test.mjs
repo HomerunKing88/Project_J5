@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { validateParcels, labelPoint, pointInFeature, assetsInParcel, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, polygonsOf, MAX_PARCELS, zoneCategory, ZONE_LABELS, fmtInt, attrLines, attrsSummary, fmtAttrValue, attrChangeText, parseParcelQuery, findParcels, parcelAt, interiorPoint } from "../../web/app/parcels.js";
+import { validateParcels, labelPoint, pointInFeature, assetsInParcel, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, polygonsOf, MAX_PARCELS, zoneCategory, ZONE_LABELS, fmtInt, attrLines, attrsSummary, fmtAttrValue, attrChangeText, parseParcelQuery, findParcels, parcelAt, interiorPoint, priceTrend, priceTrendRow } from "../../web/app/parcels.js";
 import { worldBbox, parcelPathD, parcelLabelVisible, mercator, fitView, FIT_MAX_SCALE, PARCEL_LOCAL_K } from "../../web/app/map.js";
 
 const bundle = () => JSON.parse(readFileSync(new URL("../fixtures/parcels/synthetic.j5parcels.json", import.meta.url), "utf8"));
@@ -230,4 +230,64 @@ test("parseParcelQuery·findParcels·parcelAt (J5-027)", () => {
   const cp = interiorPoint(cshape);
   assert.ok(cp && pointInFeature(cp, cshape), "라벨 위치가 밖이면 격자에서 안쪽 점을 찾는다");
   assert.equal(interiorPoint({ id: "y", geometry: { type: "Polygon", coordinates: [[[0, 0], [1, 0], [0, 0], [0, 0]]] }, properties: {} }), null);
+});
+
+test("공시지가 추이 (J5-030): 현재 속성에서 변화 항목을 거꾸로 짚어 기준일마다의 값을 되살린다", () => {
+  const attrs = { official_land_price_krw_m2: 14_000_000, price_base_year: 2028, price_base_month: 1, jimok_name: "대", as_of: "2028-06-01" };
+  const history = [
+    { as_of: "2027-06-01", kind: "land_feature", first: false, changes: { official_land_price_krw_m2: { from: 12_000_000, to: 13_000_000 }, price_base_year: { from: 2026, to: 2027 } } },
+    { as_of: "2026-06-01", kind: "land_feature", first: true, changes: { official_land_price_krw_m2: { from: null, to: 12_000_000 }, price_base_year: { from: null, to: 2026 }, price_base_month: { from: null, to: 1 }, jimok_name: { from: null, to: "대" } } },
+    { as_of: "2026-06-01", kind: "land_ownership", first: true, changes: { ownership_kind: { from: null, to: "개인" } } },
+    { as_of: "2027-09-01", kind: "land_feature", first: false, changes: { land_use_situation: { from: "상업용", to: "업무용" } } },
+    { as_of: "2028-06-01", kind: "land_feature", first: false, changes: { official_land_price_krw_m2: { from: 13_000_000, to: 14_000_000 }, price_base_year: { from: 2027, to: 2028 } } },
+  ];
+  const t = priceTrend(attrs, history);
+  assert.deepEqual(t.map((q) => [q.as_of, q.price, q.year, q.month]), [["2026-06-01", 12_000_000, 2026, 1], ["2027-06-01", 13_000_000, 2027, 1], ["2028-06-01", 14_000_000, 2028, 1]],
+    "순서가 섞인 항목도 기준일순, 가격과 무관한 변화(이용상황)는 점이 아니다, 소유 자료는 무시");
+  assert.equal(t[0].deltaPct, null);
+  assert.equal(t[1].deltaPct.toFixed(2), "8.33");
+  assert.ok(!t.some((q) => q.sameBase || q.earlier));
+  assert.deepEqual(priceTrendRow(t[1]), ["2027년 1월 기준", "13,000,000원/㎡", "+8.3%", "확인 2027-06-01"]);
+  assert.deepEqual(priceTrendRow(t[0]), ["2026년 1월 기준", "12,000,000원/㎡", "", "확인 2026-06-01"]);
+});
+
+test("공시지가 추이: 같은 기준연월의 값 변경·하락·잘린 이력·이력 없음·가격 없음", () => {
+  // 같은 기준연월에서 값만 바뀜 (가상 파생본의 필지 1 과 같은 모양): 정정 여부 확인 표시
+  const same = priceTrend({ official_land_price_krw_m2: 13_000_000, price_base_year: 2026, price_base_month: 1 }, [
+    { as_of: "2026-09-05", kind: "land_feature", first: true, changes: { official_land_price_krw_m2: { from: null, to: 12_340_000 }, price_base_year: { from: null, to: 2026 }, price_base_month: { from: null, to: 1 } } },
+    { as_of: "2026-09-25", kind: "land_feature", first: false, changes: { official_land_price_krw_m2: { from: 12_340_000, to: 13_000_000 } } },
+  ]);
+  assert.equal(same.length, 2);
+  assert.ok(same[1].sameBase && !same[0].sameBase);
+  assert.match(priceTrendRow(same[1])[3], /^확인 2026-09-25 · 같은 기준연월의 값이 바뀜/);
+  assert.equal(priceTrendRow(same[1])[2], "+5.3%");
+  // 하락은 음수
+  const down = priceTrend({ official_land_price_krw_m2: 9_000_000, price_base_year: 2027 }, [
+    { as_of: "2026-06-01", kind: "land_feature", first: true, changes: { official_land_price_krw_m2: { from: null, to: 10_000_000 }, price_base_year: { from: null, to: 2026 } } },
+    { as_of: "2027-06-01", kind: "land_feature", first: false, changes: { official_land_price_krw_m2: { from: 10_000_000, to: 9_000_000 }, price_base_year: { from: 2026, to: 2027 } } },
+  ]);
+  assert.equal(priceTrendRow(down[1])[2], "-10.0%");
+  assert.equal(priceTrendRow(down[1])[0], "2027년 기준", "기준월이 없으면 연도만");
+  // 파생본 이력 상한으로 '처음 확인' 이 잘림: 가장 앞 변화의 이전 값은 기준일을 모르는 점
+  const cut = priceTrend({ official_land_price_krw_m2: 11_000_000, price_base_year: 2027 }, [
+    { as_of: "2027-06-01", kind: "land_feature", first: false, changes: { official_land_price_krw_m2: { from: 10_000_000, to: 11_000_000 }, price_base_year: { from: 2026, to: 2027 } } },
+  ]);
+  assert.deepEqual(cut.map((q) => [q.as_of, q.price, q.earlier]), [[null, 10_000_000, true], ["2027-06-01", 11_000_000, false]]);
+  assert.equal(priceTrendRow(cut[0])[3], "이전 자료 (기준일 모름)");
+  // 이력 없는 번들(J5-025): 현재 값 하나. 공시지가 없는 필지: 점 없음. 속성 없음: 빈 목록
+  assert.deepEqual(priceTrend({ official_land_price_krw_m2: 5_000_000, price_base_year: 2026, as_of: "2026-09-05" }, undefined).map((q) => [q.as_of, q.price]), [["2026-09-05", 5_000_000]]);
+  assert.deepEqual(priceTrend({ official_land_price_krw_m2: null, jimok_name: "도" }, [{ as_of: "2026-09-05", kind: "land_feature", first: true, changes: { jimok_name: { from: null, to: "도" } } }]), []);
+  assert.deepEqual(priceTrend(null, []), []);
+  // 기준일이 새로 들어왔지만 값이 같으면(변화 항목 없음) 점이 늘지 않는다. 0 원은 값이다
+  const zero = priceTrend({ official_land_price_krw_m2: 0, price_base_year: 2026 }, [
+    { as_of: "2026-06-01", kind: "land_feature", first: true, changes: { official_land_price_krw_m2: { from: null, to: 0 }, price_base_year: { from: null, to: 2026 } } },
+  ]);
+  assert.deepEqual(zero.map((q) => [q.price, q.deltaPct]), [[0, null]]);
+});
+
+test("공시지가 추이: 가상 VWorld 번들(이력 없음)은 필지마다 점 하나 이하", () => {
+  for (const f of vwBundle().features) {
+    const t = priceTrend(f.properties.attrs, f.properties.attrs_history);
+    assert.ok(t.length <= 1, f.id);
+  }
 });

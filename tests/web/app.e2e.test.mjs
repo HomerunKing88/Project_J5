@@ -32,14 +32,14 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     // 지도 모듈 로드 실패: map.js 요청을 막고 첫 접속 (서비스 워커가 아직 없을 때). 목록·설정은 그대로 동작하고 지도 절만 안내를 낸다.
     await cdp.send("Network.setBlockedURLs", { urls: ["*/app/map.js"] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.8')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.9')");
     await cdp.waitFor("document.getElementById('map-note').textContent.includes('지도 표시 불가')");
     assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li').length"), 1, "지도 모듈 없이도 목록 절이 그려진다");
     const blockedLogs = cdp.errors.splice(0);
     assert.ok(blockedLogs.every((e) => e.includes("ERR_BLOCKED_BY_CLIENT") || e.includes("Failed to load resource") || e.includes("map.js")), blockedLogs.join("; "));
     await cdp.send("Network.setBlockedURLs", { urls: [] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.8')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.9')");
     await cdp.waitFor("document.getElementById('map-note').textContent === ''");
     // 설정
     await cdp.eval("document.getElementById('study-id').value = 'e2e-study'; document.getElementById('save-settings').click(); 'ok'");
@@ -397,6 +397,10 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       await cdp.clickRect('#map-svg path.parcel[data-pnu="9999900100100010000"]');
       await cdp.waitFor("!document.getElementById('parcel-panel').hidden && document.getElementById('parcel-title').textContent === '가상동 1'");
       assert.match(await cdp.eval("document.getElementById('parcel-attrs').textContent"), /공시지가13,000,000원\/㎡ .*소유구분법인 · 변동 2026-09-24.*속성 기준일2026-09-25/, "파생본의 현재 속성과 속성 기준일");
+      // 공시지가 추이 (J5-030): 가상 파생본의 필지 1 은 같은 2026년 1월 기준에서 값이 바뀐 두 점
+      assert.equal(await cdp.eval("document.getElementById('parcel-price').hidden"), false);
+      assert.deepEqual(await cdp.eval("Array.from(document.querySelectorAll('#parcel-price-list li')).map(li => li.textContent)"),
+        ["2026년 1월 기준12,340,000원/㎡ · 확인 2026-09-05", "2026년 1월 기준13,000,000원/㎡ (+5.3%) · 확인 2026-09-25 · 같은 기준연월의 값이 바뀜 (정정 여부 확인)"]);
       await cdp.eval("document.getElementById('parcel-history').click(); 'ok'");
       await cdp.waitFor("!document.getElementById('sec-history').hidden");
       assert.equal(await cdp.eval("document.getElementById('history-title').textContent"), "가상동 1 필지");

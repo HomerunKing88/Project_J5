@@ -164,6 +164,54 @@ export function attrChangeText(c) {
   }).join(" · ");
 }
 
+// ---- 공시지가 추이 (J5-030): 파생본의 현재 속성(attrs)과 변화 항목(attrs_history)에서 기준일마다의 공시지가를 되살린다 ----
+const PRICE_FIELDS = ["official_land_price_krw_m2", "price_base_year", "price_base_month"];
+
+/**
+ * 공시지가 점 목록(오래된 것부터). 현재 속성에서 토지특성 변화 항목을 거꾸로 짚어 각 기준일의 값을 정확히 되살린다(변화 항목은 이전 값과 새 값을 함께 담는다).
+ * 점: { as_of, price, year, month, first, earlier, deltaPct, sameBase }. as_of 가 null 이면 파생본의 이력 상한으로 앞부분이 잘려 기준일을 모르는 이전 값이다.
+ * deltaPct 는 바로 앞 점 대비 증감률(%)이며 앞 점이 없거나 0 이면 null. sameBase 는 앞 점과 공시 기준연월이 같은데 값이 다른 경우(정정 등, 확인 필요).
+ * 값은 자료 그대로이며 판단이 아니다. 공시지가가 없는 기준일은 점으로 만들지 않는다.
+ */
+export function priceTrend(attrs, history) {
+  if (!attrs || typeof attrs !== "object") return [];
+  const feats = (Array.isArray(history) ? history : []).filter((h) => h && h.kind === "land_feature" && h.changes && typeof h.as_of === "string")
+    .slice().sort((a, b) => (a.as_of < b.as_of ? -1 : a.as_of > b.as_of ? 1 : 0));
+  let state = Object.fromEntries(PRICE_FIELDS.map((k) => [k, attrs[k] ?? null]));
+  const pts = [];
+  if (!feats.length) {
+    if (Number.isFinite(state.official_land_price_krw_m2)) pts.push({ as_of: attrs.as_of ?? null, ...state, first: false, earlier: false });
+  } else {
+    for (let i = feats.length - 1; i >= 0; i--) {
+      const h = feats[i];
+      if (h.first || PRICE_FIELDS.some((k) => k in h.changes)) pts.push({ as_of: h.as_of, ...state, first: !!h.first, earlier: false });
+      const before = { ...state };
+      for (const k of PRICE_FIELDS) if (k in h.changes) before[k] = h.changes[k].from ?? null;
+      state = before;
+    }
+    // 가장 앞의 남은 항목이 '처음 확인' 이 아니면 파생본 이력 상한으로 앞부분이 잘린 것이다. 그 이전 값은 기준일을 모른다
+    if (!feats[0].first && PRICE_FIELDS.some((k) => k in feats[0].changes)) pts.push({ as_of: null, ...state, first: false, earlier: true });
+  }
+  const out = pts.reverse().filter((q) => Number.isFinite(q.official_land_price_krw_m2)).map((q) => ({
+    as_of: q.as_of, price: q.official_land_price_krw_m2, year: q.price_base_year ?? null, month: q.price_base_month ?? null, first: q.first, earlier: q.earlier,
+  }));
+  // 같은 값·같은 기준연월이 이어지면 하나로 (값이 바뀐 지점만 보인다)
+  const dedup = out.filter((q, i) => i === 0 || !(q.price === out[i - 1].price && q.year === out[i - 1].year && q.month === out[i - 1].month));
+  return dedup.map((q, i) => {
+    const prev = i ? dedup[i - 1] : null;
+    return { ...q, deltaPct: prev && prev.price > 0 ? ((q.price - prev.price) / prev.price) * 100 : null,
+             sameBase: !!prev && prev.year != null && prev.year === q.year && prev.month === q.month };
+  });
+}
+
+/** 추이 한 점을 화면용 글 [기준, 값, 증감, 확인]. */
+export function priceTrendRow(q) {
+  const base = q.year ? `${q.year}년${q.month ? ` ${q.month}월` : ""} 기준` : "기준연월 미확인";
+  const delta = q.deltaPct == null ? "" : `${q.deltaPct > 0 ? "+" : ""}${q.deltaPct.toFixed(1)}%`;
+  const seen = q.earlier ? "이전 자료 (기준일 모름)" : q.as_of ? `확인 ${q.as_of}` : "기준일 미확인";
+  return [base, `${fmtInt(q.price)}원/㎡`, delta, seen + (q.sameBase ? " · 같은 기준연월의 값이 바뀜 (정정 여부 확인)" : "")];
+}
+
 /** 번들의 속성 요약: 속성 있는 필지 수와 용도지역별 수. */
 export function attrsSummary(bundle) {
   const feats = bundle?.features ?? [];
