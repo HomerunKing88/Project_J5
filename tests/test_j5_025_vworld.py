@@ -150,7 +150,9 @@ def test_read_attrs_values_nulls_truncation_and_privacy(vw_zip):
     a1 = attrs[P1]
     assert a1["jimok_name"] == "대" and a1["registered_area_m2"] == 1770.5 and a1["official_land_price_krw_m2"] == 12340000 and a1["price_base_year"] == 2026 and a1["price_base_month"] == 1
     assert a1["use_zone_1"] == "일반상업지역" and a1["use_zone_2"] is None, "'지정되지않음' 은 null"
-    assert a1["plan_zones"] == [{"code": "UQA01X", "name": "도시지역", "relation": "포함"}, {"code": "UQA220", "name": "일반상업지역", "relation": "포함"}, {"code": "UQQ300", "name": "지구단위계획구역(가상)", "relation": "포함"}]
+    # J5-032: 코드·관계만 짝이고 이름은 짝짓지 않은 목록 (실측: 이름 순서가 코드와 맞지 않는 행이 있다)
+    assert a1["plan_zones"] == [{"code": "UQA01X", "name": None, "relation": "포함"}, {"code": "UQA220", "name": None, "relation": "포함"}, {"code": "UQQ300", "name": None, "relation": "포함"}]
+    assert a1["plan_zone_names"] == ["도시지역", "일반상업지역", "지구단위계획구역(가상)"]
     assert a1["plan_zones_truncated"] is False and a1["ownership_kind"] == "개인" and a1["ownership_kind_code"] == "01" and a1["ownership_changed_on"] == "2017-01-01" and a1["co_owner_count"] == 1
     a3 = attrs[P3]
     assert a3["official_land_price_krw_m2"] is None and a3["price_base_year"] is None, "빈 값은 null (0 이 아니다)"
@@ -160,6 +162,11 @@ def test_read_attrs_values_nulls_truncation_and_privacy(vw_zip):
     assert a42["ownership_kind"] == "국유지" and a42["national_institution_code"] == "01"
     a2 = attrs[P2]
     assert a2["plan_zones_truncated"] is True and len(a2["plan_zones"]) == 5 and a2["plan_zones"][4] == {"code": "ZA0014", "name": None, "relation": "저촉"}, "이름 목록이 열 길이에 잘리면 코드만 남고 표시한다"
+    assert a2["plan_zone_names"] == ["도시지역", "제3종일반주거지역", "준주거지역"], "열 한도에서 끊긴 마지막 이름 조각은 뺀다"
+    # 이름이 코드보다 많고 순서가 어긋난 행 (실측 모양): 코드·관계는 그대로, 이름은 적힌 순서 그대로 둔다
+    a3p = attrs[P3]
+    assert [(z["code"], z["relation"]) for z in a3p["plan_zones"]] == [("UQA01X", "포함"), ("UOA120", "저촉"), ("UQA320", "포함")] and all(z["name"] is None for z in a3p["plan_zones"])
+    assert a3p["plan_zone_names"] == ["도시지역", "상대보호구역", "상대보호구역(가상)", "준공업지역"] and a3p["plan_zones_truncated"] is False
     assert "ownership_kind" not in attrs[PM] or attrs[PM].get("ownership_kind") is None
     assert all(k not in attrs[PM] for k in ("ownership_kind_code", "co_owner_count")), "소유 자료가 없는 필지에는 소유 필드 자체가 없다"
     assert [s["kind"] for s in sources] == ["land_feature", "land_plan", "land_ownership"] and sources[2]["rows_used"] == 5 and sources[2]["record_count"] == 5
@@ -246,7 +253,7 @@ def test_load_bundle_inserts_attributes_and_fills_registered_area(db):
     row = db.conn.execute("SELECT a.*, p.registered_area_m2 AS p_area, p.registered_area_missing_reason AS p_reason FROM parcel_attributes a JOIN parcels p USING (parcel_id) WHERE p.pnu = ?", (P1,)).fetchone()
     assert row["use_zone_1"] == "일반상업지역" and row["official_land_price_krw_m2"] == 12340000 and row["as_of"] == "2026-09-05" and row["ownership_kind"] == "개인"
     assert row["p_area"] == 1770.5 and row["p_reason"] is None, "공부면적은 parcels 에도 채우고 결측 사유를 지운다"
-    assert json.loads(row["plan_zones_json"])[1]["name"] == "일반상업지역" and len(json.loads(row["sources_json"])) == 3 and row["source_document_id"] == r.source_document_id
+    assert json.loads(row["plan_zone_names_json"])[1] == "일반상업지역" and json.loads(row["plan_zones_json"])[1]["code"] == "UQA220" and len(json.loads(row["sources_json"])) == 3 and row["source_document_id"] == r.source_document_id
     doc = db.conn.execute("SELECT notes FROM source_documents WHERE document_id = ?", (r.source_document_id,)).fetchone()
     assert "토지특성공간정보" in doc["notes"]
     assert db.status()["counts"]["parcel_attributes"] == 6 and db.status()["ok"]
@@ -292,7 +299,7 @@ def test_partial_bundle_keeps_fields_of_absent_datasets_and_null_area_clears_mir
     assert r.outcome == "applied" and r.updated == 6 and r.attrs_updated == 6
     row = db.conn.execute("SELECT a.*, p.registered_area_m2 AS p_area, p.registered_area_missing_reason AS p_reason FROM parcel_attributes a JOIN parcels p USING (parcel_id) WHERE p.pnu = ?", (P1,)).fetchone()
     assert row["official_land_price_krw_m2"] == 55_000_000 and row["as_of"] == "2026-10-01"
-    assert row["ownership_kind"] == "개인" and row["ownership_changed_on"] == "2017-01-01" and json.loads(row["plan_zones_json"])[1]["name"] == "일반상업지역", "번들에 없는 자료의 값은 지우지 않는다"
+    assert row["ownership_kind"] == "개인" and row["ownership_changed_on"] == "2017-01-01" and json.loads(row["plan_zone_names_json"])[1] == "일반상업지역", "번들에 없는 자료의 값은 지우지 않는다"
     assert row["registered_area_m2"] is None and row["p_area"] is None and row["p_reason"] == "not_collected", "면적이 null 이면 parcels 미러도 null"
     srcs = json.loads(row["sources_json"])
     assert sorted(s_["kind"] for s_ in srcs) == ["land_feature", "land_ownership", "land_plan"] and next(s_ for s_ in srcs if s_["kind"] == "land_feature")["dbf_sha256"] == "3" * 64
@@ -308,7 +315,7 @@ def test_partial_bundle_keeps_fields_of_absent_datasets_and_null_area_clears_mir
     r = load_bundle(db, own)
     assert r.attrs_updated == 6
     row = db.conn.execute("SELECT a.* FROM parcel_attributes a JOIN parcels p USING (parcel_id) WHERE p.pnu = ?", (P1,)).fetchone()
-    assert row["ownership_kind"] == "법인" and row["official_land_price_krw_m2"] == 55_000_000 and json.loads(row["plan_zones_json"])[1]["name"] == "일반상업지역"
+    assert row["ownership_kind"] == "법인" and row["official_land_price_krw_m2"] == 55_000_000 and json.loads(row["plan_zone_names_json"])[1] == "일반상업지역"
     # 파생본에는 필지마다 속성 기준일이 따로 실린다 (도형 기준일 2026-10-01 과 같지만 별도 필드)
     b = parcels_bundle_from_db(db, generated_at="2026-10-02T00:00:00Z")
     assert next(f for f in b["features"] if f["id"] == P1)["properties"]["attrs"]["as_of"] == "2026-10-01" and schema_errors("parcels_bundle.schema.json", b) == []

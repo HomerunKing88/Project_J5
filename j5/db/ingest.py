@@ -4,7 +4,7 @@
 
 순서와 보장 (정본은 1·2 동안 읽기 전용으로 열어 마이그레이션도 적용하지 않는다, 리뷰 반영 PR #77):
 1. 변환(정본에 쓰지 않음): 입력마다 VWorld 묶음인지 확인하고(아니면 거절), 연속지적도의 WGS84 범위 전체를 범위로 삼아 번들을 만든다.
-   번들은 실데이터 홈 `parcels/bundles/<입력 이름>-<도형 기준일>-<키 8자>.j5parcels.json` 에 쓴다. 키는 입력 sha256·자료명·이용조건·자료 종류로 만들며,
+   번들은 실데이터 홈 `parcels/bundles/<입력 이름>-<도형 기준일>-<키 8자>.j5parcels.json` 에 쓴다. 키는 입력 sha256·자료명·이용조건·자료 종류·해석 규칙의 판으로 만들며,
    이 넷이 같을 때만 있는 번들을 다시 쓴다(다시 쓸 때도 번들의 출처 표기를 대조한다). 자료명·이용조건을 고쳐 다시 실행하면 새 번들을 만든다.
    하나라도 실패하면 아무것도 반영하지 않고 멈춘다.
 2. 백업(기본): 반영 전에, 대기 중인 마이그레이션보다도 먼저, 읽기 전용 연결에서 `backup` 과 같은 일관된 사본을 만든다. 실패하면 반영하지 않는다.
@@ -23,6 +23,7 @@ from j5.db import schema as S
 from j5.db.parcels import BUNDLE_SCHEMA, load_bundle, load_json
 from j5.db.store import Db
 from j5.parcels.convert import COORD_DECIMALS, Clip, ConvertError, ConvertOptions, convert, inspect_source, write_bundle
+from j5.parcels import vworld
 from j5.parcels.vworld import VWorldError, detect_vworld, read_attrs
 
 BUNDLES_DIR = Path("parcels") / "bundles"
@@ -105,7 +106,8 @@ def _bundle_path(home: Path, source: Path, geometry_version: str, *, name: str, 
         if stem.lower().endswith(suf):
             stem = stem[: -len(suf)]
     safe = "".join(c if (c.isalnum() or c in "-_.") else "_" for c in stem)[:80] or "vworld"
-    key = hashlib.sha256("\0".join((_sha256(source), name, license or "", bundle_mode)).encode("utf-8")).hexdigest()[:8]
+    # 해석 규칙의 판(J5-032)도 키에 넣어, 규칙이 바뀌면 옛 규칙으로 만든 번들을 다시 쓰지 않는다
+    key = hashlib.sha256("\0".join((_sha256(source), name, license or "", bundle_mode, f"plan{vworld.PLAN_PARSER_VERSION}")).encode("utf-8")).hexdigest()[:8]
     return home / BUNDLES_DIR / f"{safe}-{geometry_version}-{key}.j5parcels.json"
 
 

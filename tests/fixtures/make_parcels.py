@@ -158,7 +158,8 @@ VW_PLAN = {
     PARCELS[0][0]: {"prpos_area_dstrc_code_list": "UQA01X,UQA220,UQQ300", "prpos_area_dstrc_nm_list": "도시지역,일반상업지역,지구단위계획구역(가상)", "cnflc_at_nm_list": "포함,포함,포함"},
     PARCELS[1][0]: {"prpos_area_dstrc_code_list": "UQA01X,UQA123,UQS100", "prpos_area_dstrc_nm_list": "도시지역,제2종일반주거지역,소로2류(폭 8m~10m)", "cnflc_at_nm_list": "포함,포함,접함"},
     PARCELS[2][0]: {"prpos_area_dstrc_code_list": "UQA01X,UQA124,UQA130,UQQ600,ZA0014", "prpos_area_dstrc_nm_list": "도시지역,제3종일반주거지역,준주거지역,토지거래계약에관한허가구역(가상 아주 긴 이름)", "cnflc_at_nm_list": "포함,포함,포함,포함,저촉"},
-    PARCELS[3][0]: {"prpos_area_dstrc_code_list": "UQA01X,UQA320", "prpos_area_dstrc_nm_list": "도시지역,준공업지역", "cnflc_at_nm_list": "포함,포함"},
+    # 실측 모양(J5-032): 한 코드(UOA120)의 이름이 두 번 나와 이름 목록이 코드보다 길고 순서가 어긋난다. 위치로 짝지으면 준공업지역 코드에 다른 이름이 붙는다
+    PARCELS[3][0]: {"prpos_area_dstrc_code_list": "UQA01X,UOA120,UQA320", "prpos_area_dstrc_nm_list": "도시지역,상대보호구역,상대보호구역(가상),준공업지역", "cnflc_at_nm_list": "포함,저촉,포함"},
     PARCELS[4][0]: {"prpos_area_dstrc_code_list": "UQA01X,UQA410,UQS100", "prpos_area_dstrc_nm_list": "도시지역,자연녹지지역,중로1류(폭 20m~25m)", "cnflc_at_nm_list": "포함,포함,저촉"},
     PARCELS[5][0]: {"prpos_area_dstrc_code_list": "UQA02X,UQA520", "prpos_area_dstrc_nm_list": "관리지역,보전관리지역", "cnflc_at_nm_list": "포함,포함"},
 }

@@ -70,7 +70,7 @@ def test_same_second_changes_keep_insertion_order(db):
 
 def test_schema_17_table_and_immutability(db):
     st = db.status()
-    assert st["db_schema_version"] == S.DB_SCHEMA_VERSION == 17 and st["counts"]["tracking_changes"] == 0 and st["ok"]
+    assert st["db_schema_version"] == S.DB_SCHEMA_VERSION == 18 and st["counts"]["tracking_changes"] == 0 and st["ok"]
     assert 17 not in S.FK_OFF_MIGRATIONS and S.WATCHLIST_STATUSES == ("watch", "detailed_review", "purchase_ready")
     set_status(db, A[0], "watch", reason="가상", changed_on="2026-09-20")
     with pytest.raises(sqlite3.IntegrityError, match="불변"):
@@ -135,11 +135,12 @@ def test_migration_17_backfills_readiness_decisions(db):
     db.close()
     conn = sqlite3.connect(str(path))
     conn.execute("DROP TABLE tracking_changes")
-    conn.execute("DELETE FROM schema_migrations WHERE version = 17")
+    conn.execute("ALTER TABLE parcel_attributes DROP COLUMN plan_zone_names_json")  # 마이그레이션 18 (J5-032) 이 더한 열
+    conn.execute("DELETE FROM schema_migrations WHERE version >= 17")
     conn.commit()
     conn.close()
     with Db.open(path) as d2:
-        assert d2.schema_version() == 17 and d2.status()["ok"]
+        assert d2.schema_version() == S.DB_SCHEMA_VERSION == 18 and d2.status()["ok"]
         rows = changes(d2, A[0])
         assert rows == [{"previous_status": "unreviewed", "new_status": "purchase_ready", "changed_on": TODAY, "reason": None, "source": "readiness", "decision_id": d["decision_id"]}]
         assert all(len(r[0]) == 36 for r in d2.conn.execute("SELECT change_id FROM tracking_changes"))

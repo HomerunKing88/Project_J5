@@ -72,7 +72,7 @@ def snaps(db, pnu):
 
 def test_schema_16_and_status_counts(db):
     st = db.status()
-    assert st["db_schema_version"] == S.DB_SCHEMA_VERSION == 17 and st["counts"]["parcel_attribute_snapshots"] == 0 and db.conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+    assert st["db_schema_version"] == S.DB_SCHEMA_VERSION == 18 and st["counts"]["parcel_attribute_snapshots"] == 0 and db.conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
 
 
 def test_first_load_writes_one_snapshot_per_kind_and_migration_backfills_from_v15(db, home):
@@ -91,18 +91,24 @@ def test_first_load_writes_one_snapshot_per_kind_and_migration_backfills_from_v1
     conn = sqlite3.connect(str(path))
     conn.execute("DROP TABLE parcel_attribute_snapshots")
     conn.execute("DROP TABLE tracking_changes")  # 마이그레이션 17 (J5-029) 도 없던 정본
+    conn.execute("ALTER TABLE parcel_attributes DROP COLUMN plan_zone_names_json")  # 마이그레이션 18 (J5-032) 이 더한 열
     conn.execute("DELETE FROM schema_migrations WHERE version >= 16")
     conn.commit()
     conn.close()
     with Db.open(path) as d2:
-        assert d2.schema_version() == S.DB_SCHEMA_VERSION == 17 and d2.status()["counts"]["parcel_attribute_snapshots"] == 18 and d2.status()["ok"]
+        assert d2.schema_version() == S.DB_SCHEMA_VERSION == 18 and d2.status()["counts"]["parcel_attribute_snapshots"] == 18 and d2.status()["ok"]
         rows = snaps(d2, P1)
         assert json.loads(rows[0]["values_json"]) == {"jimok_name": "대", "registered_area_m2": 1770.5, "official_land_price_krw_m2": 12340000, "price_base_year": 2026, "price_base_month": 1,
                                                        "use_zone_1": "일반상업지역", "use_zone_2": None, "land_use_situation": "상업용", "road_side": "광대로한면", "terrain_height": "평지", "terrain_form": "세로장방"}
         plan = json.loads(next(s["values_json"] for s in rows if s["kind"] == "land_plan"))
-        assert plan["plan_zones"][1]["name"] == "일반상업지역" and plan["plan_zones_truncated"] is False
+        assert plan["plan_zones"][1]["code"] == "UQA220" and plan["plan_zones_truncated"] is False
         assert all(len(r_[0]) == 36 for r_ in d2.conn.execute("SELECT snapshot_id FROM parcel_attribute_snapshots"))
-        # 백필된 스냅샷과 같은 번들을 다시 넣어도 변화 없음 (값 비교가 SQL json 과 Python 정규화 사이에서 일치)
+        # 백필된 스냅샷과 같은 번들을 다시 넣으면: 토지특성·소유 스냅샷은 그대로(값 비교가 SQL json 과 Python 정규화 사이에서 일치),
+        # 토지이용계획은 버전 15 정본에 없던 이름 목록(J5-032, 마이그레이션 18)만 채워져 같은 기준일 스냅샷이 교체된다. 한 번 더 넣으면 변화 없음
+        r3 = load_bundle(d2, vw_bundle())
+        named = sum(1 for f in vw_bundle()["features"] if f["properties"]["attrs"].get("plan_zone_names"))
+        # (열을 지워 흉내낸 것이라 속성 행의 내용 해시는 이름 목록을 담은 채 남아 행은 변화 없음이다. 실제 버전 15 정본은 옛 형식으로 계산된 해시라 갱신된다)
+        assert r3.outcome == "applied" and r3.snapshots_inserted == 0 and r3.snapshots_replaced == named == 6, r3.to_text()
         assert load_bundle(d2, vw_bundle()).outcome == "unchanged"
 
 

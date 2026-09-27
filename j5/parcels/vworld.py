@@ -225,15 +225,29 @@ def _feature_attrs(row: dict) -> dict:
     }
 
 
-def _plan_attrs(row: dict) -> dict:
+# 토지이용계획 목록 해석 규칙의 판. 번들 재사용 키(j5.db.ingest)에 넣어, 규칙이 바뀌면 옛 규칙으로 만든 번들을 다시 쓰지 않는다.
+PLAN_PARSER_VERSION = "2"
+
+
+def _plan_attrs(row: dict, name_list_len: int | None = None) -> dict:
+    """토지이용계획 한 행 (J5-032 정정, ADR-19).
+
+    실측(VWorld 3구역 2,724행): 코드 목록과 관계(포함·저촉·접함) 목록은 온전하고 수가 1:1 로 같다. 이름 목록은 모든 행이 .dbf 열 한도(254바이트)에서
+    잘렸고, 한 코드의 이름이 두 번 나오는 등 순서가 코드와 맞지 않는 행이 있다. 그래서 코드와 이름을 위치로 짝짓지 않는다:
+    plan_zones 는 코드·관계 짝(name 은 null), plan_zone_names 는 자료에 적힌 순서 그대로의 이름 목록이다.
+    이름 목록의 바이트 길이가 열 한도에 닿았으면 잘린 것(plan_zones_truncated)이며, 끊긴 마지막 이름 조각은 뺀다.
+    """
     codes = [c.strip() for c in str(row.get("prpos_area_dstrc_code_list") or "").split(",") if c.strip()]
-    names = [n.strip() for n in str(row.get("prpos_area_dstrc_nm_list") or "").split(",")] if row.get("prpos_area_dstrc_nm_list") else []
     rels = [r.strip() for r in str(row.get("cnflc_at_nm_list") or "").split(",")] if row.get("cnflc_at_nm_list") else []
-    zones = []
-    for i, code in enumerate(codes):
-        zones.append({"code": code, "name": names[i] if i < len(names) and names[i] else None, "relation": rels[i] if i < len(rels) and rels[i] else None})
-    # 이름 목록은 .dbf 열 길이에 잘릴 수 있다 (코드 수보다 이름 수가 적으면 잘린 것)
-    return {"plan_zones": zones, "plan_zones_truncated": len(names) < len(codes)}
+    raw = str(row.get("prpos_area_dstrc_nm_list") or "")
+    names = [n.strip() for n in raw.split(",")] if raw else []
+    # UTF-8 한 글자는 최대 3바이트라, 한도에서 3바이트 안쪽이면 한도에 닿아 잘린 것으로 본다
+    truncated = bool(raw) and name_list_len is not None and len(raw.encode("utf-8")) >= name_list_len - 3
+    if truncated and names:
+        names = names[:-1]
+    rel_ok = len(rels) == len(codes)
+    zones = [{"code": code, "name": None, "relation": (rels[i] or None) if rel_ok else None} for i, code in enumerate(codes)]
+    return {"plan_zones": zones, "plan_zone_names": [n for n in names if n], "plan_zones_truncated": truncated}
 
 
 def _ownership_attrs(row: dict) -> dict:
@@ -259,6 +273,9 @@ def read_attrs(vw: VWorldSet, *, encoding: str = "utf-8") -> tuple[dict[str, dic
             raise VWorldError(e.code, f"{KIND_LABEL[kind]}: {e.message}") from None
         mapping = vw.mappings.get(kind) or read_mapping(src_path)
         names = [mapping.get(f.name, f.name) for f in fields]
+        lengths = {mapping.get(f.name, f.name): f.length for f in fields}
+        if kind == "land_plan":
+            fn = lambda row, _n=lengths.get("prpos_area_dstrc_nm_list"): _plan_attrs(row, _n)  # noqa: E731 - 이름 목록 열 길이로 잘림을 판정한다
         if "pnu" not in names:
             raise VWorldError("pnu_missing", f"{KIND_LABEL[kind]} 에 pnu 열이 없다 (변경컬럼정보.csv 가 없거나 형식이 다르다). 열: {names}")
         n = 0

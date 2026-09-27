@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { validateParcels, labelPoint, pointInFeature, assetsInParcel, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, polygonsOf, MAX_PARCELS, zoneCategory, ZONE_LABELS, fmtInt, attrLines, attrsSummary, fmtAttrValue, attrChangeText, parseParcelQuery, findParcels, parcelAt, interiorPoint, priceTrend, priceTrendRow } from "../../web/app/parcels.js";
+import { validateParcels, labelPoint, pointInFeature, assetsInParcel, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, polygonsOf, MAX_PARCELS, zoneCategory, ZONE_LABELS, fmtInt, attrLines, attrsSummary, fmtAttrValue, attrChangeText, parseParcelQuery, findParcels, parcelAt, interiorPoint, priceTrend, priceTrendRow, planZonesText } from "../../web/app/parcels.js";
 import { worldBbox, parcelPathD, parcelLabelVisible, mercator, fitView, FIT_MAX_SCALE, PARCEL_LOCAL_K } from "../../web/app/map.js";
 
 const bundle = () => JSON.parse(readFileSync(new URL("../fixtures/parcels/synthetic.j5parcels.json", import.meta.url), "utf8"));
@@ -145,7 +145,7 @@ test("zoneCategory·fmtInt·attrLines·attrsSummary", () => {
   assert.equal(l1["공부면적"], "1770.5 ㎡ (토지대장)");
   assert.equal(l1["공시지가"], "12,340,000원/㎡ (2026년 1월 기준)");
   assert.equal(l1["용도지역"], "일반상업지역");
-  assert.equal(l1["규제·지역지구"], "도시지역, 일반상업지역, 지구단위계획구역(가상)");
+  assert.equal(l1["규제·지역지구"], "도시지역, 일반상업지역, 지구단위계획구역(가상) · 코드 3개");
   assert.equal(l1["소유구분"], "개인 · 변동 2017-01-01");
   assert.equal(l1["속성 기준일"], "미확인", "변환 번들에는 as_of 가 없고 fallback 도 안 주면 미확인");
   assert.equal(Object.fromEntries(attrLines(by["1"].properties.attrs, "2026-09-05"))["속성 기준일"], "2026-09-05 (토지 자료 기준, 도형 기준일과 다를 수 있음)");
@@ -154,7 +154,7 @@ test("zoneCategory·fmtInt·attrLines·attrsSummary", () => {
   assert.ok(validateParcels(badAsOf).some((e) => e.includes("as_of")));
   const l2 = Object.fromEntries(attrLines(by["2"].properties.attrs));
   assert.equal(l2["용도지역"], "제3종일반주거지역 · 준주거지역");
-  assert.match(l2["규제·지역지구"], /ZA0014\(저촉\) … \(이름 일부는 원본 열 길이에 잘림/);
+  assert.equal(l2["규제·지역지구"], "도시지역, 제3종일반주거지역, 준주거지역 … (이름 목록은 원본 열 길이에서 잘림) · 코드 5개 (저촉 ZA0014)", "끊긴 마지막 이름 조각은 번들에 없다 (J5-032)");
   assert.equal(l2["소유구분"], "개인 · 공유 3인 · 변동 2011-07-07");
   const l3 = Object.fromEntries(attrLines(by["3"].properties.attrs));
   assert.equal(l3["공시지가"], "미확인", "빈 값은 미확인 (0 이 아니다)");
@@ -188,8 +188,8 @@ test("attrs_history 검증·fmtAttrValue·attrChangeText (J5-026)", () => {
   const wrongKind = vwBundle(); wrongKind.features[0].properties.attrs_history = [{ as_of: "2026-09-05", kind: "land_plan", first: true, changes: { jimok_name: { from: null, to: "대" } } }];
   assert.ok(validateParcels(wrongKind).some((e) => e.includes("허용되지 않은 필드 jimok_name")), "자료 종류에 없는 필드도 거절");
   assert.deepEqual([fmtAttrValue("official_land_price_krw_m2", 12340000), fmtAttrValue("registered_area_m2", 60.2), fmtAttrValue("jimok_name", null), fmtAttrValue("plan_zones_truncated", true), fmtAttrValue("plan_zones", []),
-    fmtAttrValue("plan_zones", [{ code: "A", name: "도시지역", relation: "포함" }, { code: "ZA0014", name: null, relation: "저촉" }])],
-    ["12,340,000원/㎡", "60.2 ㎡", "없음", "예", "없음", "도시지역, ZA0014(저촉)"]);
+    fmtAttrValue("plan_zones", [{ code: "A", name: "도시지역", relation: "포함" }, { code: "ZA0014", name: null, relation: "저촉" }]), fmtAttrValue("plan_zone_names", ["도시지역", "상대보호구역"])],
+    ["12,340,000원/㎡", "60.2 ㎡", "없음", "예", "없음", "A, ZA0014(저촉)", "도시지역, 상대보호구역"], "지역지구 코드는 관계와 함께, 이름은 짝짓지 않은 목록 (J5-032)");
   assert.equal(attrChangeText({ first: true, changes: { official_land_price_krw_m2: { from: null, to: 1000 }, jimok_name: { from: null, to: "대" } } }), "지목 대 · 공시지가 1,000원/㎡", "표시 순서는 필드 순서");
   assert.equal(attrChangeText({ first: false, changes: { ownership_kind: { from: "개인", to: "법인" }, ownership_changed_on: { from: "2017-01-01", to: "2026-09-24" } } }), "소유구분 개인 → 법인 · 소유 변동일 2017-01-01 → 2026-09-24");
   assert.equal(attrChangeText({ first: false, changes: {} }), "");
@@ -302,4 +302,23 @@ test("공시지가 추이: 가상 VWorld 번들(이력 없음)은 필지마다 �
     const t = priceTrend(f.properties.attrs, f.properties.attrs_history);
     assert.ok(t.length <= 1, f.id);
   }
+});
+
+test("규제·지역지구 한 줄 (J5-032): 이름은 짝짓지 않은 목록, 코드는 수와 저촉·접함, 옛 형식 번들, 검증", () => {
+  const by = byLabel(vwBundle());
+  // 실측 모양의 가상 필지 3: 이름이 코드보다 많다 (한 코드의 이름이 두 번). 이름은 그대로, 저촉 관계는 코드로
+  assert.equal(planZonesText(by["3"].properties.attrs), "도시지역, 상대보호구역, 상대보호구역(가상), 준공업지역 · 코드 3개 (저촉 UOA120)");
+  // 관계가 여럿이면 종류별로 묶는다
+  assert.equal(planZonesText({ plan_zones: [{ code: "A", relation: "저촉" }, { code: "B", relation: "접함" }, { code: "C", relation: "저촉" }], plan_zone_names: ["가"] }), "가 · 코드 3개 (저촉 A, C · 접함 B)");
+  // J5-025 형식 번들(이름 목록 없음): 코드에 붙은 이름을 순서대로 쓴다
+  assert.equal(planZonesText({ plan_zones: [{ code: "A", name: "도시지역", relation: "포함" }, { code: "B", name: null, relation: "저촉" }], plan_zones_truncated: true }), "도시지역 … (이름 목록은 원본 열 길이에서 잘림) · 코드 2개 (저촉 B)");
+  assert.equal(planZonesText({ plan_zones: [{ code: "A", name: null, relation: "포함" }] }), "이름 없음 · 코드 1개");
+  assert.equal(planZonesText({}), null);
+  assert.equal(Object.fromEntries(attrLines({ jimok_name: "대" }))["규제·지역지구"], "미확인");
+  const bad = vwBundle(); bad.features[0].properties.attrs.plan_zone_names = ["", "x"];
+  assert.ok(validateParcels(bad).some((e) => e.includes("plan_zone_names")));
+  const hist = vwBundle(); hist.features[0].properties.attrs_history = [{ as_of: "2026-09-05", kind: "land_plan", first: true, changes: { plan_zone_names: { from: null, to: ["가"] } } }];
+  assert.deepEqual(validateParcels(hist), [], "이름 목록은 토지이용계획 이력의 허용 필드");
+  assert.equal(attrChangeText({ first: false, changes: { plan_zones: { from: [{ code: "A", relation: "포함" }], to: [{ code: "A", relation: "포함" }, { code: "B", relation: "저촉" }] }, plan_zone_names: { from: ["가"], to: ["가", "나"] } } }),
+    "지역지구 코드 A → A, B(저촉) · 지역지구 이름 목록 가 → 가, 나");
 });

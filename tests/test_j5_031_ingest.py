@@ -148,7 +148,8 @@ def _as_schema_16(db) -> Path:
     db.close()
     conn = sqlite3.connect(str(path))
     conn.execute("DROP TABLE tracking_changes")
-    conn.execute("DELETE FROM schema_migrations WHERE version = 17")
+    conn.execute("ALTER TABLE parcel_attributes DROP COLUMN plan_zone_names_json")  # 마이그레이션 18 (J5-032) 이 더한 열
+    conn.execute("DELETE FROM schema_migrations WHERE version >= 17")
     conn.commit()
     conn.close()
     return path
@@ -165,7 +166,7 @@ def _schema(path) -> int:
 def test_backup_is_taken_before_pending_migrations(db, home, vw_zip, tmp_path):
     """리뷰 반영 PR #77 (P1): 도구보다 오래된 정본에서 변환·백업이 실패하면 마이그레이션도 적용하지 않고, 성공하면 백업이 마이그레이션 전 정본을 담는다."""
     path = _as_schema_16(db)
-    assert S.DB_SCHEMA_VERSION == 17 and _schema(path) == 16
+    assert S.DB_SCHEMA_VERSION == 18 and _schema(path) == 16
     bad = ING.ingest_vworld(path, home, [tmp_path / "missing.zip"], geometry_version=GV)
     assert bad.outcome == "failed" and bad.stage == "convert" and _schema(path) == 16, "변환 실패면 마이그레이션도 없음"
     import j5.db.backup as B
@@ -177,10 +178,10 @@ def test_backup_is_taken_before_pending_migrations(db, home, vw_zip, tmp_path):
         B.create_backup = real_backup
     assert failed.stage == "backup" and _schema(path) == 16, "백업 실패면 마이그레이션도 없음"
     r = ING.ingest_vworld(path, home, [vw_zip], geometry_version=GV)
-    assert r.outcome == "applied" and (r.migrated_from, r.migrated_to) == (16, 17) and _schema(path) == 17
+    assert r.outcome == "applied" and (r.migrated_from, r.migrated_to) == (16, 18) and _schema(path) == 18
     manifest = json.loads((home / r.backup_dir / "backup_manifest.json").read_text(encoding="utf-8"))
     assert manifest["db_schema_version"] == 16, "백업은 마이그레이션 전 정본"
-    assert "마이그레이션 16 → 17 을 반영 단계에서 적용했다 (그 전에 백업함)" in r.to_text()
+    assert "마이그레이션 16 → 18 을 반영 단계에서 적용했다 (그 전에 백업함)" in r.to_text()
     with Db.open(path) as d2:
         assert d2.status()["counts"]["parcels"] == 6 and d2.status()["ok"]
 
