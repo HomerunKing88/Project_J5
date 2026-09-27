@@ -30,7 +30,17 @@
         "address": { "type": "string", "minLength": 1 },
         "data_mode": { "type": "string", "enum": ["synthetic", "private_real"] },
         "created_at": { "type": "string", "format": "date" },
-        "notes": { "type": ["string", "null"] }
+        "notes": { "type": ["string", "null"] },
+        "tracking_status": {
+          "description": "정본 출력값 (파생본 시드에서만, J5-029 ADR-22). 폰 표시·관찰목록 필터용. load-seed 는 이 필드가 든 시드를 거절한다",
+          "type": "string",
+          "enum": ["unreviewed", "background", "watch", "detailed_review", "purchase_ready", "hold", "excluded", "archived"]
+        },
+        "resolution_status": {
+          "description": "정본 출력값 (파생본 시드에서만). pending 은 기기가 만든 임시 매입 단위로 PC 확인 전",
+          "type": "string",
+          "enum": ["pending", "confirmed"]
+        }
       },
       "anyOf": [
         { "required": ["location_point"] },

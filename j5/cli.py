@@ -37,6 +37,7 @@ from j5.db.archive import EXIT_BY_OUTCOME as ARCHIVE_EXIT, ArchiveError, create_
 from j5.db.viewpkg import EXIT_BY_VERDICT as VIEW_EXIT, inspect_view, view_text
 from j5.db.readiness import apply_case_input, apply_stage_recheck, approve as readiness_approve, case_add_text, decision_text, enforce_release, evaluate as readiness_evaluate, load_case_input, load_stage_recheck_input, readiness_text, stage_recheck_text, withdraw as readiness_withdraw
 from j5.db.cases import export_cases, export_text
+from j5.db.tracking import history as tracking_history, history_text as tracking_history_text, overview as tracking_overview, overview_text as tracking_overview_text, set_status as tracking_set_status, set_status_text as tracking_set_status_text
 from j5.calc.inputs import calc_text, load_calc_input, run_calc
 from j5.calc.plans import plans_csv
 from j5.parcels.convert import Clip, ConvertError, ConvertOptions, convert, convert_text, inspect_source, inspect_text, write_bundle
@@ -77,6 +78,14 @@ def _build_parser() -> argparse.ArgumentParser:
     ac_ = dsub.add_parser("asset-confirm", help="기기가 만든 임시 매입 단위(resolution_status=pending)를 확인된 물건으로 바꾼다 (J5-028). 필지 연결은 parcels-suggest/link 로 따로 한다")
     ac_.add_argument("asset_id")
     ac_.add_argument("--label", help="확인하며 이름을 바꿀 때")
+    at_ = dsub.add_parser("asset-track", help="관심 단계(관찰목록) 변경·이력 (J5-029). 단계를 생략하면 현재 단계와 변경 이력을 보인다. purchase_ready 는 readiness-approve/withdraw 로만")
+    at_.add_argument("asset_id")
+    at_.add_argument("status", nargs="?", help="unreviewed/background/watch/detailed_review/hold/excluded/archived (hold·excluded·archived 는 --reason 필요)")
+    at_.add_argument("--reason", help="변경 사유 (이력에 남는다)")
+    at_.add_argument("--on", help="변경일 YYYY-MM-DD. 생략 시 오늘")
+    at_.add_argument("--json", action="store_true")
+    wl = dsub.add_parser("watchlist", help="관심 단계별 물건 수와 관찰목록(watch·detailed_review·purchase_ready) (J5-029)")
+    wl.add_argument("--json", action="store_true")
     dm = dsub.add_parser("import", help="관측 패키지(.j5field.zip 또는 폴더)를 정본에 반영한다. 사진은 J5_DATA_HOME/photos 에 보관. 기기가 만든 물건(assets.new.json)은 임시 매입 단위(pending)로 만든다")
     dm.add_argument("package", type=Path)
     dm.add_argument("--data-home", type=Path, help="사진·로그를 둘 실데이터 홈. 생략 시 J5_DATA_HOME")
@@ -417,6 +426,18 @@ def _db_main(args) -> int:
                     db.conn.execute("UPDATE assets SET resolution_status = 'confirmed', label = COALESCE(?, label), updated_at = ? WHERE asset_id = ?", (args.label, db.now(), args.asset_id))
                     v = db.bump_dataset_version()
                 print(f"물건 확인: {args.label or row['label']} ({args.asset_id}) resolution_status pending → confirmed · dataset_version {v}. 필지 연결은 parcels-suggest → parcels-link")
+                return 0
+            if args.db_command == "asset-track":
+                if args.status is None:
+                    h = tracking_history(db, args.asset_id)
+                    print(json.dumps(h, ensure_ascii=False, indent=2) if args.json else tracking_history_text(h))
+                    return 0
+                r = tracking_set_status(db, args.asset_id, args.status, reason=args.reason, changed_on=args.on)
+                print(json.dumps(r, ensure_ascii=False, indent=2) if args.json else tracking_set_status_text(r))
+                return 0
+            if args.db_command == "watchlist":
+                o = tracking_overview(db)
+                print(json.dumps(o, ensure_ascii=False, indent=2) if args.json else tracking_overview_text(o))
                 return 0
             if args.db_command == "import":
                 home = _data_home(args)

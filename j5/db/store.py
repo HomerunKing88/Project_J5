@@ -282,7 +282,7 @@ class Db:
         """정본 상태. data_home 을 주면 파생본 포인터·ZIP 파일까지 실제로 확인한다(없으면 '파일 미확인' 으로 표시)."""
         counts = {t: self.conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
                   for t in ("subjects", "assets", "source_documents", "records", "record_evidence", "attachments", "survey_units", "survey_sessions", "unit_observations", "parcels", "parcel_attributes", "parcel_attribute_snapshots", "asset_components",
-                            "collection_runs", "transaction_observations", "transactions", "transaction_links", "review_decisions", "zone_rules")}
+                            "collection_runs", "transaction_observations", "transactions", "transaction_links", "review_decisions", "zone_rules", "tracking_changes")}
         integrity = [r[0] for r in self.conn.execute("PRAGMA integrity_check")]
         fk = [dict(zip(("table", "rowid", "parent", "fkid"), r)) for r in self.conn.execute("PRAGMA foreign_key_check")]
         projection = None
@@ -314,6 +314,10 @@ class Db:
         errs = schema_errors("assets_seed.schema.json", seed)
         for a in seed if not errs else []:
             errs += seed_asset_errors(a, self.data_mode)
+            # 관심 단계·확인 상태는 파생본 시드가 폰에 알리는 정본 출력값이다(J5-029). 시드로 되돌려 넣지 않는다: 관심 단계는 `db asset-track`, 확인은 `db asset-confirm`.
+            for k in ("tracking_status", "resolution_status"):
+                if k in a:
+                    errs.append(f"물건 {a.get('asset_id')} 의 {k} 는 정본 출력값이라 시드로 반영하지 않는다 (파생본 시드를 load-seed 에 넣지 않는다)")
         if errs:
             raise ValidationError(errs)
         result = SeedResult()

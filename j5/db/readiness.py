@@ -343,6 +343,9 @@ def _record_decision(db: Db, asset_id: str, record_id: str, decision: str, decid
     db.conn.execute("INSERT INTO readiness_decisions (decision_id, asset_id, record_id, decision, decided_on, previous_status, new_status, reason, evaluation_json, recorded_at)"
                     " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (did, asset_id, record_id, decision, decided_on, prev, new, reason, json.dumps(evaluation, ensure_ascii=False, sort_keys=True), now))
     db.conn.execute("UPDATE assets SET tracking_status = ?, updated_at = ? WHERE asset_id = ?", (new, now, asset_id))
+    # 관심 단계 변경 이력 (J5-029, ADR-22): 결정과 같은 트랜잭션에서 한 행. readiness_decisions 가 결정의 원본이고 tracking_changes 는 단계 변경의 통합 이력이다.
+    db.conn.execute("INSERT INTO tracking_changes (change_id, asset_id, previous_status, new_status, changed_on, reason, source, decision_id, recorded_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, 'readiness', ?, ?)", (str(uuid.uuid4()), asset_id, prev, new, decided_on, reason, did, now))
     return did
 
 

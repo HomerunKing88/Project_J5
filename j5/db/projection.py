@@ -96,7 +96,9 @@ def _asset_to_seed(a: dict) -> dict:
         d["location_point"] = [a["lon"], a["lat"]]
     if a["address"] is not None:
         d["address"] = a["address"]
-    d.update({"data_mode": a["data_mode"], "created_at": a["seed_created_at"], "notes": a["notes"]})
+    d.update({"data_mode": a["data_mode"], "created_at": a["seed_created_at"], "notes": a["notes"],
+              # 폰 표시용 정본 출력값 (J5-029, ADR-22). 폰은 바꾸지 못하며 load-seed 는 이 필드가 든 시드를 거절한다.
+              "tracking_status": a["tracking_status"], "resolution_status": a["resolution_status"]})
     return d
 
 

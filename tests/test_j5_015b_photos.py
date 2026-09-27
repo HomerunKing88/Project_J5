@@ -106,6 +106,7 @@ def test_schema_10_columns_import_and_backfill(db, home, tmp_path):
         d9.conn.execute("DROP TABLE IF EXISTS judgment_rechecks")  # 마이그레이션 11 (J5-015C)
         d9.conn.execute("DROP TABLE IF EXISTS readiness_decisions")  # 마이그레이션 13 (J5-018A)
         d9.conn.execute("DROP TABLE IF EXISTS readiness_rechecks")  # 마이그레이션 14 (J5-018B)
+        d9.conn.execute("DROP TABLE IF EXISTS tracking_changes")  # 마이그레이션 17 (J5-029)
         d9.conn.execute("DROP TABLE IF EXISTS parcel_attribute_snapshots")  # 마이그레이션 16 (J5-026)
         d9.conn.execute("DROP TABLE IF EXISTS parcel_attributes")  # 마이그레이션 15 (J5-025)
         d9.conn.execute("DELETE FROM schema_migrations WHERE version >= 10")
