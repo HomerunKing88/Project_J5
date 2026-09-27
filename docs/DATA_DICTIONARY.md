@@ -61,10 +61,11 @@ records는 종류별 전체 스냅샷이다. 임장·건물·필지·규제·권
 <batch>.j5field.zip
   manifest.json
   observations.jsonl
+  assets.new.json            (선택, schema_version 1.1.0: 기기가 필지에서 만든 임시 매입 단위, J5-028 ADR-21)
   photos/<sha256>.<approved-extension>
 ```
 
-manifest에는 `format, schema_version, study_id, package_id, created_at, data_mode, files[]`를 둔다. files는 경로·바이트·해시를 담는다. `data_mode=synthetic/private_real`을 구분한다. 확장자 자체는 암호화가 아니다.
+manifest에는 `format, schema_version, study_id, package_id, created_at, data_mode, files[]`를 둔다. `assets.new.json`은 그 묶음의 관측이 가리키는 기기 생성 물건(`asset_id, label, location_point, data_mode, created_at, notes, pnu, origin=device`)만 담고, 반영기는 정본에 없는 것만 `resolution_status=pending`으로 만든다. files는 경로·바이트·해시를 담는다. `data_mode=synthetic/private_real`을 구분한다. 확장자 자체는 암호화가 아니다.
 
 관측에는 `event_id, record_type, asset_id, observed_at, device_created_at, route_version_id?, frame_version_id?, payload, attachment_refs[]`를 둔다. R1은 신규 관측과 그 정정 관측만 허용한다. 기존 정본 수정 명령·SQL·거래 연결 명령·관심도 갱신은 허용하지 않는다.
 
