@@ -1229,10 +1229,15 @@ function registerSw() {
   navigator.serviceWorker.register("./sw.js").catch(() => {});
 }
 
-/** 오늘 화면의 '관측 시작': 이 기기에 기록이 없는 첫 대상, 없으면 첫 대상의 기록 화면을 연다. */
+/** 오늘 화면의 '관측 시작': 현재 필터 안에서 이 기기에 기록이 없는 첫 대상, 없으면 첫 대상의 기록 화면을 연다. 필터로 보이는 물건이 없으면 숨은 물건으로 넘어가지 않고 안내한다 (리뷰 반영 PR #75). */
 function startObservingFromHome() {
-  const next = nextAsset(visibleAssets(), null, state.events) ?? visibleAssets()[0] ?? state.assets[0];
-  if (next) startObservation(next);
+  const visible = visibleAssets();
+  const next = nextAsset(visible, null, state.events) ?? visible[0];
+  if (next) return startObservation(next);
+  if (state.assets.length && effectiveFilter() === "watchlist") {
+    text($("asset-filter-note"), "관찰목록에 물건이 없어 관측을 시작하지 않습니다. '전체' 로 바꾼 뒤 시작합니다.", "warn");
+    $("asset-filter").querySelector('button[data-filter="all"]').focus();
+  }
 }
 
 function onViewShown(name, changed) {

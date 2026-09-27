@@ -59,8 +59,9 @@ def set_status(db: Db, asset_id: str, status: str, *, reason: str | None = None,
 
 def history(db: Db, asset_id: str) -> dict:
     a = _asset(db, asset_id)
+    # 정렬은 기록 시각 뒤 삽입 순서(rowid, 삭제 없는 불변 표라 단조 증가)다. change_id(UUID4) 는 무작위라 같은 초의 순서를 정하지 못한다 (리뷰 반영 PR #75)
     rows = [dict(r) for r in db.conn.execute("SELECT change_id, previous_status, new_status, changed_on, reason, source, decision_id, recorded_at FROM tracking_changes"
-                                             " WHERE asset_id = ? ORDER BY recorded_at, change_id", (asset_id,))]
+                                             " WHERE asset_id = ? ORDER BY recorded_at, rowid", (asset_id,))]
     return {**a, "changes": rows, "watchlist": a["tracking_status"] in S.WATCHLIST_STATUSES}
 
 
@@ -71,7 +72,7 @@ def overview(db: Db) -> dict:
     ph = ", ".join("?" for _ in S.WATCHLIST_STATUSES)
     items = [dict(r) for r in db.conn.execute(
         f"SELECT a.asset_id, a.label, a.tracking_status, a.resolution_status,"
-        f" (SELECT changed_on FROM tracking_changes c WHERE c.asset_id = a.asset_id ORDER BY recorded_at DESC, change_id DESC LIMIT 1) AS last_changed_on"
+        f" (SELECT changed_on FROM tracking_changes c WHERE c.asset_id = a.asset_id ORDER BY recorded_at DESC, rowid DESC LIMIT 1) AS last_changed_on"
         f" FROM assets a WHERE a.tracking_status IN ({ph}) ORDER BY a.tracking_status, a.label, a.asset_id", S.WATCHLIST_STATUSES)]
     return {"counts": counts, "total": sum(counts.values()), "watchlist": items, "watchlist_statuses": list(S.WATCHLIST_STATUSES), "pending": counts_pending(db)}
 

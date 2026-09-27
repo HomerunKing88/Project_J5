@@ -53,7 +53,19 @@ def db(home):
 
 
 def changes(db, asset_id):
-    return [dict(r) for r in db.conn.execute("SELECT previous_status, new_status, changed_on, reason, source, decision_id FROM tracking_changes WHERE asset_id = ? ORDER BY recorded_at", (asset_id,))]
+    return [dict(r) for r in db.conn.execute("SELECT previous_status, new_status, changed_on, reason, source, decision_id FROM tracking_changes WHERE asset_id = ? ORDER BY recorded_at, rowid", (asset_id,))]
+
+
+def test_same_second_changes_keep_insertion_order(db):
+    """같은 초에 기록된 변경은 삽입 순서로 보인다 (UUID 는 무작위라 정렬 키가 아니다, 리뷰 반영 PR #75)."""
+    db.now = lambda: "2026-09-27T01:00:00Z"
+    seq = ["watch", "detailed_review", "hold", "background", "watch", "excluded", "unreviewed", "watch"]
+    for i, st in enumerate(seq):
+        set_status(db, A[0], st, reason=f"r{i}", changed_on=f"2026-09-{10 + i:02d}")
+    h = history(db, A[0])
+    assert [c["new_status"] for c in h["changes"]] == seq and len({c["recorded_at"] for c in h["changes"]}) == 1
+    assert [c["changed_on"] for c in h["changes"]] == [f"2026-09-{10 + i:02d}" for i in range(len(seq))]
+    assert overview(db)["watchlist"][0]["last_changed_on"] == "2026-09-17"
 
 
 def test_schema_17_table_and_immutability(db):
