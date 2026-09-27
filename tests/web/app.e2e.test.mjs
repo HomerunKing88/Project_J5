@@ -23,14 +23,14 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     // 지도 모듈 로드 실패: map.js 요청을 막고 첫 접속 (서비스 워커가 아직 없을 때). 목록·설정은 그대로 동작하고 지도 절만 안내를 낸다.
     await cdp.send("Network.setBlockedURLs", { urls: ["*/app/map.js"] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.0')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.1')");
     await cdp.waitFor("document.getElementById('map-note').textContent.includes('지도 표시 불가')");
     assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li').length"), 1, "지도 모듈 없이도 목록 절이 그려진다");
     const blockedLogs = cdp.errors.splice(0);
     assert.ok(blockedLogs.every((e) => e.includes("ERR_BLOCKED_BY_CLIENT") || e.includes("Failed to load resource") || e.includes("map.js")), blockedLogs.join("; "));
     await cdp.send("Network.setBlockedURLs", { urls: [] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.0')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.1')");
     await cdp.waitFor("document.getElementById('map-note').textContent === ''");
     // 설정
     await cdp.eval("document.getElementById('study-id').value = 'e2e-study'; document.getElementById('save-settings').click(); 'ok'");
@@ -52,6 +52,15 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.waitFor("!document.getElementById('map-selected').hidden && document.getElementById('map-selected-label').textContent === '가상 물건 2'");
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.pt.sel').length"), 1);
     assert.equal(await cdp.eval("document.querySelector('#map-svg g.pt.sel').dataset.assetId"), "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a51");
+    // J5-021: 선택 카드의 외부 지도 링크는 좌표만 담고 새 창·noopener·no-referrer 로 연다. 누르기 전에는 요청이 없다.
+    const ext = await cdp.eval("Array.from(document.querySelectorAll('#map-selected-ext a')).map(a => [a.textContent, a.href, a.target, a.rel, a.referrerPolicy])");
+    assert.equal(ext.length, 4, "외부 지도 링크 4개");
+    for (const [name, href, target, rel, rp] of ext) {
+      assert.ok(href.startsWith("https://") && href.includes("37.57") && href.includes("126.99"), `${name}: ${href}`);
+      assert.ok(!decodeURIComponent(href).includes("가상 물건"), "물건 이름을 보내지 않는다");
+      assert.deepEqual([target, rel, rp], ["_blank", "noopener noreferrer external", "no-referrer"], name);
+    }
+    assert.equal(await cdp.eval("document.getElementById('map-selected-ext').hidden"), false);
     await cdp.eval("document.getElementById('map-selected-start').click(); 'ok'");
     await cdp.waitFor("!document.getElementById('sec-observe').hidden");
     assert.equal(await cdp.eval("document.getElementById('target-label').textContent"), "가상 물건 2", "지도 선택 카드에서 관측 시작");
@@ -80,6 +89,8 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.waitFor("!document.getElementById('parcel-panel').hidden");
     assert.equal(await cdp.eval("document.getElementById('parcel-title').textContent"), "가상동 1");
     assert.equal(await cdp.eval("document.getElementById('parcel-pnu').textContent"), "9999900100100010000");
+    assert.equal(await cdp.eval("document.querySelectorAll('#parcel-ext a').length"), 4, "필지 패널에도 외부 지도 링크 (bbox 가운데)");
+    assert.ok((await cdp.eval("document.querySelector('#parcel-ext a').href")).includes("maps.apple.com/?ll="));
     assert.match(await cdp.eval("document.getElementById('parcel-meta').textContent"), /^도형면적 1764\.9 ㎡ \(공부면적 아님\) · 지목 대 · 가상 연속지적도 \(synthetic\) 2026-09-01$/);
     assert.deepEqual(await cdp.eval("Array.from(document.querySelectorAll('#parcel-assets li')).map(li => li.firstChild.textContent)"), ["가상 물건 1"], "필지 안의 물건");
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel.sel').length"), 1);

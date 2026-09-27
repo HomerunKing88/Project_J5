@@ -220,6 +220,9 @@ details.disclosure > :not(summary) { margin-top: var(--space-2); }
 .selected-card > button { white-space: nowrap; flex: none; }
 .selected-body { flex: 1 1 auto; min-width: 0; display: grid; gap: 2px; }
 .selected-body strong { font-size: 1.05rem; overflow-wrap: anywhere; }
+.ext-links { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 4px 0 0; font-size: .85rem; color: var(--muted); }
+.ext-links a { display: inline-flex; align-items: center; min-height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface-2); color: var(--accent); text-decoration: none; font-weight: 600; }
+.ext-links a:hover { border-color: var(--accent); }
 
 /* ---- 내보내기 단계 ---- */
 .steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-1); }

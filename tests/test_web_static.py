@@ -13,9 +13,32 @@ def web_files(*suffixes: str) -> list[Path]:
     return sorted(p for p in WEB.rglob("*") if p.is_file() and p.suffix in suffixes)
 
 
+# ADR-15 (J5-021): 사용자가 누르는 외부 지도 링크만 app/extmap.js 에 둔다. 다른 파일에는 외부 URL 이 없다.
+EXT_MAP_FILE = "app/extmap.js"
+EXT_MAP_HOSTS = {"maps.apple.com", "map.naver.com", "map.kakao.com", "www.google.com"}
+HOST = re.compile(r"https://([a-z0-9.-]+)/", re.IGNORECASE)
+
+
 def test_no_external_urls_in_app_code():
     for p in web_files(".html", ".js", ".css"):
-        assert not URL.search(p.read_text(encoding="utf-8")), f"{p}: 외부 URL 금지 (ADR-01 숨은 통신 차단)"
+        if p.relative_to(WEB).as_posix() == EXT_MAP_FILE:
+            continue
+        assert not URL.search(p.read_text(encoding="utf-8")), f"{p}: 외부 URL 금지 (ADR-01 숨은 통신 차단, 외부 지도 링크는 {EXT_MAP_FILE} 에만)"
+
+
+def test_external_map_links_are_link_only():
+    """ADR-15: extmap.js 는 허용한 지도 호스트의 https 문자열만 만들고, 통신·이동·저장 API 를 쓰지 않는다."""
+    text = (WEB / EXT_MAP_FILE).read_text(encoding="utf-8")
+    hosts = {m.group(1).lower() for m in HOST.finditer(text)}
+    assert hosts == EXT_MAP_HOSTS, f"허용목록 밖 호스트: {hosts ^ EXT_MAP_HOSTS}"
+    assert not re.search(r"http://", text, re.IGNORECASE), "http 링크 금지"
+    for token in ("fetch", "import", "location", "window.open", "navigator", "localStorage", "indexedDB", "document."):
+        assert token not in text, f"{EXT_MAP_FILE}: {token} 사용 금지 (링크 문자열만 만든다)"
+    for token in ("label", "asset_id", "pnu", "note"):
+        assert not re.search(rf"\b{token}\b", text), f"{EXT_MAP_FILE}: {token} 를 링크에 넣지 않는다 (좌표와 고정 문구만)"
+    main = (WEB / "app" / "main.js").read_text(encoding="utf-8")
+    for h in EXT_MAP_HOSTS:
+        assert h not in main, f"main.js 에 지도 호스트 직접 사용 금지: {h}"
 
 
 def test_every_page_has_csp_and_no_inline_script():
