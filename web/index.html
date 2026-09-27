@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob: https://api.vworld.kr; object-src 'none'; base-uri 'none'; form-action 'none'">
 <title>종로5가 투자지도</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="styles.css">
@@ -84,7 +84,7 @@
   <details class="disclosure">
     <summary>범례와 설명</summary>
     <p id="map-legend" class="map-legend"><span><span class="lg lg-syn"></span>연습용 물건</span> <span><span class="lg lg-real"></span>실제 물건</span> <span><span class="lg lg-sel"></span>선택됨</span> <span><span class="lg lg-parcel"></span>필지 경계</span> <span><span class="lg lg-bm"></span>건물·도로 배경</span></p>
-    <p class="help">배경 지도는 없고 북쪽이 위입니다. 점을 누르면 대상 요약이 뜨고, 필지를 누르면 그 안의 물건이 보입니다. 필지 경계와 도로·건물 배경은 설정의 자료 관리에서 넣습니다. 배경은 참고용이며 누를 수 없습니다.</p>
+    <p class="help">배경 타일은 설정에서 켜면 보입니다(켜기 전에는 배경 없음). 북쪽이 위입니다. 점을 누르면 대상 요약이 뜨고, 필지를 누르면 그 안의 물건이 보입니다. 필지 경계와 도로·건물 배경은 설정의 자료 관리에서 넣습니다. 배경은 참고용이며 누를 수 없습니다.</p>
     <p class="help">"다른 지도에서 보기" 링크를 누르면 그 좌표만 해당 지도 서비스로 전달됩니다. 물건 이름·지번·기록은 전달하지 않습니다. 누르기 전에는 아무것도 전송되지 않습니다.</p>
   </details>
 </section>
@@ -144,6 +144,35 @@
         </label>
       </details>
       <div class="row"><button id="save-settings" class="primary">설정 저장</button> <span id="settings-note" class="muted" role="status"></span></div>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="tiles-title">
+    <h3 id="tiles-title">배경 지도 (온라인 타일)</h3>
+    <p class="help">공식 타일 API 의 지도를 앱 안에 배경으로 그립니다. 켜면 지도 화면을 움직일 때 타일을 받아 오고, 받은 타일은 이 기기에 저장돼 오프라인에서도 보입니다. 인증키는 이 기기에만 저장되며 어디에도 기록되지 않습니다.</p>
+    <div class="stack">
+      <label class="field"><span>제공자</span>
+        <select id="tiles-provider">
+          <option value="">사용 안 함 (위치점·필지·도로 배경만)</option>
+          <option value="custom">직접 입력 (제공자 문서의 타일 주소, 또는 같은 출처 타일 폴더)</option>
+          <option value="vworld_base" disabled>VWorld 기본 지도 (국토교통부) · 공식 문서 확인 전이라 선택 불가</option>
+          <option value="vworld_satellite" disabled>VWorld 항공사진 · 확인 전</option>
+          <option value="vworld_hybrid" disabled>VWorld 항공사진 + 라벨 · 확인 전</option>
+        </select>
+      </label>
+      <label class="field" id="tiles-template-field" hidden><span>타일 주소 템플릿</span><input id="tiles-template" type="text" autocomplete="off" spellcheck="false" placeholder="api.vworld.kr 의 https 주소(…/{key}/…/{z}/{y}/{x}.png) 또는 ./tiles/{z}/{x}/{y}.png">
+        <span class="field-hint">{z} {x} {y} 를 포함한 허용 호스트(api.vworld.kr)의 https 주소 또는 같은 출처 경로(./ 로 시작)만 됩니다. 인증키가 들어갈 자리는 {key} 로 씁니다. 형식은 제공자 문서에서 확인합니다.</span></label>
+      <label class="field" id="tiles-key-field" hidden><span>인증키</span><input id="tiles-key" type="password" autocomplete="off" spellcheck="false" placeholder="제공자 사이트에서 발급한 키">
+        <span class="field-hint">이 기기에만 저장되며 주소·저장된 타일·화면 어디에도 남지 않습니다. VWorld 는 vworld.kr 에서 무료로 발급하고, 이 앱을 여는 주소(폰 브라우저 주소창의 주소)를 서비스 URL 로 등록해야 합니다.</span></label>
+      <div class="row"><button id="tiles-save" class="primary">배경 지도 저장</button> <span id="tiles-note" class="muted" role="status"></span></div>
+      <div class="field-name">이 기기에 저장된 타일</div>
+      <p id="tiles-cache-status" class="muted"></p>
+      <div class="row">
+        <button id="tiles-prefetch" class="secondary">이 범위 미리 받기</button>
+        <button id="tiles-clear" class="danger">저장된 타일 지우기</button>
+      </div>
+      <p id="tiles-prefetch-note" class="muted" role="status"></p>
+      <p class="help">"이 범위 미리 받기" 는 대상·필지가 있는 범위(여유 300 m)를 확대 14~18 단계로 받아 둡니다. 임장 전에 Wi-Fi 에서 한 번 눌러 두면 현장에서 통신 없이도 배경이 보입니다. 타일 자료의 이용조건·출처 표시는 제공자 약관을 따릅니다.</p>
     </div>
   </section>
 

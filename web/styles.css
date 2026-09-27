@@ -229,6 +229,10 @@ details.disclosure > :not(summary) { margin-top: var(--space-2); }
 .lg-real { background: var(--accent); }
 .lg-sel { background: var(--sel); }
 .lg-parcel { border: 1.5px solid var(--muted); border-radius: 2px; }
+.layer-tiles image { pointer-events: none; }
+.map-attrib { font-size: 10px; fill: var(--muted); paint-order: stroke; stroke: var(--surface-2); stroke-width: 2.5px; pointer-events: none; }
+#map-svg.has-tiles .bm-road-area, #map-svg.has-tiles .bm-building { fill-opacity: .25; }
+#map-svg.has-tiles .bm-road { stroke-opacity: .5; }
 .layer-base path, .layer-road-labels text { pointer-events: none; }
 .bm-road-area { fill: var(--bm-road); stroke: none; }
 .bm-building { fill: var(--bm-building); fill-opacity: .8; stroke: var(--muted); stroke-opacity: .35; stroke-width: .6; }

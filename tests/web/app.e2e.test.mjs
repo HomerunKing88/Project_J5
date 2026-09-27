@@ -14,7 +14,16 @@ const chrome = findChrome();
 
 test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspect", { skip: chrome ? false : "Chromium 없음" }, async () => {
   const tmp = mkdtempSync(join(tmpdir(), "j5-e2e-"));
-  const srv = await serve(WEB);
+  // 배경 타일 (J5-024): 같은 출처의 가짜 타일 폴더 ./tiles/{z}/{x}/{y}.png (1×1 PNG). 요청 수로 서비스 워커 저장을 확인한다.
+  const tileReqs = [];
+  // 템플릿 ./tiles/{key}/{z}/{x}/{y}.png: 서비스 워커가 자리표를 IndexedDB 의 키(e2e-tile-key)로 바꿔 요청해야 서버가 응답한다
+  const srv = await serve(WEB, (path) => {
+    const m = /^\/tiles\/([^/]+)\/(\d+)\/(\d+)\/(\d+)\.png$/.exec(path);
+    if (!m) return null;
+    if (m[1] !== "e2e-tile-key") return { status: 401, type: "text/plain", body: "bad key" };
+    tileReqs.push(m.slice(2).join("/"));
+    return { type: "image/png", body: png1x1([200, 220, 240]) };
+  });
   const base = `http://127.0.0.1:${srv.address().port}`;
   let cdp;
   try {
@@ -23,14 +32,14 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     // 지도 모듈 로드 실패: map.js 요청을 막고 첫 접속 (서비스 워커가 아직 없을 때). 목록·설정은 그대로 동작하고 지도 절만 안내를 낸다.
     await cdp.send("Network.setBlockedURLs", { urls: ["*/app/map.js"] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.3')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.4')");
     await cdp.waitFor("document.getElementById('map-note').textContent.includes('지도 표시 불가')");
     assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li').length"), 1, "지도 모듈 없이도 목록 절이 그려진다");
     const blockedLogs = cdp.errors.splice(0);
     assert.ok(blockedLogs.every((e) => e.includes("ERR_BLOCKED_BY_CLIENT") || e.includes("Failed to load resource") || e.includes("map.js")), blockedLogs.join("; "));
     await cdp.send("Network.setBlockedURLs", { urls: [] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.3')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.4')");
     await cdp.waitFor("document.getElementById('map-note').textContent === ''");
     // 설정
     await cdp.eval("document.getElementById('study-id').value = 'e2e-study'; document.getElementById('save-settings').click(); 'ok'");
@@ -319,6 +328,58 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       await cdp.navigate(`${base}/index.html`);
       await cdp.waitFor("document.querySelectorAll('#asset-list li > button').length === 5");
     }
+    // 배경 타일 (J5-024, ADR-18): 설정에서 같은 출처 템플릿을 켜면 지도 맨 아래에 <image> 타일이 깔리고, 미리 받기로 서비스 워커 캐시에 저장되며, 끄면 사라진다
+    await cdp.eval("document.getElementById('nav-settings').click(); 'ok'");
+    await cdp.eval("document.getElementById('tiles-provider').value = 'custom'; document.getElementById('tiles-provider').dispatchEvent(new Event('change')); 'ok'");
+    assert.equal(await cdp.eval("document.getElementById('tiles-template-field').hidden"), false);
+    await cdp.eval("document.getElementById('tiles-template').value = 'https://tile.example.org/{z}/{x}/{y}.png'; document.getElementById('tiles-save').click(); 'ok'");
+    await cdp.waitFor("document.getElementById('tiles-note').textContent.includes('허용되지 않은 호스트')");
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg .layer-tiles image').length"), 0, "허용 밖 호스트는 켜지지 않는다");
+    await cdp.eval("document.getElementById('tiles-template').value = './tiles/{key}/{z}/{x}/{y}.png'; document.getElementById('tiles-template').dispatchEvent(new Event('input')); document.getElementById('tiles-save').click(); 'ok'");
+    await cdp.waitFor("document.getElementById('tiles-note').textContent.includes('인증키가 필요')");
+    assert.equal(await cdp.eval("document.getElementById('tiles-key-field').hidden"), false, "{key} 가 있으면 키 입력이 열린다");
+    await cdp.eval("document.getElementById('tiles-key').value = 'e2e-tile-key'; document.getElementById('tiles-save').click(); 'ok'");
+    await cdp.waitFor("document.getElementById('tiles-note').textContent.startsWith('저장했습니다')");
+    assert.ok(!(await cdp.eval("document.getElementById('tiles-note').textContent")).includes("e2e-tile-key"), "안내에 키가 없다");
+    await cdp.eval("document.getElementById('nav-map').click(); 'ok'");
+    await cdp.waitFor("document.querySelectorAll('#map-svg .layer-tiles image').length > 0");
+    const hrefs = await cdp.eval("Array.from(document.querySelectorAll('#map-svg .layer-tiles image')).map(i => i.getAttribute('href'))");
+    assert.ok(hrefs.every((h) => /^\.\/tiles\/\{key\}\/\d+\/\d+\/\d+\.png$/.test(h)), JSON.stringify(hrefs.slice(0, 3)));
+    assert.equal(await cdp.eval("document.querySelector('#map-svg').firstElementChild.className.baseVal"), "layer-tiles", "타일 층은 맨 아래");
+    assert.equal(await cdp.eval("document.querySelector('#map-svg text.map-attrib').textContent"), "배경: 사용자 지정 타일");
+    await cdp.waitFor(`(${JSON.stringify(tileReqs.length)}, true)`);
+    await cdp.waitFor("document.getElementById('map-note').textContent.includes('배경 타일 켜짐')");
+    await new Promise((r) => setTimeout(r, 300));
+    assert.ok(tileReqs.length > 0, "타일 요청이 서버에 닿는다");
+    const reqBefore = tileReqs.length;
+    await cdp.clickRect("#map-zoom-in");
+    await new Promise((r) => setTimeout(r, 300));
+    assert.ok(tileReqs.length > reqBefore, "확대하면 다음 단계 타일을 받는다");
+    // 미리 받기: 대상·필지 범위를 14~18 단계로. 같은 출처라 서비스 워커가 저장한다
+    await cdp.eval("document.getElementById('nav-settings').click(); 'ok'");
+    await cdp.eval("document.getElementById('tiles-prefetch').click(); 'ok'");
+    await cdp.waitFor("document.getElementById('tiles-prefetch-note').textContent.startsWith('받기 끝')", 60000);
+    assert.match(await cdp.eval("document.getElementById('tiles-prefetch-note').textContent"), /^받기 끝: \d+장 성공 · 0장 실패 · 새로 저장 \d+장 \(확대 14~18 단계, 범위 여유 300 m\)$/);
+    await cdp.waitFor("/^\\d+장 저장됨$/.test(document.getElementById('tiles-cache-status').textContent) && parseInt(document.getElementById('tiles-cache-status').textContent) > 0", 10000);
+    const cached = parseInt(await cdp.eval("document.getElementById('tiles-cache-status').textContent"));
+    assert.match(await cdp.eval("document.getElementById('tiles-prefetch-note').textContent"), /새로 저장 [1-9]\d*장/, "실제 저장 수를 보고한다");
+    const cacheKeys = await cdp.eval("caches.open('j5-tiles-v1').then(c => c.keys()).then(ks => ks.map(k => k.url))");
+    assert.ok(cacheKeys.length > 0 && cacheKeys.every((u) => u.includes("%7Bkey%7D") && !u.includes("e2e-tile-key")), "캐시 키에 인증키가 없다: " + cacheKeys[0]);
+    // 같은 타일을 다시 보면 서비스 워커 캐시에서 온다 (서버 요청 수 불변)
+    const reqAfterPrefetch = tileReqs.length;
+    await cdp.navigate(`${base}/index.html#map`);
+    await cdp.waitFor("document.querySelectorAll('#map-svg .layer-tiles image').length > 0");
+    await new Promise((r) => setTimeout(r, 400));
+    assert.equal(tileReqs.length, reqAfterPrefetch, "저장된 타일은 서버에 다시 요청하지 않는다");
+    // 끄기 → 타일 없음, 다시 켜기 (오프라인 단계에서 저장된 타일로 보이는지 확인)
+    await cdp.eval("document.getElementById('nav-settings').click(); 'ok'");
+    await cdp.eval("document.getElementById('tiles-provider').value = ''; document.getElementById('tiles-provider').dispatchEvent(new Event('change')); document.getElementById('tiles-save').click(); 'ok'");
+    await cdp.waitFor("document.getElementById('tiles-note').textContent.includes('끄고')");
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg .layer-tiles image').length"), 0);
+    await cdp.waitFor("!document.getElementById('map-note').textContent.includes('배경 타일')");
+    await cdp.eval("document.getElementById('tiles-provider').value = 'custom'; document.getElementById('tiles-provider').dispatchEvent(new Event('change')); document.getElementById('tiles-template').value = './tiles/{key}/{z}/{x}/{y}.png'; document.getElementById('tiles-key').value = 'e2e-tile-key'; document.getElementById('tiles-save').click(); 'ok'");
+    await cdp.waitFor("document.getElementById('tiles-note').textContent.startsWith('저장했습니다')");
+    assert.ok(cached > 0);
     // 지도 실패 시 목록: SVG 요소 생성만 막아(저장소에서 createElementNS 는 map.js 만 쓴다) 지도가 못 뜨는 상황을 만든다.
     // 앱은 안내만 남기고 목록·기록은 그대로여야 하며 콘솔 오류를 내지 않아야 한다.
     const { identifier: stub } = await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `
@@ -420,6 +481,10 @@ print(json.dumps({"same_obs": h(a) == h(b), "same_pkg": ma["package_id"] == mb["
     const probeLogs = cdp.errors.splice(errorsBefore);
     assert.ok(probeLogs.every((e) => e.includes("ERR_FAILED") || e.includes("Failed to load resource")), probeLogs.join("; "));
     assert.ok((await cdp.eval("document.getElementById('status-line').textContent")).includes("관측 1"));
+    // 오프라인에서도 미리 받아 둔 배경 타일은 서비스 워커 캐시에서 나온다 (J5-024)
+    await cdp.eval("document.getElementById('nav-map').click(); 'ok'");
+    await cdp.waitFor("document.querySelectorAll('#map-svg .layer-tiles image').length > 0");
+    assert.ok((await cdp.eval("caches.open('j5-tiles-v1').then(c => c.keys()).then(k => k.length)")) > 0, "타일 캐시는 앱 캐시와 별도로 남는다");
     // IndexedDB 내용을 패키지 폴더로 꺼내 PC 검사기로 확인
     const dumpDb = () => cdp.eval(`(async () => {
       const db = await new Promise((res, rej) => { const r = indexedDB.open('j5'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
