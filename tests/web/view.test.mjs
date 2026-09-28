@@ -44,10 +44,12 @@ test("parseRecordsJsonl·validateTransactionsDoc", () => {
 
 test("fmtKrw·parseJibun·jibunMatch", () => {
   assert.deepEqual([fmtKrw(1e9), fmtKrw(1.23e9), fmtKrw(15e8), fmtKrw(85e6), fmtKrw(9000), fmtKrw(null)], ["10억", "12.3억", "15억", "8,500만", "9,000원", "금액 미확인"]);
-  assert.deepEqual(parseJibun("1-*"), { mountain: false, bon: 1, bu: null, masked: true, wholeMasked: false });
-  assert.deepEqual(parseJibun("산1-2"), { mountain: true, bon: 1, bu: 2, masked: false, wholeMasked: false });
+  assert.deepEqual(parseJibun("1-*"), { mountain: false, masked: true, bonPrefix: "1", bonDigits: 1, buPrefix: "", buDigits: 1, wholeMasked: false });
+  assert.deepEqual(parseJibun("산1-2"), { mountain: true, masked: false, bon: 1, bu: 2 });
+  assert.deepEqual(parseJibun("1**"), { mountain: false, masked: true, bonPrefix: "1", bonDigits: 3, buPrefix: "0", buDigits: null, wholeMasked: false }, "실제 표기: 자릿수를 별표로 가린다 (J5-043)");
   assert.equal(parseJibun("*").wholeMasked, true);
   assert.equal(parseJibun("abc"), null);
+  assert.equal(parseJibun(""), null);
   const p1 = { emd_name: "가상동", bon: 1, bu: 0, mountain: false }, p11 = { emd_name: "가상동", bon: 1, bu: 1, mountain: false }, s12 = { emd_name: "가상동", bon: 1, bu: 2, mountain: true };
   assert.equal(jibunMatch(T(ID(1), "202508", "1"), p1), "exact");
   assert.equal(jibunMatch(T(ID(1), "202508", "1"), p11), null, "부번이 다르면 아님");
@@ -56,6 +58,11 @@ test("fmtKrw·parseJibun·jibunMatch", () => {
   assert.equal(jibunMatch(T(ID(1), "202508", "1-*"), s12), null, "산 여부가 다르면 아님");
   assert.equal(jibunMatch(T(ID(1), "202508", "*"), p1), null, "동 전체 마스킹은 어느 필지에도 아님");
   assert.equal(jibunMatch(T(ID(1), "202508", "1", { emd_name: "다른동" }), p1), null);
+  // 실제 마스킹 표기 (J5-014 실측: "1**", "8*", "1**-*", "16*-3"). PC txlinks.jibun_matches 와 같은 결과 (J5-043)
+  const P = (bon, bu = 0, mountain = false) => ({ emd_name: "가상동", bon, bu, mountain });
+  const cases = [["1**", P(160), "prefix"], ["1**", P(160, 3), null], ["1**", P(16), null], ["1**-*", P(160, 3), "prefix"], ["16*-3", P(160, 3), "prefix"],
+    ["16*-3", P(160, 4), null], ["8*", P(85), "prefix"], ["8*", P(8), null], ["1-*", P(1, 12), null], ["산1**", P(123, 0, true), "prefix"], ["산1**", P(123), null], ["*-1", P(1, 1), null]];
+  for (const [j, p, want] of cases) assert.equal(jibunMatch(T(ID(1), "202508", j), p), want, `${j} ↔ ${p.mountain ? "산" : ""}${p.bon}-${p.bu}`);
 });
 
 test("assetHistory: 정본 기록·이 기기 관측(정본에 있으면 대체)·확정 연결 거래, 날짜 내림차순, 정정 표시", () => {

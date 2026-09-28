@@ -97,26 +97,35 @@ export function fmtKrw(n) {
   return n.toLocaleString("ko-KR") + "원";
 }
 
-/** 제공자 지번 문자열 파싱: {mountain, bon, bu, masked, wholeMasked}. 못 읽으면 null. 예: "1", "1-1", "1-*", "*", "산1-2". */
+/** 제공자 지번 문자열 파싱 (PC j5/db/txlinks.py parse_jibun 과 같은 규칙, J5-043). 못 읽으면 null.
+ * 온전한 지번: {mountain, masked:false, bon, bu}. 예: "1" → 부번 0, "1-1", "산1-2".
+ * 마스킹: {mountain, masked:true, bonPrefix, bonDigits, buPrefix, buDigits}. 실제 표기는 자릿수를 별표로 가린다: "1**"(본번 세 자리, 부번 없음), "1**-*", "16*-3", "1-*".
+ * 부번이 없으면 buPrefix "0"·buDigits null(부번 0 인 필지만). "*" 처럼 앞자리가 하나도 없으면 wholeMasked(어느 필지에도 대조하지 않음). */
 export function parseJibun(s) {
   if (typeof s !== "string") return null;
-  const t = s.trim();
-  if (!t) return null;
-  if (t === "*") return { mountain: false, bon: null, bu: null, masked: true, wholeMasked: true };
-  const m = /^(산)?\s*(\d+)(?:-(\d+|\*))?$/.exec(t.replace(/\s+/g, ""));
+  const m = /^(산)?\s*([0-9*]+)(?:-([0-9*]+))?$/.exec(s.trim());
   if (!m) return null;
-  const bu = m[3] === undefined ? 0 : m[3] === "*" ? null : parseInt(m[3], 10);
-  return { mountain: m[1] === "산", bon: parseInt(m[2], 10), bu, masked: m[3] === "*", wholeMasked: false };
+  const mountain = m[1] === "산";
+  const bon = m[2], bu = m[3] ?? "0";
+  if (!bon.includes("*") && !bu.includes("*")) return { mountain, masked: false, bon: parseInt(bon, 10), bu: parseInt(bu, 10) };
+  const bonPrefix = bon.split("*")[0];
+  return { mountain, masked: true, bonPrefix, bonDigits: bon.length, buPrefix: bu.includes("*") ? bu.split("*")[0] : bu, buDigits: bu.includes("*") ? bu.length : null,
+           wholeMasked: bonPrefix === "" };
 }
 
-/** 거래 지번이 필지에 닿는지: "exact"(같은 필지) · "prefix"(본번만 같음, 부번 마스킹: 이 번지대) · null. 법정동 이름이 달라도 null. */
+/** 거래 지번이 필지에 닿는지: "exact"(같은 필지) · "prefix"(마스킹된 자릿수 범위 안: 이 번지대, 필지 미확정) · null. 법정동 이름이 달라도 null.
+ * PC txlinks.jibun_matches(연결 후보 CSV)·parcel_timeline(필지 이력)과 같은 규칙이다. */
 export function jibunMatch(tx, props) {
   if (!tx || tx.emd_name == null || props?.emd_name == null || tx.emd_name !== props.emd_name) return null;
   const j = parseJibun(tx.jibun);
-  if (!j || j.wholeMasked) return null;
-  if (j.mountain !== !!props.mountain || j.bon !== props.bon) return null;
-  if (j.masked) return "prefix";
-  return j.bu === (props.bu ?? 0) ? "exact" : null;
+  if (!j || j.mountain !== !!props.mountain || !Number.isInteger(props.bon)) return null;
+  const pbu = props.bu ?? 0;
+  if (!j.masked) return j.bon === props.bon && j.bu === pbu ? "exact" : null;
+  if (j.wholeMasked) return null;
+  const bonS = String(props.bon), buS = String(pbu);
+  if (bonS.length !== j.bonDigits || !bonS.startsWith(j.bonPrefix)) return null;
+  if (j.buDigits === null ? buS !== j.buPrefix : buS.length !== j.buDigits || !buS.startsWith(j.buPrefix)) return null;
+  return "prefix";
 }
 
 const dateOf = (s) => (typeof s === "string" ? s.slice(0, 10) : "");
