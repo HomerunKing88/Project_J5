@@ -44,48 +44,90 @@ def fmt_krw(v) -> str:
 def parcel_transactions(db: Db, pnu: str, *, on_date: str | None = None) -> dict:
     """PNU 하나에 닿는 거래 {transactions: [...], cancelled: n, other_sgg: n}. 거래 표가 없으면 빈 목록.
     other_sgg 는 법정동 이름·지번은 닿지만 시군구 코드가 달라 넣지 않은 거래 수(취소 확정 제외)다."""
-    p = db.conn.execute("SELECT pnu, emd_code, emd_name, mountain, bon, bu FROM parcels WHERE pnu = ?", (pnu,)).fetchone()
-    out = {"transactions": [], "cancelled": 0, "other_sgg": 0}
-    if p is None or not db._has_table("transactions"):
-        return out
-    on_date = on_date or db.now()[:10]
-    here_assets = sorted({l["asset_id"] for l in active_links(db, on_date) if l["pnu"] == pnu})
-    has_zone = "zone" in {r[1] for r in db.conn.execute("PRAGMA table_info(transactions)")}
-    q = ("SELECT t.*, l.asset_id AS linked_asset_id, l.status AS link_state FROM transactions t"
-         " LEFT JOIN transaction_links l ON l.transaction_id = t.transaction_id AND l.status <> 'withdrawn'"
-         " WHERE t.emd_name = ?")
-    args: list = [p["emd_name"]]
-    if here_assets:
-        q += f" OR (l.status = 'confirmed' AND l.asset_id IN ({','.join('?' * len(here_assets))}))"
-        args += here_assets
-    q += " ORDER BY t.deal_ymd, t.deal_date, t.jibun_raw, t.ordinal"
-    sgg = p["emd_code"][:5]
-    for t in db.conn.execute(q, args):
-        match = None
-        other_sgg = False
-        if p["emd_name"] is not None and t["emd_name"] == p["emd_name"]:
-            m = jibun_matches(parse_jibun(t["jibun_raw"]), p)
-            match = {"jibun_exact": "exact", "jibun_prefix": "prefix"}.get(m or "")
-            if match is not None and t["lawd_cd"] != sgg:
-                match, other_sgg = None, True   # 이름이 같은 다른 시군구의 법정동
-        confirmed = t["link_state"] == "confirmed"
-        linked_here = confirmed and t["linked_asset_id"] in here_assets
-        if match is None and linked_here:
-            match = "linked"
-        if match is None:
-            out["other_sgg"] += int(other_sgg and t["cancel_status"] != "cancelled")
-            continue
-        if t["cancel_status"] == "cancelled":
-            out["cancelled"] += 1
-            continue
-        differs = t["lawd_cd"] != sgg   # 연결 물건의 거래(수동 확정)에서만 생긴다
-        out["transactions"].append({
-            "transaction_id": t["transaction_id"], "match": match, "linked_here": linked_here, "deal_ymd": t["deal_ymd"], "deal_date": t["deal_date"],
-            "year": t["deal_ymd"][:4], "lawd_cd": t["lawd_cd"], "sgg_differs": differs, "emd_name": t["emd_name"], "jibun": t["jibun_raw"],
+    return parcels_transactions(db, [pnu], on_date=on_date)[pnu]
+
+
+_TX_SELECT = ("SELECT t.*, l.asset_id AS linked_asset_id, l.status AS link_state FROM transactions t"
+              " LEFT JOIN transaction_links l ON l.transaction_id = t.transaction_id AND l.status <> 'withdrawn'")
+
+
+def _tx_item(t, match: str, linked_here: bool, sgg: str, has_zone: bool) -> dict:
+    confirmed = t["link_state"] == "confirmed"
+    return {"transaction_id": t["transaction_id"], "match": match, "linked_here": linked_here, "deal_ymd": t["deal_ymd"], "deal_date": t["deal_date"],
+            "year": t["deal_ymd"][:4], "lawd_cd": t["lawd_cd"], "sgg_differs": t["lawd_cd"] != sgg,   # 시군구가 다른 것은 연결 물건의 거래(수동 확정)에서만 생긴다
+            "emd_name": t["emd_name"], "jibun": t["jibun_raw"],
             "jibun_masked": bool(t["jibun_masked"]), "zone": t["zone"] if has_zone else None, "amount_krw": t["amount_krw"], "building_kind": t["building_kind"],
             "building_use": t["building_use_raw"], "land_use": t["land_use_raw"], "building_area_m2": t["building_area_m2"], "plottage_area_m2": t["plottage_area_m2"],
             "build_year": t["build_year"], "share_deal": bool(t["share_deal"]), "link_status": t["link_status"], "asset_id": t["linked_asset_id"] if confirmed else None,
-            "missing_from_provider": t["missing_since_run_id"] is not None})
+            "missing_from_provider": t["missing_since_run_id"] is not None}
+
+
+def parcels_transactions(db: Db, pnus: list[str], *, on_date: str | None = None) -> dict[str, dict]:
+    """여러 필지에 닿는 거래를 한 번에 모은다 {pnu: {transactions, cancelled, other_sgg}} (J5-046). 규칙은 parcel_transactions 와 같다.
+    법정동마다 거래를 한 번 읽고 지번을 한 번 해석해 (산, 본번, 부번)·(산, 본번 자릿수) 색인으로 필지마다 후보만 대조한다.
+    정본에 없는 PNU 는 빈 결과다."""
+    out = {p: {"transactions": [], "cancelled": 0, "other_sgg": 0} for p in pnus}
+    if not pnus or not db._has_table("transactions"):
+        return out
+    parcels: dict[str, object] = {}
+    uniq = list(dict.fromkeys(pnus))
+    for i in range(0, len(uniq), 500):
+        chunk = uniq[i:i + 500]
+        for r in db.conn.execute(f"SELECT pnu, emd_code, emd_name, mountain, bon, bu FROM parcels WHERE pnu IN ({','.join('?' * len(chunk))})", chunk):
+            parcels[r["pnu"]] = r
+    on_date = on_date or db.now()[:10]
+    here: dict[str, set] = {}
+    for l in active_links(db, on_date):
+        if l["pnu"] in parcels:
+            here.setdefault(l["pnu"], set()).add(l["asset_id"])
+    has_zone = "zone" in {r[1] for r in db.conn.execute("PRAGMA table_info(transactions)")}
+    # 필지마다 거래 후보 {transaction_id: [행, 지번 대조 결과, 다른 시군구]}
+    found: dict[str, dict] = {p: {} for p in parcels}
+    by_name: dict[str, list] = {}
+    for p in parcels.values():
+        if p["emd_name"] is not None:
+            by_name.setdefault(p["emd_name"], []).append(p)
+    for name, group in by_name.items():
+        exact_idx: dict[tuple, list] = {}
+        masked_idx: dict[tuple, list] = {}
+        for t in db.conn.execute(_TX_SELECT + " WHERE t.emd_name = ?", (name,)):
+            j = parse_jibun(t["jibun_raw"])
+            if j is None:
+                continue
+            if not j["masked"]:
+                exact_idx.setdefault((j["mountain"], j["bon"], j["bu"]), []).append(t)
+            elif j["bon_prefix"]:
+                masked_idx.setdefault((j["mountain"], j["bon_digits"]), []).append((t, j))
+        for p in group:
+            sgg = p["emd_code"][:5]
+            hits = [(t, "exact") for t in exact_idx.get((bool(p["mountain"]), p["bon"], p["bu"]), [])]
+            hits += [(t, "prefix") for t, j in masked_idx.get((bool(p["mountain"]), len(str(p["bon"]))), []) if jibun_matches(j, p) == "jibun_prefix"]
+            for t, m in hits:
+                other = t["lawd_cd"] != sgg   # 이름이 같은 다른 시군구의 법정동 (J5-044)
+                found[p["pnu"]][t["transaction_id"]] = [t, None if other else m, other]
+    assets = sorted({a for s_ in here.values() for a in s_})
+    for i in range(0, len(assets), 500):
+        chunk = assets[i:i + 500]
+        for t in db.conn.execute(_TX_SELECT + f" WHERE l.status = 'confirmed' AND l.asset_id IN ({','.join('?' * len(chunk))})", chunk):
+            for pnu, s_ in here.items():
+                if t["linked_asset_id"] in s_:
+                    found[pnu].setdefault(t["transaction_id"], [t, None, False])
+    for pnu, cands in found.items():
+        sgg = parcels[pnu]["emd_code"][:5]
+        o = out[pnu]
+        items = []
+        for t, match, other in cands.values():
+            linked_here = t["link_state"] == "confirmed" and t["linked_asset_id"] in here.get(pnu, ())
+            if match is None and linked_here:
+                match = "linked"
+            if match is None:
+                o["other_sgg"] += int(other and t["cancel_status"] != "cancelled")
+                continue
+            if t["cancel_status"] == "cancelled":
+                o["cancelled"] += 1
+                continue
+            items.append(((t["deal_ymd"], t["deal_date"] or "", t["jibun_raw"] or "", t["ordinal"]), _tx_item(t, match, linked_here, sgg, has_zone)))
+        o["transactions"] = [it for _, it in sorted(items, key=lambda x: x[0])]
     return out
 
 

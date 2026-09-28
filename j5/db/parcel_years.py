@@ -18,7 +18,7 @@ import csv
 import io
 import re
 
-from j5.db.parcel_timeline import fmt_krw, parcel_transactions
+from j5.db.parcel_timeline import fmt_krw, parcels_transactions
 from j5.db.parcels import active_links, attribute_history
 from j5.db.schema import WATCHLIST_STATUSES
 from j5.db.store import Db, DbError
@@ -93,9 +93,10 @@ def parcel_years(db: Db, pnus: list[str], *, year_from: int | None = None, year_
     per = []
     data_years: set[int] = set()
     cov_cache: dict[str, dict] = {}
+    txs_all = parcels_transactions(db, pnus, on_date=on_date)   # 법정동마다 한 번 읽는다 (J5-046: 필지마다 읽으면 500필지에 수십 초)
     for pnu in pnus:
         h = attribute_history(db, pnu)
-        tx = parcel_transactions(db, pnu, on_date=on_date)
+        tx = txs_all[pnu]
         sgg = rows[pnu]["emd_code"][:5]
         if sgg not in cov_cache:
             cov_cache[sgg] = _coverage_by_year(db, sgg)
