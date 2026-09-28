@@ -175,6 +175,21 @@ def parse_response(data: bytes) -> dict:
     return out
 
 
+def page_mismatch(parsed: dict, page_no: int) -> bool:
+    """응답의 pageNo 가 요청한 페이지와 다른가. 응답에 pageNo 가 없으면 확인할 수 없으므로 다르다고 보지 않는다.
+    pageNo 를 무시하고 앞 페이지를 되풀이하는 응답의 행을 더하면 같은 행이 겹쳐 totalCount 에 닿고, 정본에서는 같은 행이 순번으로 나뉘어 별개 거래가 된다 (J5-035)."""
+    return parsed.get("page_no") is not None and parsed["page_no"] != page_no
+
+
+PAGE_FILE_RE = re.compile(r"^p(\d{3})-")
+
+
+def page_of_file(name: str) -> int | None:
+    """원본 파일 이름 pNNN-<실행>.xml 의 페이지 번호. 모양이 다르면 None."""
+    m = PAGE_FILE_RE.match(name)
+    return int(m.group(1)) if m else None
+
+
 def _fetch_once(url: str) -> tuple[int, bytes]:
     req = Request(url, headers={"User-Agent": "j5-collect/0.1 (+standard library urllib)", "Accept": "application/xml, text/xml"})
     with urlopen(req, timeout=TIMEOUT_S) as resp:  # noqa: S310 - 공식 API 의 https 주소만 쓴다
@@ -296,6 +311,10 @@ def collect_months(data_home: Path, *, key: str, key_source: str, lawd_cd: str, 
             if pr.result_code not in OK_CODES:
                 pr.outcome, pr.error = "api_error", f"resultCode {pr.result_code}: {pr.result_msg}"
                 _log(log, f"{run.run_id} {lawd_cd} {deal_ymd} p{page} api_error {pr.result_code} {pr.result_msg}", key)
+                break
+            if page_mismatch(parsed, page):
+                pr.outcome, pr.error = "bad_response", f"요청한 페이지 {page} 에 응답 pageNo {parsed['page_no']} 가 왔다 (페이지 넘김이 맞지 않음)"
+                _log(log, f"{run.run_id} {lawd_cd} {deal_ymd} p{page} bad_response page_mismatch {parsed['page_no']}", key)
                 break
             pr.outcome = "ok" if pr.item_count else "empty"
             mr.items += pr.item_count
@@ -483,7 +502,7 @@ def load_month_items(data_home: Path, lawd_cd: str, deal_ymd: str, run_id: str |
             parsed = parse_response(p.read_bytes())
         except CollectError:
             continue
-        if parsed["result_code"] in OK_CODES:
+        if parsed["result_code"] in OK_CODES and page_of_file(p.name) is not None and not page_mismatch(parsed, page_of_file(p.name)):
             items.extend(parsed["items"])
             files.append(p.name)
     return items, files
