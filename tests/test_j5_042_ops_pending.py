@@ -72,3 +72,14 @@ def test_br_samples_are_a_notice_not_an_action(db, home):
     r = ops_check(home)
     assert r["ok"] and r["collect_pending"]["br_hub_runs"] == 1
     assert any("건축물대장 표본 수집 1건" in w for w in r["warnings"])
+
+
+def test_store_changing_actions_come_before_backup_and_projection(db, home, monkeypatch):
+    """리뷰 반영 PR #89: 조치는 순서대로 한다. 정본을 바꾸는 조치(폰 범위·수집 반영)를 백업·파생본 조치보다 먼저 낸다."""
+    make_ok(db, home)
+    load_bundle(db, vw_bundle())                  # 정본이 바뀌어 백업·파생본이 구본
+    monkeypatch.setattr(PM, "MAX_FEATURES", 3)    # 폰 상한도 넘는다
+    rows = [dict(item(i), sggCd="11110", landUse="일반상업", shareDealingType="") for i in range(2)]
+    collect_months(home, key=KEY, key_source="t", lawd_cd="11110", months=["202608"], endpoint=ENDPOINT, opener=opener(rows), sleep=lambda s: None)
+    r = ops_check(home)
+    assert codes(r) == ["phone_scope_over_limit", "rt_unloaded", "backup_stale", "projection_stale"], codes(r)

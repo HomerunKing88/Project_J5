@@ -173,6 +173,25 @@ def _check_db(db: Db, data_home: Path, r: dict, now_dt: datetime) -> None:
         r["actions"].append({"code": "db_foreign_keys", "text": f"외래키 위반 {len(fk)}건. 마지막 정상 백업과 대조한다"})
     if sc["state"] == "db_older":
         r["actions"].append({"code": "migrations_pending", "text": sc["text"] + ". 먼저 백업이 최신·접근 가능인지 확인한 뒤 `j5 db status` 로 열면 적용되고, 그 다음 다시 백업한다"})
+    # 정본을 바꾸는 조치(수집 반영·폰 범위)는 백업·파생본 조치보다 먼저 낸다: 그 뒤에 백업·파생본을 다시 만들어야 하므로 (리뷰 반영 PR #89)
+    # 폰 파생본 범위 (J5-039, ADR-23): 폰에 실릴 필지가 폰 상한을 넘으면 `project` 가 실패한다. 미리 조치 항목으로 낸다 (J5-042)
+    if db._has_table("parcels") and db._has_table("asset_components") and counts.get("parcels", 0):
+        from j5.db.parcels import scope_overview  # 순환 import 방지
+        so = scope_overview(db)
+        r["phone_scope"] = {k: so[k] for k in ("scope", "total_parcels", "phone_parcels", "phone_limit")}
+        if so["phone_parcels"] > so["phone_limit"]:
+            r["actions"].append({"code": "phone_scope_over_limit", "text": f"폰에 실릴 필지 {so['phone_parcels']}개가 폰 상한 {so['phone_limit']}개를 넘어 파생본을 만들 수 없다."
+                                                                    " `j5 db phone-scope` 로 법정동별 수를 보고 `--emd <코드,…>` 로 범위를 정한다"})
+    # 받아 두고 정본에 반영하지 않은 실거래 수집 실행 (J5-042). 원본은 지우지 않는다
+    rt_root = data_home / RT_RAW_DIR
+    if rt_root.is_dir() and db._has_table("collection_runs"):
+        pending = {d.name: unloaded_run_ids(db, data_home, d.name) for d in sorted(rt_root.iterdir()) if d.is_dir() and d.name.isdigit() and len(d.name) == 5}
+        pending = {k: v for k, v in pending.items() if v}
+        r["collect_pending"] = {"rt": {k: len(v) for k, v in pending.items()}}
+        if pending:
+            r["actions"].append({"code": "rt_unloaded", "text": "받아 두고 정본에 반영하지 않은 실거래 수집 "
+                                 + ", ".join(f"시군구 {k} {len(v)}건" for k, v in pending.items())
+                                 + ". `j5 db rt-load --lawd-cd <시군구>` 로 반영한다 (정본에 넣지 않을 표본이면 그대로 두어도 되며 원본은 지우지 않는다)"})
     # 백업·파생본 (기존 상태 함수. 읽기 전용 연결에서도 조회만 한다)
     bs = backup_status(db, data_home)
     bs["days_since"] = _days_since(bs.get("backup_at"), now_dt)
@@ -203,24 +222,6 @@ def _check_db(db: Db, data_home: Path, r: dict, now_dt: datetime) -> None:
         r["warnings"].append("파생본 대상 없음: 정본에 물건이 없다. 물건 목록을 넣은 뒤(`j5 db load-seed`) `j5 db project` 로 만든다")
     elif ps["stale"]:
         r["actions"].append({"code": "projection_stale", "text": f"파생본: {ps['state']}. `j5 db project`"})
-    # 폰 파생본 범위 (J5-039, ADR-23): 폰에 실릴 필지가 폰 상한을 넘으면 `project` 가 실패한다. 미리 조치 항목으로 낸다 (J5-042)
-    if db._has_table("parcels") and db._has_table("asset_components") and counts.get("parcels", 0):
-        from j5.db.parcels import scope_overview  # 순환 import 방지
-        so = scope_overview(db)
-        r["phone_scope"] = {k: so[k] for k in ("scope", "total_parcels", "phone_parcels", "phone_limit")}
-        if so["phone_parcels"] > so["phone_limit"]:
-            r["actions"].append({"code": "phone_scope_over_limit", "text": f"폰에 실릴 필지 {so['phone_parcels']}개가 폰 상한 {so['phone_limit']}개를 넘어 파생본을 만들 수 없다."
-                                                                    " `j5 db phone-scope` 로 법정동별 수를 보고 `--emd <코드,…>` 로 범위를 정한다"})
-    # 받아 두고 정본에 반영하지 않은 실거래 수집 실행 (J5-042). 원본은 지우지 않는다
-    rt_root = data_home / RT_RAW_DIR
-    if rt_root.is_dir() and db._has_table("collection_runs"):
-        pending = {d.name: unloaded_run_ids(db, data_home, d.name) for d in sorted(rt_root.iterdir()) if d.is_dir() and d.name.isdigit() and len(d.name) == 5}
-        pending = {k: v for k, v in pending.items() if v}
-        r["collect_pending"] = {"rt": {k: len(v) for k, v in pending.items()}}
-        if pending:
-            r["actions"].append({"code": "rt_unloaded", "text": "받아 두고 정본에 반영하지 않은 실거래 수집 "
-                                 + ", ".join(f"시군구 {k} {len(v)}건" for k, v in pending.items())
-                                 + ". `j5 db rt-load --lawd-cd <시군구>` 로 반영한다 (정본에 넣지 않을 표본이면 그대로 두어도 되며 원본은 지우지 않는다)"})
     # 건축물대장 표본 (J5-034): 정본 반영은 다음 조각이라 할 일이 아니라 안내로만 둔다
     br_runs = list_br_runs(data_home)
     if br_runs:
