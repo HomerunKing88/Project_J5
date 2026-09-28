@@ -113,10 +113,12 @@ export function parseJibun(s) {
            wholeMasked: bonPrefix === "" };
 }
 
-/** 거래 지번이 필지에 닿는지: "exact"(같은 필지) · "prefix"(마스킹된 자릿수 범위 안: 이 번지대, 필지 미확정) · null. 법정동 이름이 달라도 null.
+/** 거래 지번이 필지에 닿는지: "exact"(같은 필지) · "prefix"(마스킹된 자릿수 범위 안: 이 번지대, 필지 미확정) · null.
+ * 법정동 이름이 다르거나, 시군구 코드(거래 lawd_cd ↔ 필지 emd_code 앞 5자리)가 다르면 null (J5-044: 이름이 같은 다른 시군구의 법정동).
  * PC txlinks.jibun_matches(연결 후보 CSV)·parcel_timeline(필지 이력)과 같은 규칙이다. */
 export function jibunMatch(tx, props) {
   if (!tx || tx.emd_name == null || props?.emd_name == null || tx.emd_name !== props.emd_name) return null;
+  if (typeof tx.lawd_cd === "string" && typeof props.emd_code === "string" && tx.lawd_cd !== props.emd_code.slice(0, 5)) return null;
   const j = parseJibun(tx.jibun);
   if (!j || j.mountain !== !!props.mountain || !Number.isInteger(props.bon)) return null;
   const pbu = props.bu ?? 0;

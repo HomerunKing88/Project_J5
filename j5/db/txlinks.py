@@ -95,14 +95,14 @@ def jibun_matches(tx: dict, parcel: dict) -> str | None:
 # ---------------------------------------------------------------- 후보 CSV
 
 def linked_parcels(db: Db, on_date: str) -> list[dict]:
-    """유효한 물건↔필지 연결의 필지 정보 (법정동·산·본번·부번·물건)."""
+    """유효한 물건↔필지 연결의 필지 정보 (시군구 코드(PNU 앞 5자리)·법정동·산·본번·부번·물건)."""
     out = []
     labels = {a["asset_id"]: a["label"] for a in db.list_assets()}
     for l in active_links(db, on_date):
-        p = db.conn.execute("SELECT emd_name, mountain, bon, bu, label FROM parcels WHERE pnu = ?", (l["pnu"],)).fetchone()
+        p = db.conn.execute("SELECT emd_code, emd_name, mountain, bon, bu, label FROM parcels WHERE pnu = ?", (l["pnu"],)).fetchone()
         if p is None:
             continue
-        out.append({"asset_id": l["asset_id"], "asset_label": labels.get(l["asset_id"], ""), "pnu": l["pnu"], "emd_name": p["emd_name"], "mountain": p["mountain"],
+        out.append({"asset_id": l["asset_id"], "asset_label": labels.get(l["asset_id"], ""), "pnu": l["pnu"], "sgg_code": p["emd_code"][:5], "emd_name": p["emd_name"], "mountain": p["mountain"],
                     "bon": p["bon"], "bu": p["bu"], "parcel_label": p["label"]})
     return out
 
@@ -124,8 +124,8 @@ def candidates(db: Db, lawd_cd: str, months: list[str], *, emd_names: list[str] 
         tx = parse_jibun(t["jibun_raw"])
         hits: dict[str, tuple[str, str]] = {}
         for p in parcels:
-            if p["emd_name"] != t["emd_name"]:
-                continue
+            if p["emd_name"] != t["emd_name"] or p["sgg_code"] != t["lawd_cd"]:
+                continue  # 법정동 이름이 같아도 시군구가 다르면 다른 동이다 (J5-044: 여러 지역을 한 정본에 넣는다, ADR-23)
             m = jibun_matches(tx, p)
             if m is None:
                 continue
