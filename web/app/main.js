@@ -7,7 +7,7 @@ import { uuid4, isUuid } from "./uuid.js";
 import { isoWithOffset, fromDatetimeLocal, toDatetimeLocal, localDate } from "./time.js";
 import { buildEvent, validateEvent, lineBytes, PHOTO_TAGS, PHOTO_TAG_LABEL, CHANGE_STATUS_LABEL, PHOTO_LIMIT, VIEWPOINT_MAX } from "./event.js";
 import { validateSeed, filterAssets, hasTracking, isWatchlist, TRACKING_LABEL, ASSET_FILTERS } from "./seed.js";
-import { validateParcels, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, attrLines, attrsSummary, ZONE_LABELS, findParcels, parcelAt, interiorPoint, priceTrend, priceTrendRow } from "./parcels.js";
+import { validateParcels, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, attrLines, attrsSummary, ZONE_LABELS, findParcels, parcelAt, interiorPoint, priceTrend, priceTrendRow, ownershipKinds, parseFilter, hasCriteria, filterParcels, filterRowText, FILTER_LIMIT } from "./parcels.js";
 import { selectRecords, planBatches, buildPackage, hasRemainingBatches, studyIdError } from "./export.js";
 import { migrationReadiness, migrationText, persistenceText } from "./migrate.js";
 import { createNavigator, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, MODE_LABEL, MODE_SHORT } from "./ui.js";
@@ -18,7 +18,7 @@ import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
 import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.11";
+export const APP_VERSION = "0.2.12";
 const $ = (id) => document.getElementById(id);
 const state = { store: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, zoneColors: false, seedLoadedAt: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
                 nav: null, returnFocus: null, mapSelected: null, assetFilter: "all" };
@@ -390,6 +390,53 @@ function applySearchUi() {
   $("map-locate").disabled = !("geolocation" in navigator);
   $("map-locate").title = "geolocation" in navigator ? "" : "이 브라우저에서는 위치를 읽을 수 없습니다";
   if (!has) { $("parcel-search-results").replaceChildren(); $("parcel-search-results").hidden = true; text($("parcel-search-note"), "", "muted"); }
+  applyFilterUi();
+}
+
+// ---- 조건으로 필지 찾기 (J5-033): 불러온 필지의 속성으로 거르고 지도에 테두리로 표시한다. 필지 속성이 있는 파일에서만 보인다 ----
+function applyFilterUi() {
+  const feats = state.parcels?.features ?? [];
+  const withAttrs = feats.some((f) => f.properties?.attrs);
+  $("parcel-filter").hidden = !withAttrs;
+  // 번들이 바뀌면 이전 결과는 다른 자료의 것이다: 목록·안내·지도 강조를 지운다 (지도 쪽 강조는 setParcels 가 지운다)
+  $("parcel-filter-results").replaceChildren();
+  $("parcel-filter-results").hidden = true;
+  text($("parcel-filter-note"), "", "muted");
+  const zone = $("pf-zone"), owner = $("pf-owner");
+  const keepZone = zone.value, keepOwner = owner.value;
+  zone.replaceChildren(el("option", { value: "", text: "전체" }), ...Object.entries(ZONE_LABELS).map(([k, v]) => el("option", { value: k, text: v })));
+  owner.replaceChildren(el("option", { value: "", text: "전체" }), ...ownershipKinds(feats).map(({ kind, count }) => el("option", { value: kind, text: `${kind} (${count})` })));
+  if ([...zone.options].some((o) => o.value === keepZone)) zone.value = keepZone;
+  if ([...owner.options].some((o) => o.value === keepOwner)) owner.value = keepOwner;
+}
+
+function runParcelFilter() {
+  const feats = state.parcels?.features ?? [];
+  const list = $("parcel-filter-results");
+  list.replaceChildren();
+  list.hidden = true;
+  const { criteria, errors } = parseFilter({ zone: $("pf-zone").value, areaMin: $("pf-area-min").value, areaMax: $("pf-area-max").value,
+    priceMin: $("pf-price-min").value, priceMax: $("pf-price-max").value, owner: $("pf-owner").value, restricted: $("pf-restricted").checked });
+  if (errors.length) { mapCall((m) => m.setMarked(null)); return text($("parcel-filter-note"), "조건 확인: " + errors.join(" · "), "warn"); }
+  if (!hasCriteria(criteria)) { mapCall((m) => m.setMarked(null)); return text($("parcel-filter-note"), "조건을 하나 이상 고릅니다.", "warn"); }
+  const r = filterParcels(feats, criteria);
+  const shown = mapCall((m) => m.setMarked(r.matches.length ? filterParcels(feats, criteria, { limit: Infinity }).matches.map((f) => f.id) : null));
+  const unk = Object.entries({ zone: "용도지역", area: "공부면적", price: "공시지가", owner: "소유구분", plan: "규제" }).filter(([k]) => r.unknown[k]).map(([k, v]) => `${v} ${r.unknown[k]}`);
+  const tail = (unk.length ? ` · 값 없는 필지: ${unk.join(", ")}` : "") + (r.undetermined ? ` · 값이 없어 맞는지 모르는 필지 ${r.undetermined}개는 결과에서 뺌` : "");
+  if (!r.total) return text($("parcel-filter-note"), `속성 있는 필지 ${r.withAttrs}개 중 맞는 필지가 없습니다${tail}.`, "warn");
+  list.replaceChildren(...r.matches.map((f) => el("li", {}, el("span", { class: "title", text: parcelTitle(f.properties) }), el("span", { class: "sub", text: filterRowText(f.properties.attrs) }),
+    el("button", { text: "열기", onclick: () => openParcel(f) }))));
+  list.hidden = false;
+  text($("parcel-filter-note"), `속성 있는 필지 ${r.withAttrs}개 중 ${r.total}개 일치` + (r.total > r.matches.length ? ` (공부면적 큰 순 앞 ${FILTER_LIMIT}개만 목록)` : " (공부면적 큰 순)") +
+    (shown != null ? ` · 지도에 테두리로 표시` : "") + tail, "ok");
+}
+
+function clearParcelFilter() {
+  $("parcel-filter-form").reset();
+  $("parcel-filter-results").replaceChildren();
+  $("parcel-filter-results").hidden = true;
+  text($("parcel-filter-note"), "", "muted");
+  mapCall((m) => m.setMarked(null));
 }
 
 function openParcel(feature, { focus = true, move = true } = {}) {
@@ -1280,6 +1327,8 @@ async function main() {
   $("parcels-file").addEventListener("change", (e) => loadParcelsFile(e.target));
   // 필지 찾기·현재 위치는 지도가 못 떠도 동작한다 (검색·포함 판정은 순수 함수, 패널은 DOM). 지도 초기화와 무관하게 여기서 잇는다 (리뷰 반영 PR #73)
   $("parcel-search-form").addEventListener("submit", (e) => { e.preventDefault(); searchParcels($("parcel-search").value); });
+  $("parcel-filter-form").addEventListener("submit", (e) => { e.preventDefault(); runParcelFilter(); });
+  $("pf-clear").addEventListener("click", clearParcelFilter);
   $("map-locate").addEventListener("click", locateMe);
   $("clear-parcels").addEventListener("click", clearParcels);
   $("load-synthetic-basemap").addEventListener("click", loadSyntheticBasemap);
