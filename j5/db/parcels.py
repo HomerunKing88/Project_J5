@@ -609,8 +609,9 @@ def phone_scope(db: Db) -> list[str] | None:
 
 
 def set_phone_scope(db: Db, emd_codes: list[str] | None) -> dict:
-    """폰 파생본 범위를 정한다. None 이면 전체로 되돌린다. 정본에 없는 법정동 코드는 거절한다. 정본 자료는 바꾸지 않으므로 dataset_version 을 올리지 않는다
-    (파생본은 매번 전량 생성하므로 다음 `project` 부터 반영된다)."""
+    """폰 파생본 범위를 정한다. None 이면 전체로 되돌린다. 정본에 없는 법정동 코드는 거절한다.
+    범위가 실제로 바뀌면 dataset_version 을 올린다: 이전 범위로 만든 파생본·백업이 최신으로 표시되지 않게 (리뷰 반영 PR #86, ADR-23).
+    같은 범위를 다시 주면 아무것도 바꾸지 않는다."""
     codes = sorted(dict.fromkeys(c.strip() for c in (emd_codes or []) if c.strip())) or None
     if codes:
         bad = [c for c in codes if not re.fullmatch(r"\d{10}", c)]
@@ -620,12 +621,15 @@ def set_phone_scope(db: Db, emd_codes: list[str] | None) -> dict:
         missing = [c for c in codes if c not in have]
         if missing:
             raise ValidationError([f"정본 필지에 없는 법정동 코드: {', '.join(missing[:5])}. `db phone-scope` 로 법정동별 필지 수를 본다"])
+    if codes == phone_scope(db):
+        return {**scope_overview(db), "changed": False}
     with db.transaction():
         if codes:
             db.set_meta(PHONE_SCOPE_KEY, json.dumps({"emd_codes": codes}, ensure_ascii=False))
         else:
             db.conn.execute("DELETE FROM meta WHERE key = ?", (PHONE_SCOPE_KEY,))
-    return scope_overview(db)
+        db.bump_dataset_version()
+    return {**scope_overview(db), "changed": True}
 
 
 def scope_overview(db: Db) -> dict:
@@ -647,7 +651,7 @@ def _phone_parcel_pnus(db: Db, codes: list[str] | None, on_date: str) -> set[str
 
 def scope_text(o: dict) -> str:
     scope = "전체 (범위를 정하지 않음)" if o["scope"] is None else ", ".join(o["scope"])
-    lines = [f"폰 파생본 필지 범위: {scope}", f"정본 필지 {o['total_parcels']}개 · 폰에 실릴 필지 {o['phone_parcels']}개 (범위 안 + 물건이 연결된 필지) · 폰 상한 {o['phone_limit']}개"]
+    lines = [f"폰 파생본 필지 범위: {scope}" + ({True: " (바뀜 · dataset_version 올림)", False: " (그대로)"}.get(o.get("changed"), "")), f"정본 필지 {o['total_parcels']}개 · 폰에 실릴 필지 {o['phone_parcels']}개 (범위 안 + 물건이 연결된 필지) · 폰 상한 {o['phone_limit']}개"]
     for e in o["by_emd"]:
         lines.append(f"  {'*' if e['in_scope'] else ' '} {e['emd_code']} {e['emd_name'] or ''} · {e['parcels']}필지")
     if o["phone_parcels"] > o["phone_limit"]:
@@ -665,12 +669,15 @@ def parcels_bundle_from_db(db: Db, *, generated_at: str, source_dataset_version:
     rows = [dict(r) for r in db.conn.execute("SELECT * FROM parcels ORDER BY pnu") if r["pnu"] in keep]
     if not rows:
         return None
+    kept_ids = {p["parcel_id"] for p in rows}
     attrs_by_id: dict[str, dict] = {}
     attrs_sources: list[dict] = []
     if db._has_table("parcel_attributes"):
         seen = set()
         for a in db.conn.execute("SELECT * FROM parcel_attributes"):
             a = dict(a)
+            if a["parcel_id"] not in kept_ids:
+                continue   # 실은 필지의 속성·출처만 (범위 밖 지역의 출처를 적지 않는다, 리뷰 반영 PR #86)
             attrs = _attrs_content_from_row(a)
             attrs["as_of"] = a["as_of"]   # 속성 기준일: 도형 기준일과 별개로 폰이 따로 보인다 (리뷰 반영)
             attrs_by_id[a["parcel_id"]] = attrs
