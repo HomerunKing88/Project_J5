@@ -23,6 +23,7 @@ from j5.schemas_loader import schema_errors
 BUNDLE_FORMAT = "1.0.0"
 SCHEMA = "parcels_bundle.schema.json"
 MAX_FEATURES = 8000          # 스키마 상한. 폰 SVG 성능 시험값(릴리스 계획 §10 배경 필지 3,000개)의 여유
+SPLIT_MAX_FEATURES = 100_000 # 묶음 넣기가 나누어 만들 때 한 입력의 상한 (J5-040, 정본 상한 ADR-23 과 같다)
 COORD_DECIMALS = 7           # 약 1cm
 PNU_RE = re.compile(r"^[0-9]{19}$")
 JIBUN_RE = re.compile(r"^\s*(산)?\s*(\d+)(?:\s*-\s*(\d+))?\s*(\D*?)\s*$")
@@ -91,6 +92,7 @@ class ConvertOptions:
     field_map: dict[str, str] | None = None        # .dbf 열 이름 바꾸기 (VWorld 의 A0… → 원래 이름, J5-025)
     attrs_by_pnu: dict[str, dict] | None = None    # PNU 별 필지 속성(토지특성·이용계획·소유구분) → properties.attrs
     attrs_sources: list[dict] | None = None        # 속성 자료 출처 목록 → 번들 attrs_sources
+    split: bool = False                            # J5-040: 번들 한 개의 상한(MAX_FEATURES)을 넘어도 만들고 split_bundle 로 나눈다 (묶음 넣기 전용)
 
 
 # ---------------------------------------------------------------- 도형 유틸
@@ -311,8 +313,9 @@ def convert(path: Path, opts: ConvertOptions) -> dict:
         raise ConvertError("bad_geometry_version", f"달력에 없는 날짜: {opts.geometry_version}") from None
     if opts.data_mode not in ("synthetic", "real"):
         raise ConvertError("bad_data_mode", "data_mode 는 synthetic 또는 real")
-    if not (1 <= opts.max_features <= MAX_FEATURES):
-        raise ConvertError("bad_max_features", f"--max-features 는 1~{MAX_FEATURES} (번들 계약·폰 검증기의 상한과 같다)")
+    limit = SPLIT_MAX_FEATURES if opts.split else MAX_FEATURES
+    if not (1 <= opts.max_features <= limit):
+        raise ConvertError("bad_max_features", f"--max-features 는 1~{limit} (번들 계약·폰 검증기의 상한과 같다; 나누는 변환은 {SPLIT_MAX_FEATURES})")
     if not opts.source_name.strip():
         raise ConvertError("bad_source_name", "--source-name 이 필요하다 (예: '연속지적도 서울특별시 종로구')")
     try:
@@ -422,10 +425,33 @@ def convert(path: Path, opts: ConvertOptions) -> dict:
             warnings.append(f"필지 속성이 없는 필지 {len(features) - stats['attrs_attached']}개 (토지특성·이용계획·소유 자료에 해당 PNU 가 없음)")
             bundle["warnings"] = warnings
     bundle["stats"] = stats
+    if opts.split and len(features) > MAX_FEATURES:
+        return bundle   # 번들 한 개의 상한을 넘는다: split_bundle 이 조각마다 스키마를 검증한다
     errs = schema_errors(SCHEMA, {k: v for k, v in bundle.items() if k != "stats"})
     if errs:
         raise ConvertError("schema", "만든 번들이 스키마에 맞지 않는다: " + "; ".join(errs[:5]))
     return bundle
+
+
+def split_bundle(bundle: dict, size: int = MAX_FEATURES) -> list[dict]:
+    """번들을 PNU 순으로 size 개씩 나눈다 (J5-040). 상한 이하면 그대로 한 개. 조각마다 필지 수·범위·경고를 다시 적고 스키마를 검증한다.
+    출처(source)·자르기 범위(clip)·속성 출처(attrs_sources)는 묶음 전체의 것을 그대로 둔다(같은 입력 파일에서 왔다)."""
+    feats = sorted(bundle["features"], key=lambda f: f["id"])
+    if len(feats) <= size:
+        return [bundle]
+    n = (len(feats) + size - 1) // size
+    parts = []
+    for i in range(n):
+        chunk = feats[i * size:(i + 1) * size]
+        bb = [f["properties"]["bbox"] for f in chunk]
+        part = {k: v for k, v in bundle.items() if k not in ("features", "stats")}
+        part.update({"features": chunk, "count": len(chunk), "bbox": [min(b[0] for b in bb), min(b[1] for b in bb), max(b[2] for b in bb), max(b[3] for b in bb)],
+                     "warnings": list(bundle.get("warnings") or []) + [f"큰 묶음({len(feats)}필지)을 나눈 번들 {i + 1}/{n} (필지 {len(chunk)}개, PNU 순)"]})
+        errs = schema_errors(SCHEMA, part)
+        if errs:
+            raise ConvertError("schema", f"나눈 번들 {i + 1}/{n} 이 스키마에 맞지 않는다: " + "; ".join(errs[:5]))
+        parts.append(part)
+    return parts
 
 
 def write_bundle(bundle: dict, out: Path) -> dict:

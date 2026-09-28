@@ -10,6 +10,7 @@
 2. 백업(기본): 반영 전에, 대기 중인 마이그레이션보다도 먼저, 읽기 전용 연결에서 `backup` 과 같은 일관된 사본을 만든다. 실패하면 반영하지 않는다.
    `--no-backup` 은 사용자가 따로 백업했을 때만 쓴다.
 3. 반영: 정본을 쓰기 모드로 열어(이때 대기 중인 마이그레이션이 적용되고 결과에 적는다) 번들마다 `parcels-load` 와 같은 트랜잭션. 중간에 실패하면 앞의 번들은 반영된 채로 남고(각각 완결), 결과에 어디까지 들어갔는지 적는다. 다시 실행하면 반영된 것은 변화 없음이다.
+큰 묶음(번들 한 개의 상한 8,000필지를 넘는 시군구 단위 등)은 PNU 순으로 나눠 `…partNNofMM.j5parcels.json` 여러 개로 쓰고 차례로 반영한다(J5-040, ADR-23). 나누지 않는 묶음의 파일 이름은 이전과 같다.
 토지소유 자료의 연령대·거주 구분은 읽지 않는다(vworld.PRIVATE_FIELDS). 실제 자료·번들은 실데이터 홈에만 둔다.
 """
 
@@ -22,17 +23,19 @@ from pathlib import Path
 from j5.db import schema as S
 from j5.db.parcels import BUNDLE_SCHEMA, load_bundle, load_json
 from j5.db.store import Db
-from j5.parcels.convert import COORD_DECIMALS, Clip, ConvertError, ConvertOptions, convert, inspect_source, write_bundle
+from j5.parcels.convert import COORD_DECIMALS, MAX_FEATURES, SPLIT_MAX_FEATURES, Clip, ConvertError, ConvertOptions, convert, inspect_source, split_bundle, write_bundle
 from j5.parcels import vworld
 from j5.parcels.vworld import VWorldError, detect_vworld, read_attrs
 
 BUNDLES_DIR = Path("parcels") / "bundles"
+PART_SIZE = MAX_FEATURES   # 나눈 번들 한 개의 필지 수 (J5-040). 폰 계약의 번들 상한과 같다
 
 
 @dataclass
 class IngestItem:
     source: str
     bundle: str | None = None
+    bundles: list[str] = field(default_factory=list)   # 나눈 번들이면 조각 전부 (J5-040). 한 개면 [bundle]
     reused: bool = False
     count: int = 0
     attrs: int = 0
@@ -70,7 +73,8 @@ class IngestResult:
                          f"; 속성 스냅샷 신규 {ld['snapshots_inserted']})")
             else:
                 conv += " → 반영 안 함"
-            lines.append(head + conv + (f" · 번들 {i.bundle}" if i.bundle else ""))
+            parts = f" · 번들 {len(i.bundles)}개로 나눔 (한 번들 상한 {MAX_FEATURES}필지): {i.bundles[0]} …" if len(i.bundles) > 1 else (f" · 번들 {i.bundle}" if i.bundle else "")
+            lines.append(head + conv + parts)
         status = {"applied": "반영됨", "unchanged": "변화 없음", "failed": f"실패 ({self.stage} 단계)"}[self.outcome]
         out = [f"VWorld 묶음 넣기: {status} · 입력 {len(self.items)}개 · dataset_version {self.dataset_version}"] + lines
         if self.backup_dir:
@@ -111,7 +115,42 @@ def _bundle_path(home: Path, source: Path, geometry_version: str, *, name: str, 
     return home / BUNDLES_DIR / f"{safe}-{geometry_version}-{key}.j5parcels.json"
 
 
-def _convert_one(data_mode: str, home: Path, source: Path, *, geometry_version: str, source_name: str | None, license: str | None) -> tuple[IngestItem, dict | None]:
+def _merge_loads(loads: list[dict]) -> dict:
+    """나눈 번들 조각들의 반영 결과를 입력 하나의 결과로 합친다. 조각 하나라도 반영됐으면 applied."""
+    if len(loads) == 1:
+        return loads[0]
+    out = dict(loads[-1])
+    for k in ("inserted", "updated", "unchanged", "attrs_inserted", "attrs_updated", "attrs_unchanged", "snapshots_inserted", "snapshots_replaced"):
+        out[k] = sum(int(ld.get(k) or 0) for ld in loads)
+    out["outcome"] = "applied" if any(ld["outcome"] == "applied" for ld in loads) else "unchanged"
+    out["parts"] = len(loads)
+    return out
+
+
+def _part_paths(out: Path, n: int) -> list[Path]:
+    """나눈 번들의 파일 경로 (J5-040). n == 1 이면 원래 경로 하나(나누지 않은 번들과 같은 이름이라 이전 번들을 그대로 다시 쓴다)."""
+    if n == 1:
+        return [out]
+    base = out.name[: -len(".j5parcels.json")]
+    return [out.with_name(f"{base}.part{i + 1:02d}of{n:02d}.j5parcels.json") for i in range(n)]
+
+
+def _existing_parts(out: Path) -> list[Path] | None:
+    """이미 만든 번들: 나누지 않은 한 개 또는 나눈 조각 전부. 없으면 None. 조각이 일부만 있으면 ConvertError (중간에 끊긴 변환)."""
+    if out.exists():
+        return [out]
+    base = out.name[: -len(".j5parcels.json")]
+    found = sorted(out.parent.glob(f"{base}.part*of*.j5parcels.json")) if out.parent.is_dir() else []
+    if not found:
+        return None
+    ns = {p.name.rsplit(".part", 1)[1].split("of", 1)[1][:2] for p in found}
+    n = int(next(iter(ns))) if len(ns) == 1 and next(iter(ns)).isdigit() else 0
+    if n < 2 or [p.name for p in found] != [q.name for q in _part_paths(out, n)]:
+        raise ConvertError("parts_incomplete", f"나눈 번들 조각이 일부만 있다 ({len(found)}개, {out.parent}). 그 조각들을 확인한 뒤 지우고 다시 실행한다")
+    return found
+
+
+def _convert_one(data_mode: str, home: Path, source: Path, *, geometry_version: str, source_name: str | None, license: str | None) -> tuple[IngestItem, list[dict] | None]:
     item = IngestItem(source=str(source))
     if not source.exists():
         item.error = "입력 파일·폴더가 없다"
@@ -119,20 +158,29 @@ def _convert_one(data_mode: str, home: Path, source: Path, *, geometry_version: 
     name = source_name or f"VWorld 토지 자료 {source.name}"
     bundle_mode = "synthetic" if data_mode == "synthetic" else "real"
     out = _bundle_path(home, source, geometry_version, name=name, license=license, bundle_mode=bundle_mode)
+
+    def rel(p: Path) -> str:
+        try:
+            return p.relative_to(home).as_posix()
+        except ValueError:
+            return str(p)
     try:
-        rel = out.relative_to(home).as_posix()
-    except ValueError:
-        rel = str(out)
-    if out.exists():
-        doc = load_json(out, BUNDLE_SCHEMA)
-        src = doc["source"]
-        if (src.get("name"), src.get("license"), src.get("geometry_version"), doc.get("data_mode")) != (name, license, geometry_version, bundle_mode):
-            item.error = f"있던 번들 {rel} 의 출처 표기가 요청과 다르다 (자료명·이용조건·기준일·자료 종류). 그 파일을 확인한 뒤 지우고 다시 실행한다"
-            return item, None
-        item.bundle, item.reused, item.count = rel, True, doc["count"]
-        item.attrs = sum(1 for f in doc["features"] if f["properties"].get("attrs"))
-        item.bbox = doc.get("clip", {}).get("bbox")
-        return item, doc
+        existing = _existing_parts(out)
+    except ConvertError as e:
+        item.error = f"[{e.code}] {e.message}"
+        return item, None
+    if existing:
+        docs = [load_json(p, BUNDLE_SCHEMA) for p in existing]
+        for p, doc in zip(existing, docs):
+            src = doc["source"]
+            if (src.get("name"), src.get("license"), src.get("geometry_version"), doc.get("data_mode")) != (name, license, geometry_version, bundle_mode):
+                item.error = f"있던 번들 {rel(p)} 의 출처 표기가 요청과 다르다 (자료명·이용조건·기준일·자료 종류). 그 파일을 확인한 뒤 지우고 다시 실행한다"
+                return item, None
+        item.bundles = [rel(p) for p in existing]
+        item.bundle, item.reused, item.count = item.bundles[0], True, sum(d["count"] for d in docs)
+        item.attrs = sum(1 for d in docs for f in d["features"] if f["properties"].get("attrs"))
+        item.bbox = docs[0].get("clip", {}).get("bbox")
+        return item, docs
     vw = None
     try:
         vw = detect_vworld(source)
@@ -148,15 +196,20 @@ def _convert_one(data_mode: str, home: Path, source: Path, *, geometry_version: 
         b = info["bbox_wgs84"]
         clip = Clip.from_bbox(f"{b[0] - pad},{b[1] - pad},{b[2] + pad},{b[3] + pad}")
         attrs_by_pnu, attrs_sources = read_attrs(vw, encoding="utf-8")
+        # 번들 한 개의 상한(폰 계약 MAX_FEATURES)을 넘는 큰 묶음(시군구 단위 등)은 PNU 순으로 나눠 여러 번들로 쓴다 (J5-040, ADR-23)
         opts = ConvertOptions(clip=clip, geometry_version=geometry_version, source_name=name, encoding="utf-8",
                               license=license, data_mode=bundle_mode, field_map=field_map,
-                              attrs_by_pnu=attrs_by_pnu or None, attrs_sources=attrs_sources or None)
-        bundle = convert(vw.cadastral, opts)
-        write_bundle(bundle, out)
-        doc = load_json(out, BUNDLE_SCHEMA)
-        item.bundle, item.count, item.bbox = rel, doc["count"], b
-        item.attrs = sum(1 for f in doc["features"] if f["properties"].get("attrs"))
-        return item, doc
+                              attrs_by_pnu=attrs_by_pnu or None, attrs_sources=attrs_sources or None,
+                              split=True, max_features=SPLIT_MAX_FEATURES)
+        parts = split_bundle(convert(vw.cadastral, opts), PART_SIZE)
+        paths = _part_paths(out, len(parts))
+        for part, p in zip(parts, paths):
+            write_bundle(part, p)
+        docs = [load_json(p, BUNDLE_SCHEMA) for p in paths]
+        item.bundles = [rel(p) for p in paths]
+        item.bundle, item.count, item.bbox = item.bundles[0], sum(d["count"] for d in docs), b
+        item.attrs = sum(1 for d in docs for f in d["features"] if f["properties"].get("attrs"))
+        return item, docs
     except (ConvertError, VWorldError) as e:
         item.error = f"[{e.code}] {e.message}"
         return item, None
@@ -197,9 +250,10 @@ def ingest_vworld(db_path: Path, home: Path, sources: list[Path], *, geometry_ve
     with Db.open(db_path) as db:   # 대기 중인 마이그레이션은 여기서 적용된다 (백업 뒤)
         if before_schema < S.DB_SCHEMA_VERSION:
             r.migrated_from, r.migrated_to = before_schema, db.schema_version()
-        for item, doc in zip(r.items, docs):
+        for item, parts in zip(r.items, docs):
             try:
-                item.load = load_bundle(db, doc).to_dict()
+                loads = [load_bundle(db, doc).to_dict() for doc in parts]
+                item.load = _merge_loads(loads)
             except Exception as e:  # noqa: BLE001 - 반영 실패는 결과에 적고 멈춘다 (앞 번들은 각자 완결)
                 item.error = f"반영 실패: {getattr(e, 'message', None) or '; '.join(getattr(e, 'errors', []) or []) or e}"
                 r.stage = "load"
