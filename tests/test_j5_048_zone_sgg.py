@@ -74,3 +74,17 @@ def test_projection_zone_rule_carries_sgg(db, home, server, tmp_path):
     with pytest.raises(ProjectionError) as e:
         verify_projection_dir(out)
     assert e.value.code == "verify_transactions_zone_rule"
+
+
+def test_verifier_requires_ascii_digit_sgg(db, home, server, tmp_path):
+    """리뷰 반영 PR #95: 게시 전 확인은 시군구 코드를 ASCII 숫자 다섯 자리로만 받는다(전각 숫자는 폰 검증에서 거절되므로)."""
+    load_month(db, home, server, [row(0, umdNm="종로5가")])
+    apply_rules(db, load_rules(rules_file(tmp_path, dict(RULES, lawd_cd="11110"))))
+    for change, code in ((lambda t: t["zone_rule"].update(lawd_cd="１１１１０"), "verify_transactions_zone_rule"),
+                         (lambda t: t["coverage"][0].update(lawd_cd="１１１１０"), "verify_transactions_coverage")):
+        r = build_projection(db, home)
+        out = home / r.output_dir
+        tamper(out, change)
+        with pytest.raises(ProjectionError) as e:
+            verify_projection_dir(out)
+        assert e.value.code == code
