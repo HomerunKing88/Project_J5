@@ -18,7 +18,7 @@ from j5 import APP_VERSION
 from j5.db.backup import EXIT_BY_OUTCOME as BACKUP_EXIT, BackupError, check_photos, check_photos_text, create_backup, restore_backup, verify_backup_dir
 from j5.db.importer import EXIT_BY_OUTCOME, import_package
 from j5.db.ingest import ingest_vworld
-from j5.db.parcels import BUNDLE_SCHEMA as PARCELS_BUNDLE_SCHEMA, LINKS_SCHEMA as PARCELS_LINKS_SCHEMA, active_links, apply_links, attribute_history, history_text, load_bundle, load_json as load_parcels_json, suggest_links
+from j5.db.parcels import BUNDLE_SCHEMA as PARCELS_BUNDLE_SCHEMA, LINKS_SCHEMA as PARCELS_LINKS_SCHEMA, active_links, apply_links, scope_overview, scope_text, set_phone_scope, attribute_history, history_text, load_bundle, load_json as load_parcels_json, suggest_links
 from j5.db.schema import TRACKING_STATUSES
 from j5.db.parcel_assets import create_from_parcels as create_parcel_assets, pnus_from_csv, result_text as parcel_assets_text
 from j5.db.parcel_find import check_criteria as check_find_criteria, find_csv, find_parcels, find_text
@@ -170,6 +170,10 @@ def _build_parser() -> argparse.ArgumentParser:
     pf.add_argument("--limit", type=int, default=50, help="화면에 보일 줄 수 (기본 50, CSV·JSON 은 전부)")
     pf.add_argument("--csv", type=Path, help="결과 전부를 CSV 로 저장 (덮어쓰지 않음)")
     pf.add_argument("--json", action="store_true")
+    sc_ = dsub.add_parser("phone-scope", help="폰 파생본에 실을 필지 범위 (J5-039, ADR-23): 법정동 코드 목록. 인자 없이 부르면 현재 범위와 법정동별 필지 수를 보인다")
+    sc_.add_argument("--emd", action="append", default=[], metavar="CODE[,CODE…]", help="법정동 코드 10자리 (parcels.emd_code). 반복 가능. 물건이 연결된 필지는 범위 밖이어도 실린다")
+    sc_.add_argument("--all", action="store_true", help="범위를 지우고 전체를 싣는다 (폰 상한 안일 때)")
+    sc_.add_argument("--json", action="store_true")
     ap_ = dsub.add_parser("asset-from-parcels", help="필지 목록으로 물건 만들기 (J5-038): 필지마다 매입 검토 단위를 만들어 연결하고 원하면 관심 단계를 준다. 이미 물건이 있는 필지는 건너뜀")
     ap_.add_argument("--pnu", action="append", default=[], metavar="PNU[,PNU…]", help="대상 필지 PNU. 반복 가능")
     ap_.add_argument("--csv", type=Path, help="db parcels-find --csv 로 저장한 파일 (pnu 열)")
@@ -713,6 +717,15 @@ def _db_main(args) -> int:
                     return USAGE_ERROR
                 r = load_bundle(db, load_parcels_json(args.bundle, PARCELS_BUNDLE_SCHEMA))
                 sys.stdout.write(json.dumps(r.to_dict(), ensure_ascii=True, sort_keys=True, indent=2) + "\n" if args.json else r.to_text())
+                return 0
+            if args.db_command == "phone-scope":
+                codes = [x.strip() for v in args.emd for x in v.split(",") if x.strip()]
+                if codes and args.all:
+                    print("--emd 와 --all 중 하나만 준다", file=sys.stderr)
+                    return USAGE_ERROR
+                o = set_phone_scope(db, codes) if codes else set_phone_scope(db, None) if args.all else scope_overview(db)
+                sys.stdout.write(json.dumps(o, ensure_ascii=False, indent=2) + "\n" if args.json else scope_text(o)
+                                 + ("다음 `project` 부터 이 범위로 만든다\n" if codes or args.all else ""))
                 return 0
             if args.db_command == "asset-from-parcels":
                 pnus = [x.strip() for v in args.pnu for x in v.split(",") if x.strip()]

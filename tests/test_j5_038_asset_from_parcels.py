@@ -39,12 +39,19 @@ def test_interior_point_inside_even_for_concave_parcel():
     for f in vw_bundle()["features"]:
         p = interior_point(f["geometry"], f["properties"]["bbox"])
         assert p is not None and geometry_contains(f["geometry"], p[0], p[1]), f["id"]
+    # 반올림한 점도 필지 안이어야 한다 (리뷰 반영 PR #85): 소수 7자리 격자에 안쪽 점이 없는 아주 가는 삼각형은 점을 정하지 못한다(None)
+    tiny = {"type": "Polygon", "coordinates": [[[127, 37], [127, 37.0000001], [127.0000001, 37.0000001], [127, 37]]]}
+    tp = interior_point(tiny, [127, 37, 127.0000001, 37.0000001])
+    assert tp is None or geometry_contains(tiny, tp[0], tp[1])
+    thin = {"type": "Polygon", "coordinates": [[[127, 37], [127.001, 37], [127.001, 37.00000015], [127, 37.00000015], [127, 37]]]}
+    tp = interior_point(thin, [127, 37, 127.001, 37.00000015])
+    assert tp is not None and geometry_contains(thin, tp[0], tp[1]), "가늘어도 안쪽 격자점이 있으면 찾는다"
 
 
 def test_create_link_track_and_skip_existing(db):
     load_bundle(db, vw_bundle())
     before = counts(db)
-    r = create_from_parcels(db, [P42, P1, PS12], track="watch", effective_from="2026-09-28")
+    r = create_from_parcels(db, [P42, P1, PS12, P42], track="watch", effective_from="2026-09-28")   # 같은 PNU 가 두 번 와도 물건은 하나
     assert [c["pnu"] for c in r["created"]] == [P42, PS12]
     assert [s["pnu"] for s in r["skipped"]] == [P1] and "이미 물건이 있다" in r["skipped"][0]["reason"], "위치점이 든 물건이 있는 필지는 건너뛴다"
     a, links, tc, v = counts(db)
@@ -77,6 +84,12 @@ def test_rejects_whole_request_and_rolls_back(db):
     with pytest.raises(DbError) as e:
         create_from_parcels(db, [P42], effective_from="2026-02-30", dry_run=True)
     assert e.value.code == "bad_date", "미리 보기에서도 날짜를 검사한다"
+    # 미리 보기도 관심 단계 규칙을 검사한다 (리뷰 반영 PR #85): 미리 보기가 성공하면 실제 실행도 단계 때문에 실패하지 않는다
+    with pytest.raises(ValidationError):
+        create_from_parcels(db, [P42], track="hold", dry_run=True)
+    with pytest.raises(ValidationError):
+        create_from_parcels(db, [P42], track="purchase_ready", dry_run=True)
+    assert create_from_parcels(db, [P42], track="hold", reason="가상 보류", dry_run=True)["created"][0]["pnu"] == P42
     # 미리 보기는 쓰지 않는다
     dry = create_from_parcels(db, [P42, P1], track="watch", dry_run=True)
     assert [c["pnu"] for c in dry["created"]] == [P42] and dry["created"][0]["asset_id"] is None and counts(db) == before

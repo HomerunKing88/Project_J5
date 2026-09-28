@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from j5.db.parcels import parcels_bundle_from_db
+from j5.parcels.convert import MAX_FEATURES as PARCELS_PHONE_LIMIT
 from j5.db.store import Db
 from j5.package.preserve import PreserveError, copy_package
 from j5.schemas_loader import schema_errors
@@ -423,6 +424,12 @@ def build_projection(db: Db, data_home: Path, *, photos: bool = False) -> Projec
                 result.add("warn", "readiness_withdrawn", f"물건 {d['asset_id']} 의 purchase_ready 를 자동 철회했다 ({d['reason'][:120]})")
         snapshot = _read_snapshot(db, generated_at=started)
         result.source_dataset_version = snapshot["version"]
+        parcels = snapshot.get("parcels")
+        if parcels is not None and parcels["count"] > PARCELS_PHONE_LIMIT:
+            # 정본은 폰 상한보다 많은 필지를 담을 수 있다 (J5-039, ADR-23). 폰에 실을 범위를 좁히기 전에는 게시하지 않고 이전본을 유지한다.
+            # 버전을 적은 뒤에 검사한다: 실패 기록에도 실제 정본 버전이 남게 (리뷰 반영 PR #86)
+            raise ProjectionError("parcels_phone_limit", f"폰에 실을 필지가 {parcels['count']}개로 폰 상한 {PARCELS_PHONE_LIMIT}개를 넘는다."
+                                                         " `db phone-scope --emd <법정동 코드,…>` 로 범위를 정한 뒤 다시 만든다")
         manifest = _generate(snapshot, tmp, photos=photos, data_home=data_home, run_id=run_id, generated_at=started)
         expected = {"assets": len(snapshot["assets"]), "records": len(snapshot["records"]), "attachments": sum(len(v) for v in snapshot["attachments"].values()),
                     "parcels": snapshot["parcels"]["count"] if snapshot.get("parcels") else 0,

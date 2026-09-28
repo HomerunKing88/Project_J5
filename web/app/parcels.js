@@ -472,14 +472,21 @@ export function parcelAt(features, lonlat) {
 
 /** 필지 안의 점 하나 (기기가 만든 물건의 위치점, J5-028). 라벨 위치가 안이면 그것, 아니면 bbox 격자에서 처음 찾은 안쪽 점, 없으면 null. */
 export function interiorPoint(feature) {
+  // 소수 7자리로 반올림한 뒤에도 필지 안인지 다시 본다: 아주 가는 필지에서는 반올림이 점을 꼭짓점·밖으로 옮길 수 있다 (리뷰 반영 PR #85)
+  const inside = (p) => {
+    if (!p) return null;
+    const r = [Number(p[0].toFixed(7)), Number(p[1].toFixed(7))];
+    return pointInFeature(r, feature) ? r : null;
+  };
   const lp = labelPoint(feature);
-  if (lp && pointInFeature(lp, feature)) return [Number(lp[0].toFixed(7)), Number(lp[1].toFixed(7))];
+  const hit = lp && pointInFeature(lp, feature) ? inside(lp) : null;
+  if (hit) return hit;
   const b = feature.properties?.bbox;
   if (!isBbox(b)) return null;
   for (const n of [5, 11, 23]) {
     for (let i = 1; i < n; i++) for (let j = 1; j < n; j++) {
-      const p = [b[0] + ((b[2] - b[0]) * i) / n, b[1] + ((b[3] - b[1]) * j) / n];
-      if (pointInFeature(p, feature)) return [Number(p[0].toFixed(7)), Number(p[1].toFixed(7))];
+      const r = inside([b[0] + ((b[2] - b[0]) * i) / n, b[1] + ((b[3] - b[1]) * j) / n]);
+      if (r) return r;
     }
   }
   return null;

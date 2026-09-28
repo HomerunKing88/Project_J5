@@ -25,7 +25,7 @@
 | 테이블·객체 | 핵심 필드·책임 | 시작 |
 |---|---|---|
 | assets.seed.json | asset_id(UUID), label, location_point 또는 address, data_mode, created_at, notes. 파생본 시드에는 정본 출력값 tracking_status·resolution_status 가 붙는다(폰 표시용, `load-seed` 는 거절) [ADR-22] | R1a |
-| schema_migrations / meta | 스키마 버전·study_id·dataset_version | R1b |
+| schema_migrations / meta | 스키마 버전·study_id·dataset_version. `phone_parcel_scope`(J5-039, ADR-23): 폰 파생본에 실을 법정동 코드 목록 JSON `{"emd_codes": […]}`, 없으면 전체. 범위가 바뀌면 dataset_version 을 올린다(이전 범위의 파생본·백업은 구본) | R1b |
 | subjects | subject_id PK, subject_type, UNIQUE(subject_id, subject_type) | R1b |
 | assets | asset_id, label, tracking_status, resolution_status | R1b |
 | parcels / buildings | PNU·외부 건물 ID와 내부 ID 분리 | R2 |

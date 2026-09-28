@@ -230,6 +230,13 @@ test("parseParcelQuery·findParcels·parcelAt (J5-027)", () => {
   const cp = interiorPoint(cshape);
   assert.ok(cp && pointInFeature(cp, cshape), "라벨 위치가 밖이면 격자에서 안쪽 점을 찾는다");
   assert.equal(interiorPoint({ id: "y", geometry: { type: "Polygon", coordinates: [[[0, 0], [1, 0], [0, 0], [0, 0]]] }, properties: {} }), null);
+  // 반올림한 점도 필지 안이어야 한다 (리뷰 반영 PR #85, PC interior_point 와 같은 규칙)
+  const tiny = { id: "t", geometry: { type: "Polygon", coordinates: [[[127, 37], [127, 37.0000001], [127.0000001, 37.0000001], [127, 37]]] }, properties: { bbox: [127, 37, 127.0000001, 37.0000001] } };
+  const tp = interiorPoint(tiny);
+  assert.ok(tp === null || pointInFeature(tp, tiny), "소수 7자리 격자에 안쪽 점이 없으면 null");
+  const thin = { id: "h", geometry: { type: "Polygon", coordinates: [[[127, 37], [127.001, 37], [127.001, 37.00000015], [127, 37.00000015], [127, 37]]] }, properties: { bbox: [127, 37, 127.001, 37.00000015] } };
+  const hp = interiorPoint(thin);
+  assert.ok(hp && pointInFeature(hp, thin), "가늘어도 안쪽 격자점이 있으면 찾는다");
 });
 
 test("공시지가 추이 (J5-030): 현재 속성에서 변화 항목을 거꾸로 짚어 기준일마다의 값을 되살린다", () => {

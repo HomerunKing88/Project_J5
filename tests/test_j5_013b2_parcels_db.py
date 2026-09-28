@@ -214,10 +214,11 @@ def test_projection_includes_parcels_geojson_with_links(db, home):
 
 
 def test_aggregate_parcel_limit_enforced_on_load(db, monkeypatch):
-    """리뷰 반영: 번들마다 8,000 이하라도 여러 번 넣으면 정본 합계가 상한을 넘어 파생본이 영영 실패한다. 반영 전에 합계를 검사한다."""
+    """리뷰 반영: 번들마다 상한 이하라도 여러 번 넣으면 정본 합계가 상한을 넘는다. 반영 전에 합계를 검사한다.
+    J5-039(ADR-23)부터 정본 상한(CANONICAL_MAX_PARCELS)은 폰 상한과 따로다. 폰 파생본은 폰 범위로 줄인다 (tests/test_j5_039_phone_scope.py)."""
     from j5.db import parcels as PM
     load_bundle(db, bundle())
-    monkeypatch.setattr(PM, "MAX_FEATURES", 8)
+    monkeypatch.setattr(PM, "CANONICAL_MAX_PARCELS", 8)
     b2 = bundle()
     for i, f in enumerate(b2["features"][:3]):
         f["id"] = f["properties"]["pnu"] = f"9999900200100{i:02d}0000"
