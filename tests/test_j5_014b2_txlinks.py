@@ -60,16 +60,17 @@ def db(home):
 
 
 def row(i: int, **over) -> dict:
+    """가상 거래 한 행. 시군구는 가상 필지(PNU 앞 5자리 99999)와 같은 99999: 지번 대조는 시군구 코드도 본다 (J5-044)."""
     it = item(i)
-    it.update({"sggCd": "11110", "umdNm": "가상동", "landUse": "일반상업", "shareDealingType": "", "cdealDay": "", "estateAgentSggNm": "", "buyerGbn": "", "slerGbn": ""})
+    it.update({"sggCd": "99999", "umdNm": "가상동", "landUse": "일반상업", "shareDealingType": "", "cdealDay": "", "estateAgentSggNm": "", "buyerGbn": "", "slerGbn": ""})
     it.update(over)
     return it
 
 
 def load_month(db, home, server, items, ym="202608"):
     _Handler.scenarios = {ym: {"kind": "pages", "items": items}}
-    run = collect_months(home, key=KEY, key_source="test", lawd_cd="11110", months=[ym], endpoint=server, sleep=lambda s: None)
-    load_run(db, home, "11110", run.run_id)
+    run = collect_months(home, key=KEY, key_source="test", lawd_cd="99999", months=[ym], endpoint=server, sleep=lambda s: None)
+    load_run(db, home, "99999", run.run_id)
     return run
 
 
@@ -99,7 +100,7 @@ def test_candidates_csv_lists_current_deals_with_matches(db, home, server):
     items = [row(0, jibun="1"), row(1, jibun="1-1"), row(2, jibun="1-*"), row(3, jibun="산1-2"), row(4, jibun="9"), row(5, jibun="*"),
              row(6, jibun="1", cdealType="O", cdealDay="26.08.30"), row(7, jibun="4-2", umdNm="다른동")]
     load_month(db, home, server, items)
-    rows = candidates(db, "11110", ["202608"])
+    rows = candidates(db, "99999", ["202608"])
     assert len(rows) == 7, "취소 확정 거래는 후보 목록에 없다"
     by = {r["jibun"] + "@" + r["emd_name"]: r for r in rows}
     assert by["1@가상동"]["candidate_asset_ids"] == A[0] and by["1@가상동"]["candidate_basis"] == "jibun_exact" and "가상 물건 1" in by["1@가상동"]["candidate_labels"]
@@ -114,15 +115,15 @@ def test_candidates_csv_lists_current_deals_with_matches(db, home, server):
     parsed = list(csv.DictReader(io.StringIO(text)))
     assert len(parsed) == 7 and parsed[0]["amount_krw"] and parsed[0]["building_kind"] == "general"
     assert "거래 후보 7행" in candidates_text(rows) and "지번 일치 2" in candidates_text(rows)
-    assert [r["jibun"] for r in candidates(db, "11110", ["202608"], emd_names=["다른동"])] == ["4-2"]
-    assert candidates(db, "11110", ["202607"]) == []
+    assert [r["jibun"] for r in candidates(db, "99999", ["202608"], emd_names=["다른동"])] == ["4-2"]
+    assert candidates(db, "99999", ["202607"]) == []
     assert db.status()["counts"]["transaction_links"] == 0, "후보는 정본에 쓰지 않는다"
 
 
 def test_apply_decisions_confirm_withdraw_supersede_and_history(db, home, server):
     load_month(db, home, server, [row(0, jibun="1"), row(2, jibun="1-*"), row(4, jibun="9"), row(6, jibun="1", cdealType="O", cdealDay="26.08.30")])
     t1, t1m, t9, tc = tid_of(db, row(0, jibun="1")), tid_of(db, row(2, jibun="1-*")), tid_of(db, row(4, jibun="9")), tid_of(db, row(6, jibun="1", cdealType="O", cdealDay="26.08.30"))
-    rows = candidates(db, "11110", ["202608"])
+    rows = candidates(db, "99999", ["202608"])
     for r in rows:
         r["_line"] = 2
     dec = {r["transaction_id"]: r for r in rows}
@@ -136,9 +137,9 @@ def test_apply_decisions_confirm_withdraw_supersede_and_history(db, home, server
     tx = {t["transaction_id"]: dict(t) for t in db.conn.execute("SELECT * FROM transactions")}
     assert tx[t1]["link_status"] == "confirmed" and tx[t1]["scope"] == "unclear" and tx[t1]["scope_basis"] == "auto_provider_fields"
     assert tx[t1m]["link_status"] == "pending_evidence" and tx[t1m]["scope"] == "land_only" and tx[t1m]["scope_basis"] == "manual_review"
-    assert coverage(db, "11110", ["202608"])["linked"] == 1
-    assert candidates(db, "11110", ["202608"], unlinked_only=True)[0]["transaction_id"] == t9
-    assert {r["transaction_id"]: r["linked_asset_id"] for r in candidates(db, "11110", ["202608"])}[t1] == A[0]
+    assert coverage(db, "99999", ["202608"])["linked"] == 1
+    assert candidates(db, "99999", ["202608"], unlinked_only=True)[0]["transaction_id"] == t9
+    assert {r["transaction_id"]: r["linked_asset_id"] for r in candidates(db, "99999", ["202608"])}[t1] == A[0]
     # 같은 결정 다시 → 변화 없음 (검토일을 비우면 멱등). 검토일을 명시해 바꾸면 갱신이고 결정 이력에 남는다 (Codex P2)
     assert apply_decisions(db, rows).outcome == "unchanged"
     r_same = apply_decisions(db, [{"_line": 2, "transaction_id": t1, "decision": "confirmed", "asset_id": A[0], "basis_kind": "jibun_exact", "reviewed_on": "2026-09-25", "note": "지번 일치"}])
@@ -189,7 +190,7 @@ def test_apply_decisions_confirm_withdraw_supersede_and_history(db, home, server
     # 상태만 바꾸는 갱신 (같은 물건): pending → confirmed with manual basis
     r4 = apply_decisions(db, [{"_line": 2, "transaction_id": t1m, "decision": "confirmed", "asset_id": A[0], "basis_kind": "manual", "note": "현장 확인"}])
     assert r4.updated == 1 and r4.inserted == 0 and [h["decision"] for h in link_history(db, t1m)] == ["pending_evidence", "confirmed"]
-    assert coverage(db, "11110", ["202608"])["linked"] == 1
+    assert coverage(db, "99999", ["202608"])["linked"] == 1
     # 백업·복구에 새 테이블 포함
     b = create_backup(db, home)
     assert b.outcome == "completed" and b.counts["transaction_links"] == 3 and b.counts["review_decisions"] == 7
@@ -224,10 +225,10 @@ def test_cli_candidates_and_link_roundtrip(db, home, server, capsys, monkeypatch
     db.close()
     monkeypatch.setenv("J5_DATA_HOME", str(home))
     out_csv = home / "candidates.csv"
-    rc = cli.main(["db", "rt-candidates", "--lawd-cd", "11110", "--from", "2026-08", "--to", "2026-08", "--out", str(out_csv)])
+    rc = cli.main(["db", "rt-candidates", "--lawd-cd", "99999", "--from", "2026-08", "--to", "2026-08", "--out", str(out_csv)])
     out = capsys.readouterr()
     assert rc == 0 and out_csv.is_file() and "거래 후보 2행" in out.out
-    assert cli.main(["db", "rt-candidates", "--lawd-cd", "11110", "--from", "2026-08", "--to", "2026-08", "--out", str(out_csv)]) == cli.USAGE_ERROR, "덮어쓰지 않는다"
+    assert cli.main(["db", "rt-candidates", "--lawd-cd", "99999", "--from", "2026-08", "--to", "2026-08", "--out", str(out_csv)]) == cli.USAGE_ERROR, "덮어쓰지 않는다"
     capsys.readouterr()
     rows = read_decisions_csv(out_csv)
     assert len(rows) == 2 and all(r["decision"] == "" for r in rows)
@@ -244,7 +245,7 @@ def test_cli_candidates_and_link_roundtrip(db, home, server, capsys, monkeypatch
     rc = cli.main(["db", "rt-link", str(edited)])
     out = capsys.readouterr()
     assert rc == 0 and "신규 1" in out.out and "결정 있는 행 1" in out.out
-    rc = cli.main(["db", "rt-coverage", "--lawd-cd", "11110", "--from", "2026-08", "--to", "2026-08", "--json"])
+    rc = cli.main(["db", "rt-coverage", "--lawd-cd", "99999", "--from", "2026-08", "--to", "2026-08", "--json"])
     assert rc == 0 and json.loads(capsys.readouterr().out)["linked"] == 1
     # 잘못된 CSV: 머리글 없음 → 거절 (종료 코드 1), 없는 파일 → 1
     bad = home / "bad.csv"
@@ -252,8 +253,8 @@ def test_cli_candidates_and_link_roundtrip(db, home, server, capsys, monkeypatch
     assert cli.main(["db", "rt-link", str(bad)]) == 1 and "머리글" in capsys.readouterr().err
     assert cli.main(["db", "rt-link", str(home / "none.csv")]) == 1
     capsys.readouterr()
-    rc = cli.main(["db", "rt-candidates", "--lawd-cd", "11110", "--from", "2026-08", "--to", "2026-08", "--json", "--emd", "가상동", "--unlinked-only"])
+    rc = cli.main(["db", "rt-candidates", "--lawd-cd", "99999", "--from", "2026-08", "--to", "2026-08", "--json", "--emd", "가상동", "--unlinked-only"])
     js = json.loads(capsys.readouterr().out)
     assert rc == 0 and len(js) == 1 and js[0]["jibun"] == "1-1"
-    rc = cli.main(["db", "rt-candidates", "--lawd-cd", "11110", "--from", "2026-08", "--to", "2026-08"])
+    rc = cli.main(["db", "rt-candidates", "--lawd-cd", "99999", "--from", "2026-08", "--to", "2026-08"])
     assert rc == 0 and capsys.readouterr().out.startswith("transaction_id,")

@@ -63,6 +63,12 @@ test("fmtKrw·parseJibun·jibunMatch", () => {
   const cases = [["1**", P(160), "prefix"], ["1**", P(160, 3), null], ["1**", P(16), null], ["1**-*", P(160, 3), "prefix"], ["16*-3", P(160, 3), "prefix"],
     ["16*-3", P(160, 4), null], ["8*", P(85), "prefix"], ["8*", P(8), null], ["1-*", P(1, 12), null], ["산1**", P(123, 0, true), "prefix"], ["산1**", P(123), null], ["*-1", P(1, 1), null]];
   for (const [j, p, want] of cases) assert.equal(jibunMatch(T(ID(1), "202508", j), p), want, `${j} ↔ ${p.mountain ? "산" : ""}${p.bon}-${p.bu}`);
+  // 시군구 코드 (J5-044): 거래 lawd_cd 와 필지 emd_code 앞 5자리가 다르면 이름·지번이 같아도 아님. 한쪽이 없으면 이름으로만 본다
+  const pc = { ...p1, emd_code: "9999900100" };
+  assert.equal(jibunMatch(T(ID(1), "202508", "1", { lawd_cd: "99999" }), pc), "exact");
+  assert.equal(jibunMatch(T(ID(1), "202508", "1", { lawd_cd: "11110" }), pc), null, "이름이 같은 다른 시군구의 법정동");
+  assert.equal(jibunMatch(T(ID(1), "202508", "1-*", { lawd_cd: "11110" }), pc), null);
+  assert.equal(jibunMatch(T(ID(1), "202508", "1", { lawd_cd: "11110" }), p1), "exact", "필지에 법정동 코드가 없으면 이름으로만");
 });
 
 test("assetHistory: 정본 기록·이 기기 관측(정본에 있으면 대체)·확정 연결 거래, 날짜 내림차순, 정정 표시", () => {

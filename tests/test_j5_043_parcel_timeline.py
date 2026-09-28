@@ -1,7 +1,7 @@
 """J5-043: PC 필지 이력에 이 필지에 닿는 실거래를 연도별로 (db parcels-history).
 
 시험: 같은 필지(지번 일치)·번지대(부번 마스킹)·연결 물건의 확정 거래(지번 불일치)를 모으고, 다른 필지·다른 법정동·앞자리 없는 마스킹(*)은 넣지 않음,
-취소 확정은 목록에서 빼고 수만, 계약연도별 묶음(최근 먼저), 시군구 코드가 다르면 표시, 정본에 쓰지 않음, CLI 글·JSON. 가상 서버·가상자료만 쓴다.
+취소 확정은 목록에서 빼고 수만, 계약연도별 묶음(최근 먼저), 가상 거래 시군구가 가상 필지와 같음(J5-044), 정본에 쓰지 않음, CLI 글·JSON. 가상 서버·가상자료만 쓴다.
 """
 
 from __future__ import annotations
@@ -40,8 +40,7 @@ def test_transactions_touching_parcel(db, home, server):
     assert r["cancelled"] == 1, "취소 확정 거래는 목록에 없고 수만 센다"
     linked = next(t for t in r["transactions"] if t["match"] == "linked")
     assert linked["transaction_id"] == t9 and linked["asset_id"] == A[0] and linked["linked_here"]
-    assert all(t["sgg_differs"] and t["lawd_cd"] == "11110" for t in r["transactions"]), "가상 필지(99999)와 거래(11110)의 시군구 코드가 다르다는 표시"
-    assert r["sgg_differs"] == 4
+    assert not any(t["sgg_differs"] for t in r["transactions"]) and r["other_sgg"] == 0, "가상 거래의 시군구(99999)는 가상 필지와 같다 (J5-044)"
     # 4-2 필지: 2021 의 4-* 는 번지대, 물건 3 에 연결됐지만 확정 연결 거래가 없다
     assert [(t["deal_ymd"], t["match"]) for t in parcel_transactions(db, P42)["transactions"]] == [("202109", "prefix")]
     assert db.status()["dataset_version"] == v, "정본에 쓰지 않는다"
@@ -54,7 +53,7 @@ def test_years_and_text(db, home, server):
     text = years_text(h)
     assert "실거래 4건: 같은 필지 2 · 번지대 1 · 연결 물건의 거래 1 · 취소 확정 1건 제외" in text
     assert text.index("  2026:") < text.index("  2021:"), "최근 연도 먼저"
-    assert "2026-08-02 실거래 번지대 (필지 미확정)" in text and "(가상동 1-*)" in text and "확정 연결" in text and "시군구 코드 다름(거래 11110)" in text
+    assert "2026-08-02 실거래 번지대 (필지 미확정)" in text and "(가상동 1-*)" in text and "확정 연결" in text and "시군구 코드 다름" not in text
     assert "이 필지의 거래로 확정하지 않는다" in text
     assert [fmt_krw(x) for x in (1e9, 1.23e9, 15e8, 85e6, 9000, None)] == ["10억", "12.3억", "15억", "8,500만", "9,000원", "금액 미확인"], "폰 fmtKrw 와 같다"
 

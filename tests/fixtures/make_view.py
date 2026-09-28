@@ -45,8 +45,9 @@ RULES = {"kind": "zone_rules", "name": "가상 범위", "core": ["가상동"], "
 
 
 def _row(i: int, ym: str, **over) -> dict:
+    # 시군구는 가상 필지(PNU 앞 5자리)와 같은 99999: 지번 대조는 시군구 코드도 본다 (J5-044)
     it = item(i)
-    it.update({"sggCd": "11110", "landUse": "일반상업", "shareDealingType": "", "cdealDay": "", "estateAgentSggNm": "", "buyerGbn": "", "slerGbn": "",
+    it.update({"sggCd": "99999", "landUse": "일반상업", "shareDealingType": "", "cdealDay": "", "estateAgentSggNm": "", "buyerGbn": "", "slerGbn": "",
                "umdNm": "가상동", "dealYear": ym[:4], "dealMonth": str(int(ym[4:]))})
     it.update(over)
     return it
@@ -88,14 +89,14 @@ def build(out_dir: Path, *, parcels: bool = True) -> dict:
             counter = iter(range(1, 100))
             rt._new_run_id = lambda: f"20260927-090000-{next(counter):06x}"
             _Handler.scenarios = {ym: {"kind": "pages", "items": items} for ym, items in MONTHS.items()}
-            run = collect_months(home, key=KEY, key_source="fixture", lawd_cd="11110", months=sorted(MONTHS), endpoint=endpoint, sleep=lambda s: None)
-            load_run(db, home, "11110", run.run_id)
+            run = collect_months(home, key=KEY, key_source="fixture", lawd_cd="99999", months=sorted(MONTHS), endpoint=endpoint, sleep=lambda s: None)
+            load_run(db, home, "99999", run.run_id)
         finally:
             srv.shutdown()
         rules = Path(td) / "zones.json"
         rules.write_text(json.dumps(RULES, ensure_ascii=False), encoding="utf-8")
         apply_rules(db, load_rules(rules))
-        rows = candidates(db, "11110", sorted(MONTHS))
+        rows = candidates(db, "99999", sorted(MONTHS))
         for row in rows:
             row["_line"] = 2
             if row["jibun"] == "1" and row["deal_ymd"] == "202508":
