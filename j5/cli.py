@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sqlite3
 import sys
@@ -704,6 +705,12 @@ def _db_main(args) -> int:
                 sys.stdout.write(json.dumps(r.to_dict(), ensure_ascii=True, sort_keys=True, indent=2) + "\n" if args.json else r.to_text())
                 return 0
             if args.db_command == "parcels-find":
+                # 숫자 조건은 유한해야 한다: nan·inf·만원→원 환산에서 넘치는 값은 사용 오류 (리뷰 반영 PR #84)
+                bad = [name for name, v, k in (("--area-min", args.area_min, 1), ("--area-max", args.area_max, 1), ("--price-min", args.price_min, 10000), ("--price-max", args.price_max, 10000))
+                       if v is not None and not (math.isfinite(v) and math.isfinite(v * k))]
+                if bad:
+                    print(f"조건 확인: {', '.join(bad)} 는 유한한 숫자여야 한다", file=sys.stderr)
+                    return USAGE_ERROR
                 crit = {"zone": args.zone, "area_min": args.area_min, "area_max": args.area_max,
                         "price_min": None if args.price_min is None else round(args.price_min * 10000), "price_max": None if args.price_max is None else round(args.price_max * 10000),
                         "owner": args.owner, "restricted": args.restricted, "assets": args.assets}
