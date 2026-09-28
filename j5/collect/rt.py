@@ -152,7 +152,7 @@ def parse_response(data: bytes) -> dict:
     except ET.ParseError as e:
         snippet = data[:200].decode("utf-8", errors="replace")
         raise CollectError("response_not_xml", f"XML 해석 실패: {e}. 앞부분: {snippet!r}") from e
-    out = {"result_code": None, "result_msg": None, "total_count": None, "num_rows": None, "page_no": None, "items": []}
+    out = {"result_code": None, "result_msg": None, "total_count": None, "num_rows": None, "page_no": None, "page_no_raw": None, "items": []}
     header = root.find("header")
     if header is not None:
         out["result_code"] = (header.findtext("resultCode") or "").strip() or None
@@ -168,6 +168,8 @@ def parse_response(data: bytes) -> dict:
         for k, tag in (("total_count", "totalCount"), ("num_rows", "numOfRows"), ("page_no", "pageNo")):
             v = (body.findtext(tag) or "").strip()
             out[k] = int(v) if v.isdigit() else None
+        if body.find("pageNo") is not None:   # 있는데 숫자가 아닌 pageNo 와 없는 pageNo 를 구분한다 (리뷰 반영 PR #82)
+            out["page_no_raw"] = (body.findtext("pageNo") or "").strip()
         items = body.find("items")
         if items is not None:
             for it in items.findall("item"):
@@ -176,9 +178,17 @@ def parse_response(data: bytes) -> dict:
 
 
 def page_mismatch(parsed: dict, page_no: int) -> bool:
-    """응답의 pageNo 가 요청한 페이지와 다른가. 응답에 pageNo 가 없으면 확인할 수 없으므로 다르다고 보지 않는다.
+    """응답의 pageNo 가 요청한 페이지와 다른가. 응답에 pageNo 요소가 없으면 확인할 수 없으므로 다르다고 보지 않는다.
+    요소가 있는데 숫자가 아니면(빈 값 포함) 페이지를 확인할 수 없는 이상 응답으로 보고 다르다고 본다 (리뷰 반영 PR #82).
     pageNo 를 무시하고 앞 페이지를 되풀이하는 응답의 행을 더하면 같은 행이 겹쳐 totalCount 에 닿고, 정본에서는 같은 행이 순번으로 나뉘어 별개 거래가 된다 (J5-035)."""
-    return parsed.get("page_no") is not None and parsed["page_no"] != page_no
+    if parsed.get("page_no") is None:
+        return parsed.get("page_no_raw") is not None
+    return parsed["page_no"] != page_no
+
+
+def page_no_text(parsed: dict) -> str:
+    """오류 문구용 응답 pageNo 표기."""
+    return str(parsed["page_no"]) if parsed.get("page_no") is not None else repr(parsed.get("page_no_raw"))
 
 
 PAGE_FILE_RE = re.compile(r"^p(\d{3})-")
@@ -313,8 +323,8 @@ def collect_months(data_home: Path, *, key: str, key_source: str, lawd_cd: str, 
                 _log(log, f"{run.run_id} {lawd_cd} {deal_ymd} p{page} api_error {pr.result_code} {pr.result_msg}", key)
                 break
             if page_mismatch(parsed, page):
-                pr.outcome, pr.error = "bad_response", f"요청한 페이지 {page} 에 응답 pageNo {parsed['page_no']} 가 왔다 (페이지 넘김이 맞지 않음)"
-                _log(log, f"{run.run_id} {lawd_cd} {deal_ymd} p{page} bad_response page_mismatch {parsed['page_no']}", key)
+                pr.outcome, pr.error = "bad_response", redact(f"요청한 페이지 {page} 에 응답 pageNo {page_no_text(parsed)} 가 왔다 (페이지 넘김이 맞지 않음)", key)
+                _log(log, f"{run.run_id} {lawd_cd} {deal_ymd} p{page} bad_response page_mismatch {page_no_text(parsed)}", key)
                 break
             pr.outcome = "ok" if pr.item_count else "empty"
             mr.items += pr.item_count

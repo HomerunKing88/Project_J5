@@ -19,7 +19,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from j5.collect.rt import OK_CODES, PROVIDER, RAW_DIR, CollectError, list_run_ids, page_mismatch, parse_response
+from j5.collect.rt import OK_CODES, PROVIDER, RAW_DIR, CollectError, list_run_ids, page_mismatch, page_no_text, parse_response
 from j5.db import schema as S
 from j5.db.store import Db, DbError
 from j5.db.validate import parse_date
@@ -258,7 +258,7 @@ def load_run(db: Db, data_home: Path, lawd_cd: str, run_id: str) -> RunLoadResul
                 raise DbError("raw_not_ok", f"원본 {p['path']} 의 resultCode 가 정상이 아니다 ({parsed['result_code']})")
             if page_mismatch(parsed, p["page_no"]):
                 # 이 검사가 없던 도구(J5-035 전)로 받은 실행: 앞 페이지를 되풀이한 응답의 행이 별개 거래로 들어가지 않게 실행 전체를 거절한다
-                raise DbError("raw_page_mismatch", f"원본 {p['path']} 는 요청한 페이지 {p['page_no']} 인데 응답 pageNo 가 {parsed['page_no']} 다."
+                raise DbError("raw_page_mismatch", f"원본 {p['path']} 는 요청한 페이지 {p['page_no']} 인데 응답 pageNo 가 {page_no_text(parsed)} 다."
                                                    " 페이지 넘김이 맞지 않은 실행은 반영하지 않는다. 그 달을 `collect rt-fetch --refresh` 로 다시 받는다")
             if len(parsed["items"]) != int(p.get("item_count") or 0):
                 raise DbError("raw_count_mismatch", f"원본 {p['path']} 의 항목 수 {len(parsed['items'])} 가 기록 {p.get('item_count')} 과 다르다")

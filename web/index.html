@@ -85,13 +85,14 @@
         <label>공시지가 최소(만원/㎡) <input id="pf-price-min" type="number" inputmode="decimal" min="0" step="any"></label>
         <label>공시지가 최대(만원/㎡) <input id="pf-price-max" type="number" inputmode="decimal" min="0" step="any"></label>
         <label>소유구분 <select id="pf-owner"><option value="">전체</option></select></label>
+        <label>물건 <select id="pf-assets"><option value="">상관없음</option><option value="none">물건 없는 필지</option><option value="any">물건 있는 필지</option><option value="watch">관찰목록 물건이 있는 필지</option></select></label>
         <label class="check"><input id="pf-restricted" type="checkbox"> 저촉 규제 있음</label>
       </div>
       <div class="row"><button type="submit" class="primary">찾기</button> <button type="button" id="pf-clear" class="secondary">지우기</button></div>
     </form>
     <p id="parcel-filter-note" class="muted" role="status"></p>
     <ul id="parcel-filter-results" class="plain search-results" hidden></ul>
-    <p class="help">불러온 필지 파일의 토지 자료 값 그대로 거릅니다. 값이 없는 필지는 조건에 맞는 것으로 보지 않고 따로 셉니다. 공부면적은 토지대장 면적(도형면적 아님)입니다. 매입 가능성·규제 판단이 아닙니다.</p>
+    <p class="help">불러온 필지 파일의 토지 자료 값 그대로 거릅니다. 값이 없는 필지는 조건에 맞는 것으로 보지 않고 따로 셉니다. 물건은 필지 패널의 "안의 물건" 과 같은 기준(정본 연결 또는 위치점 포함)입니다. 공부면적은 토지대장 면적(도형면적 아님)입니다. 매입 가능성·규제 판단이 아닙니다.</p>
   </details>
   <div id="map-selected" class="selected-card" hidden>
     <div class="selected-body">

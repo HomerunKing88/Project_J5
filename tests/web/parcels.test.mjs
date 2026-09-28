@@ -370,3 +370,25 @@ test("조건으로 필지 찾기 (J5-033): 조건 해석·거르기·결측 따�
   assert.equal(filterRowText(by["1"].properties.attrs), "일반상업지역 · 1,771㎡ · 12,340,000원/㎡ · 개인");
   assert.equal(filterRowText(by["3"].properties.attrs), "준공업지역 · 1,100㎡ · 공시지가 미확인 · 소유 미확인");
 });
+
+test("조건으로 필지 찾기의 물건 조건 (J5-036): 없음·있음·관찰목록, 다른 조건과 함께, 결과 줄의 물건 수", () => {
+  const feats = vwBundle().features;
+  const assets = seed().map((a, i) => ({ ...a, tracking_status: i === 0 ? "watch" : i === 3 ? "hold" : "unreviewed" }));   // 가상 물건 1 관찰, 4 보류
+  const assetsOf = (f) => parcelAssets(f, assets).map((x) => x.asset);
+  const labels = (r) => r.matches.map((f) => f.properties.label);
+  const run = (form) => { const { criteria, errors } = parseFilter(form); assert.deepEqual(errors, [], JSON.stringify(errors)); return filterParcels(feats, criteria, { assetsOf }); };
+  assert.deepEqual(labels(run({ assets: "none" })), ["산1-2", "4-2"], "물건 없는 필지 (공부면적 큰 순)");
+  assert.deepEqual(labels(run({ assets: "any" })), ["1", "2", "3", "1-1"]);
+  assert.deepEqual(labels(run({ assets: "watch" })), ["1"], "관찰목록(watch·detailed_review·purchase_ready) 물건이 있는 필지만. 보류는 넣지 않는다");
+  assert.deepEqual(labels(run({ assets: "none", restricted: true })), ["4-2"], "다른 조건과 모두 만족");
+  const r = run({ assets: "none", priceMin: "1" });
+  assert.deepEqual(labels(r), ["산1-2", "4-2"]);
+  assert.equal(r.unknown.price, 1, "결측 집계는 물건 조건과 상관없이 그대로 (필지 3 은 공시지가 없음)");
+  assert.equal(hasCriteria(parseFilter({ assets: "any" }).criteria), true);
+  assert.ok(parseFilter({ assets: "nope" }).errors.some((e) => e.includes("물건 조건")));
+  assert.throws(() => filterParcels(feats, parseFilter({ assets: "any" }).criteria), /assetsOf/, "물건 조건에는 물건 목록이 필요하다");
+  const by = byLabel(vwBundle());
+  assert.equal(filterRowText(by["1"].properties.attrs, assetsOf(by["1"])), "일반상업지역 · 1,771㎡ · 12,340,000원/㎡ · 개인 · 물건 1개 (관찰목록 1)");
+  assert.equal(filterRowText(by["4-2"].properties.attrs, []), "자연녹지지역 · 1,080㎡ · 1,200,000원/㎡ · 국유지 · 물건 없음");
+  assert.equal(filterRowText(by["1"].properties.attrs), "일반상업지역 · 1,771㎡ · 12,340,000원/㎡ · 개인", "물건 목록을 주지 않으면 이전과 같다");
+});
