@@ -201,9 +201,7 @@ def _generate(snapshot: dict, out: Path, *, photos: bool, data_home: Path, run_i
         for f in parcels["features"]:
             if not set(f["properties"].get("asset_ids", [])) <= ids_set:
                 raise ProjectionError("parcel_link_ref", f"필지 {f['id']} 의 연결 물건이 물건 목록에 없다")
-        errs = schema_errors("parcels_bundle.schema.json", parcels)
-        if errs:
-            raise ProjectionError("parcels_schema", "필지 파생본이 번들 스키마에 맞지 않는다: " + "; ".join(errs[:3]))
+        # 번들 스키마 검증은 쓴 파일을 다시 읽는 verify_projection_dir 에서 한 번만 한다 (J5-041: 수천 필지에서 검증이 생성 시간의 대부분이라 두 번 하지 않는다)
         files[PARCELS_FILE] = (json.dumps(parcels, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
         n_parcels = parcels["count"]
 
@@ -294,8 +292,11 @@ def verify_projection_dir(out: Path, *, expected_version: int | None = None, exp
         raise ProjectionError("verify_parcels_file", "parcels.geojson 의 유무가 counts.parcels 와 맞지 않는다")
     if PARCELS_FILE in listed:
         pb = json.loads((out / PARCELS_FILE).read_text(encoding="utf-8"))
-        if schema_errors("parcels_bundle.schema.json", pb) or pb["count"] != n_parcels or len(pb["features"]) != n_parcels:
-            raise ProjectionError("verify_parcels", "parcels.geojson 이 번들 스키마·필지 수와 맞지 않는다")
+        errs = schema_errors("parcels_bundle.schema.json", pb)
+        if errs:
+            raise ProjectionError("verify_parcels", "parcels.geojson 이 번들 스키마에 맞지 않는다: " + "; ".join(errs[:3]))
+        if pb["count"] != n_parcels or len(pb["features"]) != n_parcels:
+            raise ProjectionError("verify_parcels", "parcels.geojson 의 필지 수가 manifest 와 맞지 않는다")
         if pb.get("generated_at") != manifest["generated_at"] or pb.get("source_dataset_version") != manifest["source_dataset_version"] or pb.get("study_id") != manifest["study_id"]:
             raise ProjectionError("verify_parcels_version", "parcels.geojson 의 생성 시각·정본 버전·study_id 가 manifest 와 다르다")
         for f in pb["features"]:
