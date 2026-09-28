@@ -421,8 +421,8 @@ function runParcelFilter() {
   if (!hasCriteria(criteria)) { mapCall((m) => m.setMarked(null)); return text($("parcel-filter-note"), "조건을 하나 이상 고릅니다.", "warn"); }
   const r = filterParcels(feats, criteria);
   const shown = mapCall((m) => m.setMarked(r.matches.length ? filterParcels(feats, criteria, { limit: Infinity }).matches.map((f) => f.id) : null));
-  const unk = Object.entries({ zone: "용도지역", area: "공부면적", price: "공시지가", owner: "소유구분", plan: "규제" }).filter(([k]) => r.unknown[k]).map(([k, v]) => `${v} 미확인 ${r.unknown[k]}필지`);
-  const tail = unk.length ? ` · 제외: ${unk.join(", ")} (값이 없어 조건에 맞는지 모름)` : "";
+  const unk = Object.entries({ zone: "용도지역", area: "공부면적", price: "공시지가", owner: "소유구분", plan: "규제" }).filter(([k]) => r.unknown[k]).map(([k, v]) => `${v} ${r.unknown[k]}`);
+  const tail = (unk.length ? ` · 값 없는 필지: ${unk.join(", ")}` : "") + (r.undetermined ? ` · 값이 없어 맞는지 모르는 필지 ${r.undetermined}개는 결과에서 뺌` : "");
   if (!r.total) return text($("parcel-filter-note"), `속성 있는 필지 ${r.withAttrs}개 중 맞는 필지가 없습니다${tail}.`, "warn");
   list.replaceChildren(...r.matches.map((f) => el("li", {}, el("span", { class: "title", text: parcelTitle(f.properties) }), el("span", { class: "sub", text: filterRowText(f.properties.attrs) }),
     el("button", { text: "열기", onclick: () => openParcel(f) }))));

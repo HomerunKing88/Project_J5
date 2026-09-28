@@ -275,44 +275,37 @@ export function hasCriteria(c) {
 
 /**
  * 조건에 맞는 필지. 값이 없는 필지는 그 조건에 맞는 것으로 보지 않고 unknown 에 센다(결측을 0 이나 불일치로 채우지 않는다).
- * 결과는 공부면적이 큰 순, 같으면 PNU 순. 반환 { total, matches(앞 limit 개), unknown: {zone, area, price, owner, plan}, withAttrs }.
+ * unknown 은 켠 조건마다 그 값이 없는 필지 수다. 다른 조건의 결과와 상관없이 모든 조건을 끝까지 따져 센다(리뷰 반영 PR #80).
+ * undetermined 는 확인된 불일치는 없고 값이 없어 맞는지 모르는 필지 수다.
+ * 결과는 공부면적이 큰 순, 같으면 PNU 순. 반환 { total, matches(앞 limit 개), unknown: {zone, area, price, owner, plan}, undetermined, withAttrs }.
  */
 export function filterParcels(features, c, { limit = FILTER_LIMIT } = {}) {
   const unknown = { zone: 0, area: 0, price: 0, owner: 0, plan: 0 };
+  const inRange = (v, lo, hi) => (lo == null || v >= lo) && (hi == null || v <= hi);
+  // 켠 조건마다 [결측 키, 값 없음 여부, 맞음 여부]
+  const checks = [];
+  if (c.zone) checks.push((a) => { const z = zoneCategory(a.use_zone_1); return ["zone", !z, z === c.zone]; });
+  if (c.areaMin != null || c.areaMax != null) checks.push((a) => { const v = a.registered_area_m2; return ["area", !Number.isFinite(v), Number.isFinite(v) && inRange(v, c.areaMin, c.areaMax)]; });
+  if (c.priceMin != null || c.priceMax != null) checks.push((a) => { const v = a.official_land_price_krw_m2; return ["price", !Number.isFinite(v), Number.isFinite(v) && inRange(v, c.priceMin, c.priceMax)]; });
+  if (c.owner) checks.push((a) => { const k = a.ownership_kind; const miss = typeof k !== "string" || !k; return ["owner", miss, !miss && k === c.owner]; });
+  if (c.restricted) checks.push((a) => { const miss = !Array.isArray(a.plan_zones) || !a.plan_zones.length; return ["plan", miss, !miss && a.plan_zones.some((z) => z?.relation === "저촉")]; });
   const out = [];
-  let withAttrs = 0;
+  let withAttrs = 0, undetermined = 0;
   for (const f of features ?? []) {
     const a = f?.properties?.attrs;
     if (!a) continue;
     withAttrs++;
-    if (c.zone) {
-      const z = zoneCategory(a.use_zone_1);
-      if (!z) { unknown.zone++; continue; }
-      if (z !== c.zone) continue;
+    let missing = false, mismatch = false;
+    for (const check of checks) {
+      const [key, miss, ok] = check(a);
+      if (miss) { unknown[key]++; missing = true; } else if (!ok) mismatch = true;
     }
-    if (c.areaMin != null || c.areaMax != null) {
-      const v = a.registered_area_m2;
-      if (!Number.isFinite(v)) { unknown.area++; continue; }
-      if ((c.areaMin != null && v < c.areaMin) || (c.areaMax != null && v > c.areaMax)) continue;
-    }
-    if (c.priceMin != null || c.priceMax != null) {
-      const v = a.official_land_price_krw_m2;
-      if (!Number.isFinite(v)) { unknown.price++; continue; }
-      if ((c.priceMin != null && v < c.priceMin) || (c.priceMax != null && v > c.priceMax)) continue;
-    }
-    if (c.owner) {
-      if (typeof a.ownership_kind !== "string" || !a.ownership_kind) { unknown.owner++; continue; }
-      if (a.ownership_kind !== c.owner) continue;
-    }
-    if (c.restricted) {
-      if (!Array.isArray(a.plan_zones) || !a.plan_zones.length) { unknown.plan++; continue; }
-      if (!a.plan_zones.some((z) => z?.relation === "저촉")) continue;
-    }
-    out.push(f);
+    if (!missing && !mismatch) out.push(f);
+    else if (missing && !mismatch) undetermined++;
   }
   const area = (f) => (Number.isFinite(f.properties.attrs.registered_area_m2) ? f.properties.attrs.registered_area_m2 : -1);
   out.sort((x, y) => area(y) - area(x) || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
-  return { total: out.length, matches: out.slice(0, limit), unknown, withAttrs };
+  return { total: out.length, matches: out.slice(0, limit), unknown, undetermined, withAttrs };
 }
 
 /** 결과 한 줄의 보조 글: 용도지역 · 공부면적 · 공시지가 · 소유구분 (없으면 미확인). */

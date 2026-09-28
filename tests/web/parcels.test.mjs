@@ -344,6 +344,16 @@ test("조건으로 필지 찾기 (J5-033): 조건 해석·거르기·결측 따�
   assert.deepEqual(labels(run({ zone: "res2", restricted: true })), ["2"], "조건은 모두 만족해야 한다");
   assert.deepEqual(labels(run({ areaMin: "1000", areaMax: "1100", priceMax: "500" })), ["4-2"]);
   assert.equal(run({ zone: "ind", priceMin: "1" }).unknown.price, 1);
+  assert.equal(run({ zone: "ind", priceMin: "1" }).undetermined, 1, "용도지역은 맞고 공시지가가 없는 필지 3");
+  // 결측은 켠 조건마다 끝까지 센다: 앞 조건에서 이미 빠진 필지의 결측도 센다 (리뷰 반영 PR #80)
+  const multi = run({ zone: "com", owner: "개인", priceMin: "1" });
+  assert.deepEqual(labels(multi), ["1"]);
+  assert.deepEqual(multi.unknown, { zone: 0, area: 0, price: 1, owner: 2, plan: 0 });
+  assert.equal(multi.undetermined, 0, "값이 없는 필지 3·산1-2 는 용도지역이 달라 확실히 맞지 않는다");
+  const pending = run({ zone: "ind", owner: "개인" });
+  assert.equal(pending.total, 0);
+  assert.equal(pending.unknown.owner, 2);
+  assert.equal(pending.undetermined, 1);
   assert.equal(filterParcels(feats, parseFilter({ areaMin: "0" }).criteria, { limit: 2 }).matches.length, 2);
   assert.equal(FILTER_LIMIT, 50);
   // 조건 해석
