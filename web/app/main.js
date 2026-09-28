@@ -20,7 +20,7 @@ import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, check
 
 export const APP_VERSION = "0.2.13";
 const $ = (id) => document.getElementById(id);
-const state = { store: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, zoneColors: false, seedLoadedAt: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
+const state = { store: null, parcelFilter: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, zoneColors: false, seedLoadedAt: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
                 nav: null, returnFocus: null, mapSelected: null, assetFilter: "all" };
 
 function text(el, value, cls) {
@@ -317,6 +317,8 @@ async function renderAssets() {
   else if (!visible.length) list.append(el("li", { class: "empty", text: "관찰목록 단계(관찰·상세 검토·매입 준비)인 물건이 없습니다. 관심 단계는 PC 에서 정합니다 (db asset-track). '전체' 로 바꾸면 모두 보입니다." }));
   // 목록을 먼저 채운 뒤 지도를 갱신한다. 지도 실패는 목록에 영향을 주지 않는다.
   mapCall((m) => mapNote(m.setAssets(visible)));
+  // 조건 찾기 결과는 물건 목록에 따라 달라진다(물건 조건·결과 줄의 물건 수): 켜져 있으면 마지막으로 찾은 조건으로 다시 그린다 (리뷰 반영 PR #83)
+  if (state.parcelFilter) renderParcelFilter(state.parcelFilter);
   // 지도 선택 카드는 현재 목록의 물건 객체에 다시 묶는다. 목록 교체·필터로 사라진 물건이면 카드를 닫는다 (리뷰 반영: 옛 물건으로 기록되지 않게)
   const selected = state.mapSelected ? visible.find((a) => a.asset_id === state.mapSelected) : null;
   if (state.mapSelected && !selected) clearMapSelection();
@@ -399,6 +401,7 @@ function applyFilterUi() {
   const withAttrs = feats.some((f) => f.properties?.attrs);
   $("parcel-filter").hidden = !withAttrs;
   // 번들이 바뀌면 이전 결과는 다른 자료의 것이다: 목록·안내·지도 강조를 지운다 (지도 쪽 강조는 setParcels 가 지운다)
+  state.parcelFilter = null;
   $("parcel-filter-results").replaceChildren();
   $("parcel-filter-results").hidden = true;
   text($("parcel-filter-note"), "", "muted");
@@ -411,14 +414,25 @@ function applyFilterUi() {
 }
 
 function runParcelFilter() {
-  const feats = state.parcels?.features ?? [];
   const list = $("parcel-filter-results");
   list.replaceChildren();
   list.hidden = true;
+  state.parcelFilter = null;
   const { criteria, errors } = parseFilter({ zone: $("pf-zone").value, areaMin: $("pf-area-min").value, areaMax: $("pf-area-max").value,
     priceMin: $("pf-price-min").value, priceMax: $("pf-price-max").value, owner: $("pf-owner").value, restricted: $("pf-restricted").checked, assets: $("pf-assets").value });
   if (errors.length) { mapCall((m) => m.setMarked(null)); return text($("parcel-filter-note"), "조건 확인: " + errors.join(" · "), "warn"); }
   if (!hasCriteria(criteria)) { mapCall((m) => m.setMarked(null)); return text($("parcel-filter-note"), "조건을 하나 이상 고릅니다.", "warn"); }
+  state.parcelFilter = criteria;
+  renderParcelFilter(criteria);
+}
+
+/** 조건 찾기 결과를 그린다. 물건 목록이 바뀌면(기기 물건 만들기·삭제, 시드 교체) renderAssets 가 마지막으로 찾은 조건으로 다시 부른다:
+ *  물건 조건·결과 줄의 물건 수가 옛 목록의 것으로 남지 않게 (리뷰 반영 PR #83). 폼에서 고치고 아직 찾지 않은 값은 쓰지 않는다. */
+function renderParcelFilter(criteria) {
+  const feats = state.parcels?.features ?? [];
+  const list = $("parcel-filter-results");
+  list.replaceChildren();
+  list.hidden = true;
   // 필지 안의 물건 (J5-036): 필지 패널과 같은 규칙(정본 연결은 시드와 필지 파일이 같은 파생본일 때만 + 위치점 포함). 필지마다 한 번만 계산한다
   const linksValid = parcelLinksValid();
   const cache = new Map();
@@ -439,6 +453,7 @@ function runParcelFilter() {
 }
 
 function clearParcelFilter() {
+  state.parcelFilter = null;
   $("parcel-filter-form").reset();
   $("parcel-filter-results").replaceChildren();
   $("parcel-filter-results").hidden = true;

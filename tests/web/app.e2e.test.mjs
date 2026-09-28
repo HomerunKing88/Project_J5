@@ -416,10 +416,23 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       await cdp.eval("document.getElementById('pf-assets').value = 'none'; document.getElementById('parcel-filter-form').requestSubmit(); 'ok'");
       await cdp.waitFor("document.getElementById('parcel-filter-note').textContent.includes('일치') && document.querySelectorAll('#parcel-filter-results li').length > 0");
       assert.equal(await cdp.eval("Array.from(document.querySelectorAll('#parcel-filter-results li .sub')).every(s => s.textContent.endsWith(' · 물건 없음'))"), true, "물건 없는 필지만");
+      // 결과의 필지를 물건으로 만들면 "물건 없음" 결과에서 빠지고, 지우면 돌아온다 (리뷰 반영 PR #83: 물건 목록이 바뀌면 마지막 조건으로 다시 그린다)
+      const noneBefore = await cdp.eval("document.querySelectorAll('#parcel-filter-results li').length");
+      const firstTitle = await cdp.eval("document.querySelector('#parcel-filter-results li .title').textContent");
+      await cdp.eval("document.querySelector('#parcel-filter-results li button').click(); 'ok'");
+      await cdp.waitFor(`document.getElementById('parcel-title').textContent === ${JSON.stringify(firstTitle)} && !document.getElementById('parcel-new-asset').hidden`);
+      await cdp.eval("document.getElementById('parcel-new-asset').click(); 'ok'");
+      await cdp.waitFor("!document.getElementById('sec-observe').hidden");
+      await cdp.waitFor(`document.querySelectorAll('#parcel-filter-results li').length === ${noneBefore - 1}`);
+      assert.equal(await cdp.eval(`Array.from(document.querySelectorAll('#parcel-filter-results li .title')).some(t => t.textContent === ${JSON.stringify(firstTitle)})`), false);
+      await cdp.eval("document.getElementById('cancel-observation').click(); 'ok'");
+      await cdp.waitFor("document.getElementById('sec-observe').hidden");
+      await cdp.eval("Array.from(document.querySelectorAll('#asset-list button')).find(b => b.textContent === '삭제').click(); 'ok'");
+      await cdp.waitFor(`document.querySelectorAll('#parcel-filter-results li').length === ${noneBefore}`);
+      await cdp.waitFor("document.querySelectorAll('#asset-list li > button').length === 5");
+      await cdp.eval("document.getElementById('nav-map').click(); 'ok'");
       await cdp.eval("document.getElementById('pf-assets').value = ''; document.getElementById('pf-zone').value = 'com'; document.getElementById('parcel-filter-form').requestSubmit(); 'ok'");
       await cdp.waitFor("document.getElementById('parcel-filter-note').textContent.includes('1개 일치')");
-      // 필지 패널의 안의 물건에 관심 단계 배지
-      assert.deepEqual(await cdp.eval("Array.from(document.querySelectorAll('#parcel-assets .badge[class*=\"track-\"]')).map(b => b.textContent)"), ["관찰"]);
       await cdp.eval("document.getElementById('pf-zone').value = ''; document.getElementById('pf-restricted').checked = true; document.getElementById('parcel-filter-form').requestSubmit(); 'ok'");
       await cdp.waitFor("document.getElementById('parcel-filter-note').textContent.includes('3개 일치')");
       assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel.mark').length"), 3);
@@ -432,6 +445,8 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       await cdp.waitFor("document.querySelectorAll('#parcel-filter-results li button').length === 1");
       await cdp.eval("document.querySelector('#parcel-filter-results li button').click(); 'ok'");
       await cdp.waitFor("document.getElementById('parcel-title').textContent === '가상동 1'");
+      // 필지 패널의 안의 물건에 관심 단계 배지 (J5-036)
+      assert.deepEqual(await cdp.eval("Array.from(document.querySelectorAll('#parcel-assets .badge[class*=\"track-\"]')).map(b => b.textContent)"), ["관찰"]);
       await cdp.eval("document.getElementById('pf-clear').click(); 'ok'");
       assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel.mark').length"), 0);
       await cdp.eval("document.getElementById('parcel-history').click(); 'ok'");
