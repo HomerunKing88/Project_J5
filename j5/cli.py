@@ -18,6 +18,7 @@ from j5.db.backup import EXIT_BY_OUTCOME as BACKUP_EXIT, BackupError, check_phot
 from j5.db.importer import EXIT_BY_OUTCOME, import_package
 from j5.db.ingest import ingest_vworld
 from j5.db.parcels import BUNDLE_SCHEMA as PARCELS_BUNDLE_SCHEMA, LINKS_SCHEMA as PARCELS_LINKS_SCHEMA, active_links, apply_links, attribute_history, history_text, load_bundle, load_json as load_parcels_json, suggest_links
+from j5.db.parcel_find import check_criteria as check_find_criteria, find_csv, find_parcels, find_text
 from j5.db.projection import EXIT_BY_OUTCOME as PROJECT_EXIT, ProjectionError, build_projection, copy_latest
 from j5.db.store import Db, DbError, default_db_path
 from j5.db.survey import apply_input, compare, compare_text, load_input, overview, overview_text, vacancy, vacancy_text
@@ -154,6 +155,18 @@ def _build_parser() -> argparse.ArgumentParser:
     ph = dsub.add_parser("parcels-history", help="필지 하나의 속성 이력 (J5-026): 현재 값, 자료 종류·기준일별 스냅샷, 값이 바뀐 지점")
     ph.add_argument("pnu", help="PNU 19자리")
     ph.add_argument("--json", action="store_true")
+    pf = dsub.add_parser("parcels-find", help="조건으로 필지 찾기 (J5-037, 폰 조건 찾기와 같은 규칙): 용도지역·공부면적·공시지가·소유구분·저촉 규제·물건 조건. 정본에 쓰지 않음")
+    pf.add_argument("--zone", help="용도지역 분류 (res1 전용주거, res2 일반주거, res3 준주거, com 상업, ind 공업, green 녹지, rural 관리·농림·자연환경, other)")
+    pf.add_argument("--area-min", type=float, help="공부면적 최소 (㎡)")
+    pf.add_argument("--area-max", type=float, help="공부면적 최대 (㎡)")
+    pf.add_argument("--price-min", type=float, help="공시지가 최소 (만원/㎡)")
+    pf.add_argument("--price-max", type=float, help="공시지가 최대 (만원/㎡)")
+    pf.add_argument("--owner", help="소유구분 값 그대로 (예: 개인, 법인, 국유지)")
+    pf.add_argument("--restricted", action="store_true", help="저촉 규제가 하나라도 있는 필지")
+    pf.add_argument("--assets", choices=("none", "any", "watch"), help="물건 조건: none 물건 없는 필지, any 물건 있는 필지, watch 관찰목록 물건이 있는 필지")
+    pf.add_argument("--limit", type=int, default=50, help="화면에 보일 줄 수 (기본 50, CSV·JSON 은 전부)")
+    pf.add_argument("--csv", type=Path, help="결과 전부를 CSV 로 저장 (덮어쓰지 않음)")
+    pf.add_argument("--json", action="store_true")
     pk = dsub.add_parser("parcels-link", help="검토한 연결 파일(asset_components_input)을 정본 asset_components 에 반영한다")
     rl = dsub.add_parser("rt-load", help="실거래 수집 실행 기록(run-*.json)과 원본 XML 을 정본에 반영한다 (collection_runs / transaction_observations / transactions, db_schema 6). 같은 실행은 다시 반영하지 않는다")
     rl.add_argument("--lawd-cd", required=True, help="시군구 코드 5자리")
@@ -689,6 +702,27 @@ def _db_main(args) -> int:
                     return USAGE_ERROR
                 r = load_bundle(db, load_parcels_json(args.bundle, PARCELS_BUNDLE_SCHEMA))
                 sys.stdout.write(json.dumps(r.to_dict(), ensure_ascii=True, sort_keys=True, indent=2) + "\n" if args.json else r.to_text())
+                return 0
+            if args.db_command == "parcels-find":
+                crit = {"zone": args.zone, "area_min": args.area_min, "area_max": args.area_max,
+                        "price_min": None if args.price_min is None else round(args.price_min * 10000), "price_max": None if args.price_max is None else round(args.price_max * 10000),
+                        "owner": args.owner, "restricted": args.restricted, "assets": args.assets}
+                errs = check_find_criteria(crit)
+                if errs:
+                    print("조건 확인: " + " · ".join(errs), file=sys.stderr)
+                    return USAGE_ERROR
+                if args.csv is not None and args.csv.exists():
+                    print(f"출력 파일이 이미 있다 (덮어쓰지 않음): {args.csv}", file=sys.stderr)
+                    return USAGE_ERROR
+                if args.csv is not None and not args.csv.parent.is_dir():
+                    print(f"출력 폴더가 없다: {args.csv.parent}", file=sys.stderr)
+                    return USAGE_ERROR
+                r = find_parcels(db, crit)
+                if args.csv is not None:
+                    with open(args.csv, "x", encoding="utf-8", newline="") as f:
+                        f.write(find_csv(r))
+                sys.stdout.write(json.dumps(r, ensure_ascii=False, indent=2) + "\n" if args.json else find_text(r, limit=max(0, args.limit))
+                                 + (f"CSV: {args.csv} ({r['total']}행)\n" if args.csv is not None else ""))
                 return 0
             if args.db_command == "parcels-history":
                 h = attribute_history(db, args.pnu)
