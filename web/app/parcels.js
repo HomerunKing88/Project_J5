@@ -256,13 +256,15 @@ const num = (v) => (v === "" || v == null ? null : Number.isFinite(Number(v)) ? 
  * 폼 값 → 조건. 공시지가는 만원/㎡ 로 받아 원/㎡ 로 바꾼다. 잘못된 숫자·거꾸로 된 범위는 errors 로 돌려준다.
  * 조건: zone(용도지역 분류 키), areaMin/areaMax(공부면적 ㎡), priceMin/priceMax(원/㎡), owner(소유구분 값), restricted(저촉 규제가 하나라도 있음).
  */
-export function parseFilter({ zone = "", areaMin = "", areaMax = "", priceMin = "", priceMax = "", owner = "", restricted = false } = {}) {
-  const c = { zone: zone || null, areaMin: num(areaMin), areaMax: num(areaMax), priceMin: num(priceMin), priceMax: num(priceMax), owner: owner || null, restricted: !!restricted };
+export function parseFilter({ zone = "", areaMin = "", areaMax = "", priceMin = "", priceMax = "", owner = "", restricted = false, assets = "" } = {}) {
+  const c = { zone: zone || null, areaMin: num(areaMin), areaMax: num(areaMax), priceMin: num(priceMin), priceMax: num(priceMax), owner: owner || null, restricted: !!restricted,
+              assets: assets || null };
   const errors = [];
   for (const [k, label] of [["areaMin", "공부면적 최소"], ["areaMax", "공부면적 최대"], ["priceMin", "공시지가 최소"], ["priceMax", "공시지가 최대"]]) {
     if (Number.isNaN(c[k]) || (c[k] != null && c[k] < 0)) errors.push(`${label}은 0 이상의 숫자`);
   }
   if (c.zone && !(c.zone in ZONE_LABELS)) errors.push("용도지역 분류가 목록에 없다");
+  if (c.assets && !(c.assets in ASSET_CRITERIA)) errors.push("물건 조건이 목록에 없다");
   if (!errors.length && c.areaMin != null && c.areaMax != null && c.areaMin > c.areaMax) errors.push("공부면적 최소가 최대보다 크다");
   if (!errors.length && c.priceMin != null && c.priceMax != null && c.priceMin > c.priceMax) errors.push("공시지가 최소가 최대보다 크다");
   for (const k of ["priceMin", "priceMax"]) if (c[k] != null && !Number.isNaN(c[k])) c[k] = Math.round(c[k] * 10000);
@@ -270,8 +272,13 @@ export function parseFilter({ zone = "", areaMin = "", areaMax = "", priceMin = 
 }
 
 export function hasCriteria(c) {
-  return !!c && (!!c.zone || c.areaMin != null || c.areaMax != null || c.priceMin != null || c.priceMax != null || !!c.owner || !!c.restricted);
+  return !!c && (!!c.zone || c.areaMin != null || c.areaMax != null || c.priceMin != null || c.priceMax != null || !!c.owner || !!c.restricted || !!c.assets);
 }
+
+/** 물건 조건 (J5-036): 필지 안의 물건(정본 연결 또는 위치점 포함, parcelAssets 와 같은 규칙) 기준. 관찰목록은 관심 단계 watch·detailed_review·purchase_ready. */
+export const ASSET_CRITERIA = Object.freeze({ none: "물건 없는 필지", any: "물건 있는 필지", watch: "관찰목록 물건이 있는 필지" });
+const WATCH_STATUSES = new Set(["watch", "detailed_review", "purchase_ready"]);   // seed.js WATCHLIST_STATUSES 와 같다
+const assetsMatch = (list, want) => (want === "none" ? list.length === 0 : want === "any" ? list.length > 0 : list.some((a) => WATCH_STATUSES.has(a?.tracking_status)));
 
 /**
  * 조건에 맞는 필지. 값이 없는 필지는 그 조건에 맞는 것으로 보지 않고 unknown 에 센다(결측을 0 이나 불일치로 채우지 않는다).
@@ -279,7 +286,8 @@ export function hasCriteria(c) {
  * undetermined 는 확인된 불일치는 없고 값이 없어 맞는지 모르는 필지 수다.
  * 결과는 공부면적이 큰 순, 같으면 PNU 순. 반환 { total, matches(앞 limit 개), unknown: {zone, area, price, owner, plan}, undetermined, withAttrs }.
  */
-export function filterParcels(features, c, { limit = FILTER_LIMIT } = {}) {
+export function filterParcels(features, c, { limit = FILTER_LIMIT, assetsOf = null } = {}) {
+  if (c.assets && typeof assetsOf !== "function") throw new Error("물건 조건에는 필지 안의 물건을 돌려주는 assetsOf 가 필요하다");
   const unknown = { zone: 0, area: 0, price: 0, owner: 0, plan: 0 };
   const inRange = (v, lo, hi) => (lo == null || v >= lo) && (hi == null || v <= hi);
   // 켠 조건마다 [결측 키, 값 없음 여부, 맞음 여부]
@@ -300,6 +308,8 @@ export function filterParcels(features, c, { limit = FILTER_LIMIT } = {}) {
       const [key, miss, ok] = check(a);
       if (miss) { unknown[key]++; missing = true; } else if (!ok) mismatch = true;
     }
+    // 물건 조건은 이 기기의 물건 목록으로 정해지므로 결측이 없다. 다른 조건에서 이미 빠졌으면 계산하지 않는다
+    if (c.assets && !mismatch && !assetsMatch(assetsOf(f), c.assets)) mismatch = true;
     if (!missing && !mismatch) out.push(f);
     else if (missing && !mismatch) undetermined++;
   }
@@ -308,11 +318,16 @@ export function filterParcels(features, c, { limit = FILTER_LIMIT } = {}) {
   return { total: out.length, matches: out.slice(0, limit), unknown, undetermined, withAttrs };
 }
 
-/** 결과 한 줄의 보조 글: 용도지역 · 공부면적 · 공시지가 · 소유구분 (없으면 미확인). */
-export function filterRowText(a) {
+/** 결과 한 줄의 보조 글: 용도지역 · 공부면적 · 공시지가 · 소유구분 (없으면 미확인). inside(필지 안의 물건 목록)를 주면 물건 수와 관찰목록 수를 덧붙인다 (J5-036). */
+export function filterRowText(a, inside = null) {
   const miss = "미확인";
-  return [a?.use_zone_1 ?? miss, Number.isFinite(a?.registered_area_m2) ? `${fmtInt(a.registered_area_m2)}㎡` : `면적 ${miss}`,
-    Number.isFinite(a?.official_land_price_krw_m2) ? `${fmtInt(a.official_land_price_krw_m2)}원/㎡` : `공시지가 ${miss}`, a?.ownership_kind ?? `소유 ${miss}`].join(" · ");
+  const parts = [a?.use_zone_1 ?? miss, Number.isFinite(a?.registered_area_m2) ? `${fmtInt(a.registered_area_m2)}㎡` : `면적 ${miss}`,
+    Number.isFinite(a?.official_land_price_krw_m2) ? `${fmtInt(a.official_land_price_krw_m2)}원/㎡` : `공시지가 ${miss}`, a?.ownership_kind ?? `소유 ${miss}`];
+  if (Array.isArray(inside)) {
+    const watch = inside.filter((x) => WATCH_STATUSES.has(x?.tracking_status)).length;
+    parts.push(inside.length ? `물건 ${inside.length}개` + (watch ? ` (관찰목록 ${watch})` : "") : "물건 없음");
+  }
+  return parts.join(" · ");
 }
 
 /** 번들의 속성 요약: 속성 있는 필지 수와 용도지역별 수. */

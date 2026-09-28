@@ -32,14 +32,14 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     // 지도 모듈 로드 실패: map.js 요청을 막고 첫 접속 (서비스 워커가 아직 없을 때). 목록·설정은 그대로 동작하고 지도 절만 안내를 낸다.
     await cdp.send("Network.setBlockedURLs", { urls: ["*/app/map.js"] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.12')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.13')");
     await cdp.waitFor("document.getElementById('map-note').textContent.includes('지도 표시 불가')");
     assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li').length"), 1, "지도 모듈 없이도 목록 절이 그려진다");
     const blockedLogs = cdp.errors.splice(0);
     assert.ok(blockedLogs.every((e) => e.includes("ERR_BLOCKED_BY_CLIENT") || e.includes("Failed to load resource") || e.includes("map.js")), blockedLogs.join("; "));
     await cdp.send("Network.setBlockedURLs", { urls: [] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.12')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.13')");
     await cdp.waitFor("document.getElementById('map-note').textContent === ''");
     // 설정
     await cdp.eval("document.getElementById('study-id').value = 'e2e-study'; document.getElementById('save-settings').click(); 'ok'");
@@ -408,6 +408,18 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       assert.match(await cdp.eval("document.getElementById('parcel-filter-note').textContent"), /^속성 있는 필지 6개 중 1개 일치 \(공부면적 큰 순\) · 지도에 테두리로 표시$/);
       assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel.mark').length"), 1);
       assert.equal(await cdp.eval("document.querySelector('#parcel-filter-results li .title').textContent"), "가상동 1");
+      // 물건 조건과 결과 줄의 물건 수 (J5-036): 가상 물건 1(관찰)이 필지 1, 가상 물건 2(상세 검토)가 필지 1-1 에 있다
+      assert.match(await cdp.eval("document.querySelector('#parcel-filter-results li .sub').textContent"), / · 물건 1개 \(관찰목록 1\)$/);
+      await cdp.eval("document.getElementById('pf-zone').value = ''; document.getElementById('pf-assets').value = 'watch'; document.getElementById('parcel-filter-form').requestSubmit(); 'ok'");
+      await cdp.waitFor("document.getElementById('parcel-filter-note').textContent.includes('2개 일치')");
+      assert.deepEqual(await cdp.eval("Array.from(document.querySelectorAll('#parcel-filter-results li .title')).map(t => t.textContent).sort()"), ["가상동 1", "가상동 1-1"]);
+      await cdp.eval("document.getElementById('pf-assets').value = 'none'; document.getElementById('parcel-filter-form').requestSubmit(); 'ok'");
+      await cdp.waitFor("document.getElementById('parcel-filter-note').textContent.includes('일치') && document.querySelectorAll('#parcel-filter-results li').length > 0");
+      assert.equal(await cdp.eval("Array.from(document.querySelectorAll('#parcel-filter-results li .sub')).every(s => s.textContent.endsWith(' · 물건 없음'))"), true, "물건 없는 필지만");
+      await cdp.eval("document.getElementById('pf-assets').value = ''; document.getElementById('pf-zone').value = 'com'; document.getElementById('parcel-filter-form').requestSubmit(); 'ok'");
+      await cdp.waitFor("document.getElementById('parcel-filter-note').textContent.includes('1개 일치')");
+      // 필지 패널의 안의 물건에 관심 단계 배지
+      assert.deepEqual(await cdp.eval("Array.from(document.querySelectorAll('#parcel-assets .badge[class*=\"track-\"]')).map(b => b.textContent)"), ["관찰"]);
       await cdp.eval("document.getElementById('pf-zone').value = ''; document.getElementById('pf-restricted').checked = true; document.getElementById('parcel-filter-form').requestSubmit(); 'ok'");
       await cdp.waitFor("document.getElementById('parcel-filter-note').textContent.includes('3개 일치')");
       assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel.mark').length"), 3);

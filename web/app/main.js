@@ -18,7 +18,7 @@ import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
 import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.12";
+export const APP_VERSION = "0.2.13";
 const $ = (id) => document.getElementById(id);
 const state = { store: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, zoneColors: false, seedLoadedAt: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
                 nav: null, returnFocus: null, mapSelected: null, assetFilter: "all" };
@@ -416,15 +416,22 @@ function runParcelFilter() {
   list.replaceChildren();
   list.hidden = true;
   const { criteria, errors } = parseFilter({ zone: $("pf-zone").value, areaMin: $("pf-area-min").value, areaMax: $("pf-area-max").value,
-    priceMin: $("pf-price-min").value, priceMax: $("pf-price-max").value, owner: $("pf-owner").value, restricted: $("pf-restricted").checked });
+    priceMin: $("pf-price-min").value, priceMax: $("pf-price-max").value, owner: $("pf-owner").value, restricted: $("pf-restricted").checked, assets: $("pf-assets").value });
   if (errors.length) { mapCall((m) => m.setMarked(null)); return text($("parcel-filter-note"), "조건 확인: " + errors.join(" · "), "warn"); }
   if (!hasCriteria(criteria)) { mapCall((m) => m.setMarked(null)); return text($("parcel-filter-note"), "조건을 하나 이상 고릅니다.", "warn"); }
-  const r = filterParcels(feats, criteria);
-  const shown = mapCall((m) => m.setMarked(r.matches.length ? filterParcels(feats, criteria, { limit: Infinity }).matches.map((f) => f.id) : null));
+  // 필지 안의 물건 (J5-036): 필지 패널과 같은 규칙(정본 연결은 시드와 필지 파일이 같은 파생본일 때만 + 위치점 포함). 필지마다 한 번만 계산한다
+  const linksValid = parcelLinksValid();
+  const cache = new Map();
+  const assetsOf = (f) => {
+    if (!cache.has(f.id)) cache.set(f.id, parcelAssets(f, state.assets, { linksValid }).map((x) => x.asset));
+    return cache.get(f.id);
+  };
+  const r = filterParcels(feats, criteria, { assetsOf });
+  const shown = mapCall((m) => m.setMarked(r.matches.length ? filterParcels(feats, criteria, { limit: Infinity, assetsOf }).matches.map((f) => f.id) : null));
   const unk = Object.entries({ zone: "용도지역", area: "공부면적", price: "공시지가", owner: "소유구분", plan: "규제" }).filter(([k]) => r.unknown[k]).map(([k, v]) => `${v} ${r.unknown[k]}`);
   const tail = (unk.length ? ` · 값 없는 필지: ${unk.join(", ")}` : "") + (r.undetermined ? ` · 값이 없어 맞는지 모르는 필지 ${r.undetermined}개는 결과에서 뺌` : "");
   if (!r.total) return text($("parcel-filter-note"), `속성 있는 필지 ${r.withAttrs}개 중 맞는 필지가 없습니다${tail}.`, "warn");
-  list.replaceChildren(...r.matches.map((f) => el("li", {}, el("span", { class: "title", text: parcelTitle(f.properties) }), el("span", { class: "sub", text: filterRowText(f.properties.attrs) }),
+  list.replaceChildren(...r.matches.map((f) => el("li", {}, el("span", { class: "title", text: parcelTitle(f.properties) }), el("span", { class: "sub", text: filterRowText(f.properties.attrs, assetsOf(f)) }),
     el("button", { text: "열기", onclick: () => openParcel(f) }))));
   list.hidden = false;
   text($("parcel-filter-note"), `속성 있는 필지 ${r.withAttrs}개 중 ${r.total}개 일치` + (r.total > r.matches.length ? ` (공부면적 큰 순 앞 ${FILTER_LIMIT}개만 목록)` : " (공부면적 큰 순)") +
@@ -761,7 +768,7 @@ function showParcel(feature) {
   const linksValid = parcelLinksValid();
   const inside = parcelAssets(feature, state.assets, { linksValid });
   $("parcel-assets").replaceChildren(...inside.map(({ asset: a, basis }) => el("li", {},
-    el("span", { class: "title", text: a.label }), modeBadge(a.data_mode), el("span", { class: "badge", text: BASIS_LABEL[basis] }),
+    el("span", { class: "title", text: a.label }), modeBadge(a.data_mode), ...trackingBadges(a), el("span", { class: "badge", text: BASIS_LABEL[basis] }),
     el("button", { text: "기록하기", onclick: () => startObservation(a) }),
   )));
   if (!linksValid && (p.asset_ids ?? []).length) $("parcel-assets").append(el("li", { class: "warn", text: `정본 연결 ${p.asset_ids.length}건은 시드가 바뀐 뒤 확인되지 않아 표시하지 않는다. 같은 파생본의 시드와 필지 파일을 함께 다시 불러온다.` }));
