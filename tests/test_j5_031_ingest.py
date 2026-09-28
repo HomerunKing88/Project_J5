@@ -120,7 +120,7 @@ def test_load_failure_midway_keeps_earlier_bundles(db, home, vw_zip, tmp_path, m
     r = ING.ingest_vworld(db.path, home, [vw_zip, zone2], geometry_version=GV, backup=False)
     assert r.outcome == "failed" and r.stage == "load"
     assert r.items[0].load["outcome"] == "applied" and "가상 반영 실패" in r.items[1].error and r.items[1].load is None
-    assert counts(db) == (6, 6, 18) and "1개 번들은 반영됐고" in r.message
+    assert counts(db) == (6, 6, 18) and "앞 입력 1개는 모두 반영됐고" in r.message
     monkeypatch.setattr(ING, "load_bundle", real)
     again = ING.ingest_vworld(db.path, home, [vw_zip, zone2], geometry_version=GV, backup=False)
     assert again.outcome == "unchanged" and all(i.reused for i in again.items)
