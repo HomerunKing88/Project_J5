@@ -358,11 +358,16 @@
       </div>
     </div>
     <p id="history-source" class="help"></p>
+    <section id="history-years" hidden>
+      <h3>연도별 요약</h3>
+      <ul id="history-years-list" class="attrs year-summary"></ul>
+      <p class="help">공시지가는 그 연도 기준의 값, 거래는 이 필지에 닿는 계약연도별 수입니다. 거래를 수집하지 않았거나 실패한 연도, 거래 범위 밖 동은 0 건이 아니라 모름으로 적습니다. 번지대 거래는 이 필지의 거래로 확정하지 않습니다. 시세·가치 판단이 아닙니다.</p>
+    </section>
     <div id="history-list" class="timeline"></div>
     <p id="history-empty" class="empty" hidden>아직 기록이 없습니다. 이 기기의 관측은 저장하면 바로 보이고, PC 의 정본 기록·거래는 설정의 자료 관리에서 PC 자료 파일을 가져오면 보입니다.</p>
     <details class="disclosure">
       <summary>표시 기준</summary>
-      <p class="help"><span class="badge src-device">이 기기</span> 이 폰에 저장된 관측. <span class="badge src-pc">정본</span> PC 자료 파일에 든 기록·거래(가져온 시점 기준). <span class="badge match-exact">이 필지</span> 지번이 일치하는 거래. <span class="badge match-prefix">번지대</span> 부번이 가려진 거래로 이 필지의 것인지 확정할 수 없습니다. 동 전체가 가려진 거래는 어느 필지에도 표시하지 않습니다.</p>
+      <p class="help"><span class="badge src-device">이 기기</span> 이 폰에 저장된 관측. <span class="badge src-pc">정본</span> PC 자료 파일에 든 기록·거래(가져온 시점 기준). <span class="badge match-exact">이 필지</span> 지번이 일치하는 거래. <span class="badge match-prefix">번지대</span> 지번 일부가 가려진 거래로 이 필지의 것인지 확정할 수 없습니다. 동 전체가 가려진 거래는 어느 필지에도 표시하지 않습니다.</p>
     </details>
     <div class="row sheet-actions">
       <button id="history-record" class="primary big" hidden>이 물건 기록 시작</button>

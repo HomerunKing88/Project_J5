@@ -32,14 +32,14 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     // 지도 모듈 로드 실패: map.js 요청을 막고 첫 접속 (서비스 워커가 아직 없을 때). 목록·설정은 그대로 동작하고 지도 절만 안내를 낸다.
     await cdp.send("Network.setBlockedURLs", { urls: ["*/app/map.js"] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.16')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.17')");
     await cdp.waitFor("document.getElementById('map-note').textContent.includes('지도 표시 불가')");
     assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li').length"), 1, "지도 모듈 없이도 목록 절이 그려진다");
     const blockedLogs = cdp.errors.splice(0);
     assert.ok(blockedLogs.every((e) => e.includes("ERR_BLOCKED_BY_CLIENT") || e.includes("Failed to load resource") || e.includes("map.js")), blockedLogs.join("; "));
     await cdp.send("Network.setBlockedURLs", { urls: [] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.16')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.17')");
     await cdp.waitFor("document.getElementById('map-note').textContent === ''");
     // 설정
     await cdp.eval("document.getElementById('study-id').value = 'e2e-study'; document.getElementById('save-settings').click(); 'ok'");
@@ -391,6 +391,7 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       assert.ok(hist[3][1].includes("실거래") && hist[3][1].includes("확정 연결") && hist[3][2].startsWith("10억"), JSON.stringify(hist[3]));
       assert.match(await cdp.eval("document.getElementById('history-source').textContent"), /^PC 자료: 정본 v\d+ .* 더 새 정본이 있는지는 PC 에서 확인합니다\.$/);
       assert.equal(await cdp.eval("document.getElementById('history-record').hidden"), false, "물건 이력에서 기록 시작 가능");
+      assert.equal(await cdp.eval("document.getElementById('history-years').hidden"), true, "연도별 요약은 필지 이력에만 (J5-047)");
       await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
       await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
       await cdp.waitFor("document.getElementById('sec-history').hidden");
@@ -469,6 +470,10 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       assert.ok(ph.every((h) => !h[2].includes("가상동 *")), "동 전체 마스킹 거래는 필지에 붙지 않는다");
       assert.equal(await cdp.eval("document.getElementById('history-record').hidden"), true, "필지 이력에는 기록 시작 없음");
       assert.deepEqual(await cdp.eval("Array.from(document.querySelectorAll('#history-list h3')).map(h => h.textContent)"), ["2026", "2025"]);
+      // 필지 연도별 요약 (J5-047): 가상 파생본의 수집 개월(2025-08·2026-08 완전 수집)과 범위 규칙(가상동 핵심). 2026 은 수집했고 이 필지 거래가 없어 0
+      assert.equal(await cdp.eval("document.getElementById('history-years').hidden"), false);
+      assert.deepEqual(await cdp.eval("Array.from(document.querySelectorAll('#history-years-list li')).map(li => [li.dataset.tx, li.textContent])"), [
+        ["counted", "2026공시지가 13,000,000원/㎡ · 같은 필지 0 · 번지대 0 (수집 1/12개월)"], ["counted", "2025공시지가 자료 없음 · 같은 필지 1 · 번지대 1 (수집 1/12개월)"]]);
       await cdp.eval("document.getElementById('history-close').click(); 'ok'");
       await cdp.waitFor("document.getElementById('sec-history').hidden");
       // 재접속 뒤 유지

@@ -74,6 +74,22 @@ export function validateTransactionsDoc(doc) {
     if (t.asset_id !== null && !UUID_RE.test(t.asset_id)) errs.push(`${at} asset_id`);
     if (!isStr(t.zone) || !isStr(t.link_status) || !isStr(t.scope)) errs.push(`${at} zone·link_status·scope`);
   }
+  // J5-047: 범위 규칙·수집 개월 (없으면 이전 형식: 폰 연도별 요약은 모름으로 표시)
+  if (doc.zone_rule !== undefined) {
+    const zr = doc.zone_rule;
+    if (!zr || typeof zr !== "object" || !Number.isInteger(zr.version) || !["core", "comparison"].every((k) => Array.isArray(zr[k]) && zr[k].every((x) => typeof x === "string"))) errs.push("zone_rule 형식");
+  }
+  if (doc.coverage !== undefined) {
+    const seen = new Set();
+    const bad = !Array.isArray(doc.coverage) || doc.coverage.some((c) => {
+      const key = `${c?.lawd_cd}:${c?.year}`;
+      const ok = c && typeof c === "object" && typeof c.lawd_cd === "string" && /^\d{5}$/.test(c.lawd_cd) && Number.isInteger(c.year)
+        && Number.isInteger(c.months_complete) && Number.isInteger(c.months_any) && c.months_complete >= 0 && c.months_complete <= c.months_any && c.months_any <= 12 && !seen.has(key);
+      seen.add(key);
+      return !ok;
+    });
+    if (bad) errs.push("coverage 형식 (시군구 5자리·연도·수집 개월 0~12, 완전 ≤ 전체, 중복 없음)");
+  }
   return errs;
 }
 
@@ -203,6 +219,64 @@ export function parcelHistory(feature, assetsInside, data) {
     for (const it of assetHistory(a.asset_id, data, a.label)) if (!(it.kind === "transaction" && seenTx.has(it.id))) items.push(it);
   }
   return items.sort(byDateDesc);
+}
+
+/** 필지 연도별 요약 (J5-047, PC `db parcels-years` 와 같은 규칙). 최근 연도 먼저 [{year, price, deltaPct, exact, prefix, linked, monthsComplete, monthsAny, tx}].
+ * items 는 parcelHistory 결과, txDoc 은 파생본 transactions.json(없으면 null), prices 는 [{year: 공시 기준연도, price}] (priceTrend 결과를 바꾼 것).
+ * tx: "counted"(그해 거래가 있거나 완전 수집한 달이 있음: 수는 센 값) · "not_collected"(수집 실행 없음) · "incomplete"(실패·부분 수집만) ·
+ * "outside"(이 필지의 법정동이 거래 범위 밖이라 파생본에 거래가 없음) · "unknown"(거래 파일이나 수집 현황이 없음). counted 가 아니면 수는 null 이다(0 건이 아니다). */
+export function parcelYearSummary(feature, items, txDoc, prices = [], { maxYears = 20 } = {}) {
+  const props = feature?.properties ?? {};
+  const sgg = typeof props.emd_code === "string" ? props.emd_code.slice(0, 5) : typeof feature?.id === "string" ? feature.id.slice(0, 5) : null;
+  const cov = new Map();
+  const hasCoverage = !!txDoc && Array.isArray(txDoc.coverage);
+  if (hasCoverage) for (const c of txDoc.coverage) if (c.lawd_cd === sgg) cov.set(c.year, c);
+  const zr = txDoc?.zone_rule;
+  const inRange = zr ? zr.core.includes(props.emd_name) || zr.comparison.includes(props.emd_name) : null;
+  const txByYear = new Map();
+  for (const it of items) {
+    if (it.kind !== "transaction" || !/^\d{4}$/.test(it.year)) continue;
+    const y = Number(it.year);
+    const c = txByYear.get(y) ?? { exact: 0, prefix: 0, linked: 0 };
+    if (it.match === "exact" || it.match === "prefix" || it.match === "linked") c[it.match] += 1;
+    txByYear.set(y, c);
+  }
+  const priceByYear = new Map();
+  for (const q of prices) if (Number.isInteger(q.year) && Number.isFinite(q.price)) priceByYear.set(q.year, q.price);
+  const years = [...priceByYear.keys(), ...txByYear.keys(), ...cov.keys()];
+  if (!years.length) return [];
+  const y1 = Math.max(...years), y0 = Math.max(Math.min(...years), y1 - maxYears + 1);
+  const rows = [];
+  let prev = null;
+  for (let y = y0; y <= y1; y++) {
+    const price = priceByYear.get(y) ?? null;
+    const c = cov.get(y);
+    const t = txByYear.get(y);
+    let tx;
+    if (t) tx = "counted";
+    else if (!txDoc) tx = "unknown";
+    else if (inRange === false) tx = "outside";
+    else if (!hasCoverage) tx = "unknown";
+    else if (c && c.months_complete > 0) tx = "counted";
+    else tx = c && c.months_any > 0 ? "incomplete" : "not_collected";
+    const counted = tx === "counted";
+    rows.push({ year: y, price, deltaPct: price != null && prev ? ((price - prev) / prev) * 100 : null,
+                exact: counted ? t?.exact ?? 0 : null, prefix: counted ? t?.prefix ?? 0 : null, linked: counted ? t?.linked ?? 0 : null,
+                monthsComplete: c?.months_complete ?? (hasCoverage ? 0 : null), monthsAny: c?.months_any ?? (hasCoverage ? 0 : null), tx });
+    prev = price;
+  }
+  return rows.reverse();
+}
+
+const TX_STATE_TEXT = { not_collected: "거래 미수집", incomplete: "거래 수집 실패·부분만", outside: "거래 범위 밖 (PC 자료에 거래가 없음)", unknown: "거래 수집 현황 모름" };
+
+/** 연도별 요약 한 줄 글 [연도, 값] */
+export function yearSummaryRow(r) {
+  const price = r.price == null ? "공시지가 자료 없음" : `공시지가 ${Math.round(r.price).toLocaleString("ko-KR")}원/㎡` + (r.deltaPct == null ? "" : ` (${r.deltaPct > 0 ? "+" : ""}${r.deltaPct.toFixed(1)}%)`);
+  let tx;
+  if (r.tx === "counted") tx = `같은 필지 ${r.exact} · 번지대 ${r.prefix}` + (r.linked ? ` · 연결 ${r.linked}` : "") + (r.monthsComplete != null ? ` (수집 ${r.monthsComplete}/12개월)` : "");
+  else tx = TX_STATE_TEXT[r.tx];
+  return [String(r.year), `${price} · ${tx}`];
 }
 
 /** 연도별 묶음 [{year, items}] (최근 연도 먼저). 날짜 없는 항목은 "날짜 미상". */

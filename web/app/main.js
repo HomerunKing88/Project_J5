@@ -15,10 +15,10 @@ import { externalMapLinks, bboxCenter, LINK_ATTRS } from "./extmap.js";
 import { validateBasemap, LAYERS as BASEMAP_LAYERS, LAYER_LABEL as BASEMAP_LAYER_LABEL } from "./basemap.js";
 import { PROVIDERS, resolveTileConfig, prefetchPlan, padBbox, tileUrl, TILE_CACHE, PREFETCH_ZOOMS, KEY_PLACEHOLDER } from "./tiles.js";
 import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
-import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL } from "./view.js";
+import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummary, yearSummaryRow } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.16";
+export const APP_VERSION = "0.2.17";
 const $ = (id) => document.getElementById(id);
 const state = { store: null, parcelFilter: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, zoneColors: false, seedLoadedAt: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
                 nav: null, returnFocus: null, mapSelected: null, assetFilter: "all" };
@@ -675,13 +675,22 @@ function historyItemNode(it) {
   return li;
 }
 
-function openHistory({ title, sub, items, asset = null }) {
+function openHistory({ title, sub, items, asset = null, years = [] }) {
   if ($("sec-history").hidden) state.historyReturnFocus = document.activeElement;
   state.historyAsset = asset;
   $("history-title").textContent = title;
   $("history-sub").textContent = sub;
   const sm = viewSummary(state.view);
   text($("history-source"), sm ? `PC 자료: 정본 v${sm.version} (PC 생성 ${shortWhen(sm.generatedAt) ?? sm.generatedAt}) 기준. 더 새 정본이 있는지는 PC 에서 확인합니다.` : "PC 자료 파일을 아직 넣지 않아 이 기기의 관측만 보입니다.", "help");
+  // 필지 연도별 요약 (J5-047): 필지 이력에서만. 모르는 연도는 0 이 아니라 사유로 적는다
+  $("history-years-list").replaceChildren(...years.map((r) => {
+    const [y, v] = yearSummaryRow(r);
+    const li = el("li", {}, el("span", { class: "k", text: y }), el("span", { class: "v", text: v }));
+    li.dataset.year = y;
+    li.dataset.tx = r.tx;
+    return li;
+  }));
+  $("history-years").hidden = !years.length;
   const groups = groupByYear(items);
   $("history-list").replaceChildren(...groups.map((g) => el("section", {}, el("h3", { text: g.year }), el("ul", {}, ...g.items.map(historyItemNode)))));
   $("history-empty").hidden = groups.length > 0;
@@ -699,7 +708,9 @@ function openAssetHistory(asset) {
 function openParcelHistory(feature, assetsInside) {
   const p = feature.properties;
   const items = parcelHistory(feature, assetsInside, historyData());
-  openHistory({ title: `${parcelTitle(p)} 필지`, sub: `필지 번호 ${feature.id} · 안의 물건 ${assetsInside.length}개 · 기록·거래 ${items.length}건`, items, asset: null });
+  const prices = priceTrend(p.attrs, p.attrs_history).map((q) => ({ year: q.year, price: q.price }));
+  const years = parcelYearSummary(feature, items, state.view?.transactions ?? null, prices);
+  openHistory({ title: `${parcelTitle(p)} 필지`, sub: `필지 번호 ${feature.id} · 안의 물건 ${assetsInside.length}개 · 기록·거래 ${items.length}건`, items, asset: null, years });
 }
 
 function closeHistory() {
