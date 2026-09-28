@@ -19,6 +19,7 @@ from j5.db.backup import EXIT_BY_OUTCOME as BACKUP_EXIT, BackupError, check_phot
 from j5.db.importer import EXIT_BY_OUTCOME, import_package
 from j5.db.ingest import ingest_vworld
 from j5.db.parcel_timeline import with_transactions, years_text
+from j5.db.parcel_years import parcel_years, watchlist_pnus, years_csv as parcel_years_csv, years_text as parcel_years_text
 from j5.db.parcels import BUNDLE_SCHEMA as PARCELS_BUNDLE_SCHEMA, LINKS_SCHEMA as PARCELS_LINKS_SCHEMA, active_links, apply_links, scope_overview, scope_text, set_phone_scope, attribute_history, history_text, load_bundle, load_json as load_parcels_json, suggest_links
 from j5.db.schema import TRACKING_STATUSES
 from j5.db.parcel_assets import create_from_parcels as create_parcel_assets, pnus_from_csv, result_text as parcel_assets_text
@@ -159,6 +160,14 @@ def _build_parser() -> argparse.ArgumentParser:
     ph = dsub.add_parser("parcels-history", help="필지 하나의 이력 (J5-026·043): 현재 값, 자료 종류·기준일별 스냅샷, 값이 바뀐 지점, 이 필지에 닿는 실거래(같은 필지·번지대·연결 물건) 연도별")
     ph.add_argument("pnu", help="PNU 19자리")
     ph.add_argument("--json", action="store_true")
+    py_ = dsub.add_parser("parcels-years", help="여러 필지의 연도별 표 (J5-045): 필지 × 연도마다 공시지가·거래 수집 개월·이 필지에 닿는 거래 수·소유 변동일. 정본에 쓰지 않음")
+    py_.add_argument("--pnu", action="append", default=[], metavar="PNU[,PNU…]", help="대상 필지 PNU. 반복 가능")
+    py_.add_argument("--csv", type=Path, help="db parcels-find --csv 로 저장한 파일 (pnu 열)")
+    py_.add_argument("--watchlist", action="store_true", help="관찰목록 물건(watch·detailed_review·purchase_ready)에 오늘 연결된 필지")
+    py_.add_argument("--from", dest="year_from", type=int, help="시작 연도 (기본: 자료가 있는 첫 해)")
+    py_.add_argument("--to", dest="year_to", type=int, help="끝 연도 (기본: 올해)")
+    py_.add_argument("--out", type=Path, help="표 전부를 CSV 로 저장 (덮어쓰지 않음)")
+    py_.add_argument("--json", action="store_true")
     pf = dsub.add_parser("parcels-find", help="조건으로 필지 찾기 (J5-037, 폰 조건 찾기와 같은 규칙): 용도지역·공부면적·공시지가·소유구분·저촉 규제·물건 조건. 정본에 쓰지 않음")
     pf.add_argument("--zone", help="용도지역 분류 (res1 전용주거, res2 일반주거, res3 준주거, com 상업, ind 공업, green 녹지, rural 관리·농림·자연환경, other)")
     pf.add_argument("--area-min", type=float, help="공부면적 최소 (㎡)")
@@ -762,6 +771,25 @@ def _db_main(args) -> int:
                         f.write(find_csv(r))
                 sys.stdout.write(json.dumps(r, ensure_ascii=False, indent=2) + "\n" if args.json else find_text(r, limit=max(0, args.limit))
                                  + (f"CSV: {args.csv} ({r['total']}행)\n" if args.csv is not None else ""))
+                return 0
+            if args.db_command == "parcels-years":
+                if args.out is not None and args.out.exists():
+                    print(f"출력 파일이 이미 있다 (덮어쓰지 않음): {args.out}", file=sys.stderr)
+                    return USAGE_ERROR
+                if args.out is not None and not args.out.parent.is_dir():
+                    print(f"출력 폴더가 없다: {args.out.parent}", file=sys.stderr)
+                    return USAGE_ERROR
+                pnus = [x.strip() for v in args.pnu for x in v.split(",") if x.strip()]
+                if args.csv is not None:
+                    pnus += pnus_from_csv(args.csv)
+                if args.watchlist:
+                    pnus += watchlist_pnus(db, db.now()[:10])
+                r = parcel_years(db, list(dict.fromkeys(pnus)), year_from=args.year_from, year_to=args.year_to)
+                if args.out is not None:
+                    with open(args.out, "x", encoding="utf-8", newline="") as f:
+                        f.write(parcel_years_csv(r))
+                sys.stdout.write(json.dumps(r, ensure_ascii=False, indent=2) + "\n" if args.json else parcel_years_text(r)
+                                 + (f"CSV: {args.out} ({len(r['rows'])}행)\n" if args.out is not None else ""))
                 return 0
             if args.db_command == "parcels-history":
                 h = with_transactions(db, attribute_history(db, args.pnu))
