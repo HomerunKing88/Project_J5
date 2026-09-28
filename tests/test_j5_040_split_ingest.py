@@ -70,3 +70,26 @@ def test_small_source_keeps_single_bundle_name(db, home, vw_zip):
     r = ING.ingest_vworld(db.path, home, [vw_zip], geometry_version=GV, backup=False)
     it = r.items[0]
     assert it.bundles == [it.bundle] and ".part" not in it.bundle, "나누지 않는 묶음의 파일 이름은 이전과 같다 (이전 번들을 다시 쓴다)"
+
+
+def test_later_part_failure_keeps_earlier_part_results(db, home, vw_zip, monkeypatch):
+    """리뷰 반영 PR #87 (P1): 나눈 입력의 뒤 조각이 실패해도 앞 조각(각자 완결된 트랜잭션)의 반영을 결과에 남긴다."""
+    monkeypatch.setattr(ING, "PART_SIZE", 4)
+    real = ING.load_bundle
+    calls = []
+
+    def flaky(db_, doc):
+        calls.append(doc["count"])
+        if len(calls) == 2:
+            raise RuntimeError("가상 반영 실패")
+        return real(db_, doc)
+    monkeypatch.setattr(ING, "load_bundle", flaky)
+    r = ING.ingest_vworld(db.path, home, [vw_zip], geometry_version=GV, backup=False)
+    it = r.items[0]
+    assert r.outcome == "failed" and r.stage == "load" and "가상 반영 실패" in it.error
+    assert it.load["partial"] and it.load["parts"] == 1 and it.load["parts_total"] == 2 and it.load["inserted"] == 4
+    assert counts(db)[0] == 4, "앞 조각은 정본에 들어갔다"
+    assert "나눈 번들 2개 중 앞 1개가 반영됐다 (신규 4" in r.message and "나눈 번들 2개 중 1개는 반영됨 (신규 4" in r.to_text()
+    monkeypatch.setattr(ING, "load_bundle", real)
+    again = ING.ingest_vworld(db.path, home, [vw_zip], geometry_version=GV, backup=False)
+    assert again.outcome == "applied" and again.items[0].load["inserted"] == 2 and again.items[0].load["unchanged"] == 4 and counts(db) == (6, 6, 18)

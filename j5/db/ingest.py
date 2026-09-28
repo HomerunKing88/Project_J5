@@ -64,7 +64,10 @@ class IngestResult:
         for i in self.items:
             head = f"- {Path(i.source).name}: "
             if i.error:
-                lines.append(head + f"실패 · {i.error}")
+                ld = i.load
+                partial = (f" · 나눈 번들 {ld['parts_total']}개 중 {ld['parts']}개는 반영됨 (신규 {ld['inserted']}, 갱신 {ld['updated']}, 변화 없음 {ld['unchanged']})"
+                           if ld and ld.get("partial") else "")
+                lines.append(head + f"실패 · {i.error}{partial}")
                 continue
             conv = f"필지 {i.count}개 · 속성 {i.attrs}개" + (" · 있던 번들 다시 씀" if i.reused else "")
             if i.load:
@@ -251,15 +254,22 @@ def ingest_vworld(db_path: Path, home: Path, sources: list[Path], *, geometry_ve
         if before_schema < S.DB_SCHEMA_VERSION:
             r.migrated_from, r.migrated_to = before_schema, db.schema_version()
         for item, parts in zip(r.items, docs):
+            loads: list[dict] = []   # 조각마다 쌓는다: 뒤 조각이 실패해도 앞 조각(각자 완결된 트랜잭션)의 반영을 결과에 남긴다 (리뷰 반영 PR #87)
             try:
-                loads = [load_bundle(db, doc).to_dict() for doc in parts]
+                for doc in parts:
+                    loads.append(load_bundle(db, doc).to_dict())
                 item.load = _merge_loads(loads)
             except Exception as e:  # noqa: BLE001 - 반영 실패는 결과에 적고 멈춘다 (앞 번들은 각자 완결)
                 item.error = f"반영 실패: {getattr(e, 'message', None) or '; '.join(getattr(e, 'errors', []) or []) or e}"
+                if loads:
+                    item.load = {**_merge_loads(loads), "parts": len(loads), "parts_total": len(parts), "partial": True}
                 r.stage = "load"
                 r.dataset_version = int(db.meta("dataset_version") or 0)
-                done = sum(1 for i in r.items if i.load)
-                r.message = f"{done}개 번들은 반영됐고 이 입력부터는 반영하지 않았다. 원인을 고친 뒤 다시 실행하면 반영된 것은 변화 없음으로 지나간다."
+                done = sum(1 for i in r.items if i.load and not i.load.get("partial"))
+                part_note = (f" 이 입력은 나눈 번들 {len(parts)}개 중 앞 {len(loads)}개가 반영됐다 (신규 {item.load['inserted']}, 갱신 {item.load['updated']}, 변화 없음 {item.load['unchanged']})."
+                             if loads else "")
+                r.message = (f"앞 입력 {done}개는 모두 반영됐고 이 입력의 실패한 번들부터는 반영하지 않았다.{part_note}"
+                             " 원인을 고친 뒤 다시 실행하면 반영된 것은 변화 없음으로 지나간다.")
                 return r
         r.stage = "done"
         r.outcome = "applied" if any(i.load and i.load["outcome"] == "applied" for i in r.items) else "unchanged"
