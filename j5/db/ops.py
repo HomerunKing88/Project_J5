@@ -117,7 +117,7 @@ def ops_check(data_home: Path, *, db_path: Path | None = None, now: str | None =
     run_id = str(uuid.uuid4())
     r: dict = {"run_id": run_id, "checked_at": checked_at, "data_home": str(data_home), "db_path": str(path), "tool": tool_versions(),
                "ok": False, "actions": [], "warnings": [], "db": None, "schema": None, "backup": None, "projection": None, "photos": None, "raw": None,
-               "phone_scope": None, "collect_pending": None, "last_activity": None, "last_good": None, "last_good_problem": None, "last_good_updated": False, "previous_last_good_at": None, "overdue": None}
+               "phone_scope": None, "collect_pending": None, "zone_rule": None, "last_activity": None, "last_good": None, "last_good_problem": None, "last_good_updated": False, "previous_last_good_at": None, "overdue": None}
     prev, prev_problem = read_last_good(data_home)
     r["last_good"], r["last_good_problem"] = prev, prev_problem
     r["previous_last_good_at"] = (prev or {}).get("checked_at")
@@ -192,6 +192,17 @@ def _check_db(db: Db, data_home: Path, r: dict, now_dt: datetime) -> None:
             r["actions"].append({"code": "rt_unloaded", "text": "받아 두고 정본에 반영하지 않은 실거래 수집 "
                                  + ", ".join(f"시군구 {k} {len(v)}건" for k, v in pending.items())
                                  + ". `j5 db rt-load --lawd-cd <시군구>` 로 반영한다 (정본에 넣지 않을 표본이면 그대로 두어도 되며 원본은 지우지 않는다)"})
+    # 범위 규칙의 시군구 (J5-049): 거래가 여러 시군구에서 들어왔는데 규칙에 시군구가 없으면, 다른 시군구의 같은 이름 법정동 거래가
+    # 핵심·비교로 분류된다(J5-048). 규칙을 새 판으로 반영하는 조치라 백업·파생본 조치보다 먼저 낸다
+    if db._has_table("zone_rules") and db._has_table("transactions"):
+        from j5.db.zones import current_rules  # 순환 import 방지
+        zr = current_rules(db)
+        sggs = [row[0] for row in db.conn.execute("SELECT DISTINCT lawd_cd FROM transactions ORDER BY lawd_cd")]
+        if zr is not None:
+            r["zone_rule"] = {"version": zr["version"], "lawd_cd": zr.get("lawd_cd"), "transaction_sggs": sggs}
+            if not zr.get("lawd_cd") and len(sggs) > 1:
+                r["actions"].append({"code": "zone_rule_sgg_missing", "text": f"거래가 시군구 {', '.join(sggs)} 에서 들어왔는데 범위 규칙 v{zr['version']} 에 시군구가 없다."
+                                     " 다른 시군구의 같은 이름 법정동 거래가 핵심·비교로 분류될 수 있다. 규칙 파일에 \"lawd_cd\" 를 넣어 `j5 db rt-zones apply <규칙.json>` 으로 반영한다"})
     # 백업·파생본 (기존 상태 함수. 읽기 전용 연결에서도 조회만 한다)
     bs = backup_status(db, data_home)
     bs["days_since"] = _days_since(bs.get("backup_at"), now_dt)
@@ -301,6 +312,9 @@ def ops_text(r: dict) -> str:
     if r.get("phone_scope"):
         so = r["phone_scope"]
         lines.append(f"폰 범위: {'전체' if so['scope'] is None else ', '.join(so['scope'])} · 폰에 실릴 필지 {so['phone_parcels']}개 / 상한 {so['phone_limit']} (정본 필지 {so['total_parcels']}개)")
+    if r.get("zone_rule"):
+        z = r["zone_rule"]
+        lines.append(f"범위 규칙: v{z['version']} · 시군구 {z['lawd_cd'] + ' 만' if z['lawd_cd'] else '정하지 않음'} · 거래 시군구 {', '.join(z['transaction_sggs']) or '없음'}")
     if r.get("collect_pending") and r["collect_pending"].get("rt"):
         lines.append("반영 대기 수집: " + ", ".join(f"시군구 {k} {n}건" for k, n in r["collect_pending"]["rt"].items()))
     if r["last_activity"]:
