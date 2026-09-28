@@ -21,7 +21,7 @@ from pathlib import Path
 from urllib.parse import quote, urlencode, urlsplit
 
 from j5.collect.config import redact
-from j5.collect.rt import OK_CODES, CollectError, PageResult, _log, _new_run_id, _now, _write_new, fetch_page, page_mismatch, page_of_file, parse_response, summarize_items
+from j5.collect.rt import OK_CODES, CollectError, PageResult, _log, _new_run_id, _now, _write_new, fetch_page, page_mismatch, page_no_text, page_of_file, parse_response, summarize_items
 
 DEFAULT_ENDPOINT_BASE = "https://apis.data.go.kr/1613000/BldRgstHubService"  # 사용자가 API 상세 페이지에서 확인한다
 PROVIDER = "data.go.kr:BldRgstHubService"
@@ -170,8 +170,8 @@ def _collect_target(tr: TargetResult, *, data_home: Path, run_id: str, url_for_p
         if page_mismatch(parsed, page):
             # 요청한 페이지와 다른 페이지가 오면(pageNo 를 무시하고 앞 페이지를 되풀이하는 등) 항목을 더하지 않고 실패로 둔다.
             # 더하면 같은 행이 겹쳐 totalCount 에 닿아 뒷 행을 받지 않고도 complete 가 된다 (리뷰 반영 PR #81)
-            pr.outcome, pr.error = "bad_response", f"요청한 페이지 {page} 에 응답 pageNo {parsed['page_no']} 가 왔다 (페이지 넘김이 맞지 않음)"
-            _log(log, f"{tag} p{page} bad_response page_mismatch {parsed['page_no']}", key)
+            pr.outcome, pr.error = "bad_response", redact(f"요청한 페이지 {page} 에 응답 pageNo {page_no_text(parsed)} 가 왔다 (페이지 넘김이 맞지 않음)", key)
+            _log(log, f"{tag} p{page} bad_response page_mismatch {page_no_text(parsed)}", key)
             break
         pr.outcome = "ok" if pr.item_count else "empty"
         tr.items += pr.item_count
