@@ -18,6 +18,7 @@ from j5 import APP_VERSION
 from j5.db.backup import EXIT_BY_OUTCOME as BACKUP_EXIT, BackupError, check_photos, check_photos_text, create_backup, restore_backup, verify_backup_dir
 from j5.db.importer import EXIT_BY_OUTCOME, import_package
 from j5.db.ingest import ingest_vworld
+from j5.db.parcel_timeline import with_transactions, years_text
 from j5.db.parcels import BUNDLE_SCHEMA as PARCELS_BUNDLE_SCHEMA, LINKS_SCHEMA as PARCELS_LINKS_SCHEMA, active_links, apply_links, scope_overview, scope_text, set_phone_scope, attribute_history, history_text, load_bundle, load_json as load_parcels_json, suggest_links
 from j5.db.schema import TRACKING_STATUSES
 from j5.db.parcel_assets import create_from_parcels as create_parcel_assets, pnus_from_csv, result_text as parcel_assets_text
@@ -155,7 +156,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ps_ = dsub.add_parser("parcels-suggest", help="위치점을 품는 필지를 물건마다 찾아 연결 제안 파일을 만든다 (정본에 쓰지 않음, 검토 후 parcels-link)")
     ps_.add_argument("--out", type=Path, help="제안을 쓸 JSON 파일 (덮어쓰지 않음). 생략하면 표준 출력")
     ps_.add_argument("--effective-from", help="연결 시작일 YYYY-MM-DD (기본 오늘, UTC)")
-    ph = dsub.add_parser("parcels-history", help="필지 하나의 속성 이력 (J5-026): 현재 값, 자료 종류·기준일별 스냅샷, 값이 바뀐 지점")
+    ph = dsub.add_parser("parcels-history", help="필지 하나의 이력 (J5-026·043): 현재 값, 자료 종류·기준일별 스냅샷, 값이 바뀐 지점, 이 필지에 닿는 실거래(같은 필지·번지대·연결 물건) 연도별")
     ph.add_argument("pnu", help="PNU 19자리")
     ph.add_argument("--json", action="store_true")
     pf = dsub.add_parser("parcels-find", help="조건으로 필지 찾기 (J5-037, 폰 조건 찾기와 같은 규칙): 용도지역·공부면적·공시지가·소유구분·저촉 규제·물건 조건. 정본에 쓰지 않음")
@@ -763,8 +764,8 @@ def _db_main(args) -> int:
                                  + (f"CSV: {args.csv} ({r['total']}행)\n" if args.csv is not None else ""))
                 return 0
             if args.db_command == "parcels-history":
-                h = attribute_history(db, args.pnu)
-                sys.stdout.write(json.dumps(h, ensure_ascii=False, indent=2) + "\n" if args.json else history_text(h))
+                h = with_transactions(db, attribute_history(db, args.pnu))
+                sys.stdout.write(json.dumps(h, ensure_ascii=False, indent=2) + "\n" if args.json else history_text(h) + years_text(h))
                 return 0
             if args.db_command == "parcels-suggest":
                 eff = args.effective_from or db.now()[:10]
