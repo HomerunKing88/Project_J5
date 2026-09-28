@@ -14,6 +14,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 
 from j5.db.parcels import active_links, geometry_contains
 from j5.db.schema import WATCHLIST_STATUSES
@@ -42,7 +43,7 @@ def check_criteria(c: dict) -> list[str]:
     errs = []
     for k, label in (("area_min", "공부면적 최소"), ("area_max", "공부면적 최대"), ("price_min", "공시지가 최소"), ("price_max", "공시지가 최대")):
         v = c.get(k)
-        if v is not None and (not isinstance(v, (int, float)) or isinstance(v, bool) or v != v or v < 0):
+        if v is not None and (not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v) or v < 0):
             errs.append(f"{label}은 0 이상의 숫자")
     if c.get("zone") and c["zone"] not in ZONE_LABELS:
         errs.append(f"용도지역 분류가 목록에 없다 (가능: {', '.join(ZONE_LABELS)})")
@@ -66,7 +67,7 @@ def _in_range(v: float, lo, hi) -> bool:
     return (lo is None or v >= lo) and (hi is None or v <= hi)
 
 
-def _parcel_assets(db: Db, parcels: list[dict], on_date: str) -> dict[str, list[dict]]:
+def assets_by_parcel(db: Db, parcels: list[dict], on_date: str) -> dict[str, list[dict]]:
     """필지(parcel_id)마다 안의 물건 [{asset_id, label, tracking_status, basis}]. 정본 연결 + 위치점 포함 (폰 parcelAssets 와 같은 기준)."""
     linked: dict[str, set[str]] = {}
     for lk in active_links(db, on_date):
@@ -103,7 +104,7 @@ def find_parcels(db: Db, criteria: dict, *, on_date: str | None = None) -> dict:
         "SELECT p.parcel_id, p.pnu, p.label, p.emd_name, p.emd_code, p.bbox_json, p.geometry_json, a.as_of, a.use_zone_1, a.registered_area_m2, a.official_land_price_krw_m2,"
         " a.price_base_year, a.price_base_month, a.ownership_kind, a.plan_zones_json FROM parcels p JOIN parcel_attributes a ON a.parcel_id = p.parcel_id ORDER BY p.pnu")]
     total_parcels = db.conn.execute("SELECT COUNT(*) FROM parcels").fetchone()[0]
-    inside = _parcel_assets(db, parcels, on_date)   # 물건 조건이 없어도 결과 줄의 물건 수에 쓴다
+    inside = assets_by_parcel(db, parcels, on_date)   # 물건 조건이 없어도 결과 줄의 물건 수에 쓴다
     unknown = {k: 0 for k in UNKNOWN_KEYS}
     rows, undetermined = [], 0
     for p in parcels:

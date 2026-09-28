@@ -77,7 +77,7 @@ def test_asset_criteria_linked_and_inside(db):
 
 def test_bad_criteria_and_no_write(db):
     load_bundle(db, vw_bundle())
-    for c, part in (({}, "하나 이상"), ({"zone": "x"}, "용도지역"), ({"assets": "x"}, "물건 조건"), ({"area_min": -1}, "공부면적 최소"),
+    for c, part in (({"area_max": float("inf")}, "공부면적 최대"), ({"price_min": float("nan")}, "공시지가 최소"), ({}, "하나 이상"), ({"zone": "x"}, "용도지역"), ({"assets": "x"}, "물건 조건"), ({"area_min": -1}, "공부면적 최소"),
                     ({"area_min": 5, "area_max": 1}, "최소가 최대보다"), ({"price_min": 2, "price_max": 1}, "공시지가 최소가")):
         assert any(part in e for e in check_criteria(c)), c
         with pytest.raises(DbError):
@@ -115,6 +115,10 @@ def test_cli(db, home, tmp_path, capsys, monkeypatch):
     assert cli.main(["db", "--db", path, "parcels-find"]) == cli.USAGE_ERROR
     assert "하나 이상" in capsys.readouterr().err
     assert cli.main(["db", "--db", path, "parcels-find", "--zone", "nope"]) == cli.USAGE_ERROR
+    # 유한하지 않은 숫자·환산에서 넘치는 값은 예외가 아니라 사용 오류 (리뷰 반영 PR #84)
+    for flag, v in (("--price-min", "nan"), ("--price-max", "inf"), ("--price-min", "1e305"), ("--area-max", "inf"), ("--area-min", "-inf")):
+        assert cli.main(["db", "--db", path, "parcels-find", f"{flag}={v}"]) == cli.USAGE_ERROR, (flag, v)
+        assert "유한한 숫자" in capsys.readouterr().err
     assert cli.main(["db", "--db", path, "parcels-find", "--zone", "com", "--json"]) == 0
     doc = json.loads(capsys.readouterr().out)
     assert doc["total"] == 1 and doc["criteria"] == {"zone": "com"}

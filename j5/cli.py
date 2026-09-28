@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sqlite3
 import sys
@@ -18,6 +19,8 @@ from j5.db.backup import EXIT_BY_OUTCOME as BACKUP_EXIT, BackupError, check_phot
 from j5.db.importer import EXIT_BY_OUTCOME, import_package
 from j5.db.ingest import ingest_vworld
 from j5.db.parcels import BUNDLE_SCHEMA as PARCELS_BUNDLE_SCHEMA, LINKS_SCHEMA as PARCELS_LINKS_SCHEMA, active_links, apply_links, attribute_history, history_text, load_bundle, load_json as load_parcels_json, suggest_links
+from j5.db.schema import TRACKING_STATUSES
+from j5.db.parcel_assets import create_from_parcels as create_parcel_assets, pnus_from_csv, result_text as parcel_assets_text
 from j5.db.parcel_find import check_criteria as check_find_criteria, find_csv, find_parcels, find_text
 from j5.db.projection import EXIT_BY_OUTCOME as PROJECT_EXIT, ProjectionError, build_projection, copy_latest
 from j5.db.store import Db, DbError, default_db_path
@@ -167,6 +170,14 @@ def _build_parser() -> argparse.ArgumentParser:
     pf.add_argument("--limit", type=int, default=50, help="화면에 보일 줄 수 (기본 50, CSV·JSON 은 전부)")
     pf.add_argument("--csv", type=Path, help="결과 전부를 CSV 로 저장 (덮어쓰지 않음)")
     pf.add_argument("--json", action="store_true")
+    ap_ = dsub.add_parser("asset-from-parcels", help="필지 목록으로 물건 만들기 (J5-038): 필지마다 매입 검토 단위를 만들어 연결하고 원하면 관심 단계를 준다. 이미 물건이 있는 필지는 건너뜀")
+    ap_.add_argument("--pnu", action="append", default=[], metavar="PNU[,PNU…]", help="대상 필지 PNU. 반복 가능")
+    ap_.add_argument("--csv", type=Path, help="db parcels-find --csv 로 저장한 파일 (pnu 열)")
+    ap_.add_argument("--track", choices=[s for s in TRACKING_STATUSES if s != "purchase_ready"], help="만든 물건에 줄 관심 단계 (예: watch). hold·excluded·archived 는 --reason 필요")
+    ap_.add_argument("--reason", help="관심 단계 사유")
+    ap_.add_argument("--effective-from", help="필지 연결 시작일 YYYY-MM-DD (기본 오늘, UTC)")
+    ap_.add_argument("--dry-run", action="store_true", help="만들 물건과 건너뛸 필지만 보이고 정본에 쓰지 않는다")
+    ap_.add_argument("--json", action="store_true")
     pk = dsub.add_parser("parcels-link", help="검토한 연결 파일(asset_components_input)을 정본 asset_components 에 반영한다")
     rl = dsub.add_parser("rt-load", help="실거래 수집 실행 기록(run-*.json)과 원본 XML 을 정본에 반영한다 (collection_runs / transaction_observations / transactions, db_schema 6). 같은 실행은 다시 반영하지 않는다")
     rl.add_argument("--lawd-cd", required=True, help="시군구 코드 5자리")
@@ -703,7 +714,21 @@ def _db_main(args) -> int:
                 r = load_bundle(db, load_parcels_json(args.bundle, PARCELS_BUNDLE_SCHEMA))
                 sys.stdout.write(json.dumps(r.to_dict(), ensure_ascii=True, sort_keys=True, indent=2) + "\n" if args.json else r.to_text())
                 return 0
+            if args.db_command == "asset-from-parcels":
+                pnus = [x.strip() for v in args.pnu for x in v.split(",") if x.strip()]
+                if args.csv is not None:
+                    pnus += [x for x in pnus_from_csv(args.csv) if x not in pnus]
+                pnus = list(dict.fromkeys(pnus))
+                r = create_parcel_assets(db, pnus, track=args.track, reason=args.reason, effective_from=args.effective_from, dry_run=args.dry_run)
+                sys.stdout.write(json.dumps(r, ensure_ascii=False, indent=2) + "\n" if args.json else parcel_assets_text(r))
+                return 0
             if args.db_command == "parcels-find":
+                # 숫자 조건은 유한해야 한다: nan·inf·만원→원 환산에서 넘치는 값은 사용 오류 (리뷰 반영 PR #84)
+                bad = [name for name, v, k in (("--area-min", args.area_min, 1), ("--area-max", args.area_max, 1), ("--price-min", args.price_min, 10000), ("--price-max", args.price_max, 10000))
+                       if v is not None and not (math.isfinite(v) and math.isfinite(v * k))]
+                if bad:
+                    print(f"조건 확인: {', '.join(bad)} 는 유한한 숫자여야 한다", file=sys.stderr)
+                    return USAGE_ERROR
                 crit = {"zone": args.zone, "area_min": args.area_min, "area_max": args.area_max,
                         "price_min": None if args.price_min is None else round(args.price_min * 10000), "price_max": None if args.price_max is None else round(args.price_max * 10000),
                         "owner": args.owner, "restricted": args.restricted, "assets": args.assets}
