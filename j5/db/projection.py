@@ -238,6 +238,28 @@ def _generate(snapshot: dict, out: Path, *, photos: bool, data_home: Path, run_i
     return manifest
 
 
+def _verify_tx_extras(tx: dict) -> None:
+    """transactions.json 의 범위 규칙·수집 개월 (J5-047). 없으면 이전 형식으로 본다(폰은 모름으로 표시)."""
+    zr = tx.get("zone_rule")
+    if zr is not None and not (isinstance(zr, dict) and isinstance(zr.get("version"), int) and all(isinstance(zr.get(k), list) and all(isinstance(x, str) for x in zr[k]) for k in ("core", "comparison"))):
+        raise ProjectionError("verify_transactions_zone_rule", "transactions.json 의 zone_rule 형식이 맞지 않는다")
+    cov = tx.get("coverage")
+    if cov is None:
+        return
+    seen = set()
+    ok = isinstance(cov, list)
+    for c in cov if ok else []:
+        good = (isinstance(c, dict) and isinstance(c.get("lawd_cd"), str) and len(c["lawd_cd"]) == 5 and c["lawd_cd"].isdigit() and isinstance(c.get("year"), int)
+                and all(isinstance(c.get(k), int) and not isinstance(c.get(k), bool) and 0 <= c[k] <= 12 for k in ("months_complete", "months_any"))
+                and c["months_complete"] <= c["months_any"] and (c["lawd_cd"], c["year"]) not in seen)
+        if not good:
+            ok = False
+            break
+        seen.add((c["lawd_cd"], c["year"]))
+    if not ok:
+        raise ProjectionError("verify_transactions_coverage", "transactions.json 의 coverage 형식이 맞지 않는다 (시군구 5자리·연도·수집 개월 0~12, 완전 ≤ 전체, 중복 없음)")
+
+
 def verify_projection_dir(out: Path, *, expected_version: int | None = None, expected_counts: dict | None = None) -> dict:
     """게시 전 검증(데이터 사전 §4): 행수·참조·필수값·버전·파일 해시. 파일을 디스크에서 다시 읽는다. 통과하면 manifest 를 돌려준다."""
     manifest = json.loads((out / MANIFEST).read_text(encoding="utf-8"))
@@ -311,6 +333,7 @@ def verify_projection_dir(out: Path, *, expected_version: int | None = None, exp
             raise ProjectionError("verify_transactions", "transactions.json 의 형식·건수가 manifest 와 맞지 않는다")
         if tx.get("generated_at") != manifest["generated_at"] or tx.get("source_dataset_version") != manifest["source_dataset_version"] or tx.get("study_id") != manifest["study_id"]:
             raise ProjectionError("verify_transactions_version", "transactions.json 의 생성 시각·정본 버전·study_id 가 manifest 와 다르다")
+        _verify_tx_extras(tx)
         for t in tx["transactions"]:
             if t.get("zone") not in ("core", "comparison") or t.get("transaction_id") is None:
                 raise ProjectionError("verify_transaction_zone", "범위 밖 거래 또는 ID 없는 거래가 파생본에 있다")

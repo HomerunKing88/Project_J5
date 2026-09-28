@@ -440,6 +440,33 @@ def coverage(db: Db, lawd_cd: str, months: list[str]) -> dict:
             "core": sum(m["core"] for m in out), "comparison": sum(m["comparison"] for m in out)}
 
 
+def coverage_by_year(db: Db, lawd_cd: str) -> dict[str, dict]:
+    """시군구의 연도별 수집 개월 수 {YYYY: {complete, any}}: complete 는 complete/empty 인 달, any 는 결과와 무관하게 실행이 있는 달 (J5-045·047).
+    collection_runs 가 없으면 빈 dict."""
+    if not db._has_table("collection_runs"):
+        return {}
+    months: dict[str, set] = {}
+    for r in db.conn.execute("SELECT deal_ymd, outcome FROM collection_runs WHERE lawd_cd = ?", (lawd_cd,)):
+        months.setdefault(r["deal_ymd"], set()).add(r["outcome"])
+    out: dict[str, dict] = {}
+    for ym, outcomes in months.items():
+        y = out.setdefault(ym[:4], {"complete": 0, "any": 0})
+        y["any"] += 1
+        y["complete"] += int(bool(outcomes & {"complete", "empty"}))
+    return out
+
+
+def coverage_rows(db: Db) -> list[dict]:
+    """모든 시군구의 연도별 수집 개월 [{lawd_cd, year, months_complete, months_any}] (시군구·연도 순). 파생본 transactions.json 의 coverage (J5-047)."""
+    if not db._has_table("collection_runs"):
+        return []
+    rows = []
+    for (lawd,) in db.conn.execute("SELECT DISTINCT lawd_cd FROM collection_runs ORDER BY lawd_cd").fetchall():
+        for y, c in sorted(coverage_by_year(db, lawd).items()):
+            rows.append({"lawd_cd": lawd, "year": int(y), "months_complete": c["complete"], "months_any": c["any"]})
+    return rows
+
+
 def coverage_text(c: dict) -> str:
     lines = [f"거래 수집 현황 시군구 {c['lawd_cd']}: 완전 수집 {c['complete_months']}/{len(c['months'])}개월 · 거래 {c['transactions']}건 (취소 확정 {c['cancelled']}건 제외)"
              f" · 핵심 {c['core']}, 비교 {c['comparison']} · 물건 연결 확정 {c['linked']}건 (수집 완료와 연결 완료는 별개)"]

@@ -22,6 +22,7 @@ from j5.db.parcel_timeline import fmt_krw, parcels_transactions
 from j5.db.parcels import active_links, attribute_history
 from j5.db.schema import WATCHLIST_STATUSES
 from j5.db.store import Db, DbError
+from j5.db.transactions import coverage_by_year
 
 MAX_PARCELS = 500
 MAX_YEARS = 40
@@ -36,21 +37,6 @@ def watchlist_pnus(db: Db, on_date: str) -> list[str]:
     ph = ",".join("?" * len(WATCHLIST_STATUSES))
     watch = {r[0] for r in db.conn.execute(f"SELECT asset_id FROM assets WHERE tracking_status IN ({ph})", WATCHLIST_STATUSES)}
     return sorted({l["pnu"] for l in active_links(db, on_date) if l["asset_id"] in watch})
-
-
-def _coverage_by_year(db: Db, sgg: str) -> dict[str, dict]:
-    """시군구의 연도별 수집 개월 수 {year: {complete, any}} (collection_runs 가 없으면 빈 dict)."""
-    if not db._has_table("collection_runs"):
-        return {}
-    months: dict[str, set] = {}
-    for r in db.conn.execute("SELECT deal_ymd, outcome FROM collection_runs WHERE lawd_cd = ?", (sgg,)):
-        months.setdefault(r["deal_ymd"], set()).add(r["outcome"])
-    out: dict[str, dict] = {}
-    for ym, outcomes in months.items():
-        y = out.setdefault(ym[:4], {"complete": 0, "any": 0})
-        y["any"] += 1
-        y["complete"] += int(bool(outcomes & {"complete", "empty"}))
-    return out
 
 
 def _ownership_dates(snapshots: list[dict]) -> list[str]:
@@ -99,7 +85,7 @@ def parcel_years(db: Db, pnus: list[str], *, year_from: int | None = None, year_
         tx = txs_all[pnu]
         sgg = rows[pnu]["emd_code"][:5]
         if sgg not in cov_cache:
-            cov_cache[sgg] = _coverage_by_year(db, sgg)
+            cov_cache[sgg] = coverage_by_year(db, sgg)
         prices = _prices_by_year(h["price_series"])
         own = _ownership_dates(h["snapshots"])
         per.append((pnu, h, tx, sgg, prices, own))

@@ -1,7 +1,7 @@
 // view.js (J5-023, ADR-17): manifest·기록·거래 검증, 금액 표기, 지번 대조, 물건·필지 이력 조립, 연도 묶음. DOM 없음.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, fmtKrw, parseJibun, jibunMatch, assetHistory, parcelHistory, attrHistoryItems, groupByYear, viewSummary } from "../../web/app/view.js";
+import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, fmtKrw, parseJibun, jibunMatch, assetHistory, parcelHistory, attrHistoryItems, groupByYear, viewSummary, parcelYearSummary, yearSummaryRow } from "../../web/app/view.js";
 
 const A0 = "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a50", A1 = "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a51";
 const R = (id, asset, type, at, payload, extra = {}) => ({ record_id: id, asset_id: asset, record_type: type, observed_at: at, payload, attachments: [], supersedes_id: null, ...extra });
@@ -117,4 +117,37 @@ test("attrHistoryItems·parcelHistory: 필지 속성 변화가 기준일 연도�
   assert.deepEqual(all.map((i) => i.date), ["2026-01-15", "2025-08-01", "2024-09-05", "2024-09-05"]);
   assert.deepEqual(groupByYear(all).map((g) => [g.year, g.items.length]), [["2026", 1], ["2025", 1], ["2024", 2]]);
   assert.deepEqual(attrHistoryItems({ id: "x", properties: {} }), []);
+});
+
+test("parcelYearSummary·yearSummaryRow: 연도별 요약, 0 건과 미수집·실패·범위 밖·모름 구분 (J5-047)", () => {
+  const feature = { id: "9999900100100010000", properties: { emd_name: "가상동", emd_code: "9999900100", label: "1", bon: 1, bu: 0, mountain: false } };
+  const tx = (id, ymd, jibun) => T(ID(id), ymd, jibun, { lawd_cd: "99999" });
+  const txDoc = { j5transactions: "1.0.0", count: 3, transactions: [tx(1, "202608", "1"), tx(2, "202608", "1-*"), tx(3, "202108", "1")],
+    zone_rule: { version: 1, core: ["가상동"], comparison: [] },
+    coverage: [{ lawd_cd: "99999", year: 2026, months_complete: 8, months_any: 8 }, { lawd_cd: "99999", year: 2025, months_complete: 12, months_any: 12 },
+      { lawd_cd: "99999", year: 2023, months_complete: 0, months_any: 2 }, { lawd_cd: "99999", year: 2021, months_complete: 1, months_any: 1 }, { lawd_cd: "11110", year: 2024, months_complete: 12, months_any: 12 }] };
+  assert.deepEqual(validateTransactionsDoc(txDoc), []);
+  const items = parcelHistory(feature, [], { events: [], records: [], transactions: txDoc.transactions });
+  const rows = parcelYearSummary(feature, items, txDoc, [{ year: 2025, price: 12e6 }, { year: 2026, price: 12.6e6 }]);
+  assert.deepEqual(rows.map((r) => [r.year, r.tx, r.exact, r.prefix, r.monthsComplete]), [
+    [2026, "counted", 1, 1, 8], [2025, "counted", 0, 0, 12], [2024, "not_collected", null, null, 0], [2023, "incomplete", null, null, 0], [2022, "not_collected", null, null, 0], [2021, "counted", 1, 0, 1]],
+    "수집했고 거래 없는 해는 0, 수집 안 한 해·실패만 있는 해는 모름. 다른 시군구(11110)의 수집 현황은 쓰지 않는다");
+  assert.equal(rows[0].deltaPct.toFixed(1), "5.0");
+  assert.deepEqual(yearSummaryRow(rows[0]), ["2026", "공시지가 12,600,000원/㎡ (+5.0%) · 같은 필지 1 · 번지대 1 (수집 8/12개월)"]);
+  assert.deepEqual(yearSummaryRow(rows[2]), ["2024", "공시지가 자료 없음 · 거래 미수집"]);
+  assert.equal(yearSummaryRow(rows[3])[1], "공시지가 자료 없음 · 거래 수집 실패·부분만");
+  // 범위 밖 동, 거래 파일 없음, 수집 현황 없는 이전 형식
+  const out = parcelYearSummary({ ...feature, properties: { ...feature.properties, emd_name: "가상2동" } }, [], txDoc, [{ year: 2026, price: 1 }]);
+  assert.equal(out.find((r) => r.year === 2026).tx, "outside");
+  assert.deepEqual(parcelYearSummary(feature, [], null, [{ year: 2026, price: 1 }]).map((r) => r.tx), ["unknown"]);
+  const old = { ...txDoc, coverage: undefined, zone_rule: undefined };
+  assert.deepEqual(parcelYearSummary(feature, [], old, [{ year: 2026, price: 1 }]).map((r) => [r.tx, r.monthsComplete]), [["unknown", null]]);
+  assert.deepEqual(parcelYearSummary(feature, [], txDoc, []).length, 6, "공시지가가 없어도 수집 현황이 있는 해는 보인다");
+  assert.equal(parcelYearSummary(feature, [], txDoc, [], { maxYears: 2 }).length, 2, "최근 연도만");
+  assert.deepEqual(parcelYearSummary(feature, [], { ...txDoc, coverage: [] }, []), [], "자료가 없으면 빈 요약");
+  // 형식 검사
+  assert.ok(validateTransactionsDoc({ ...txDoc, coverage: [{ lawd_cd: "999", year: 2026, months_complete: 1, months_any: 1 }] }).some((e) => e.includes("coverage")));
+  assert.ok(validateTransactionsDoc({ ...txDoc, coverage: [{ lawd_cd: "99999", year: 2026, months_complete: 3, months_any: 2 }] }).some((e) => e.includes("coverage")));
+  assert.ok(validateTransactionsDoc({ ...txDoc, coverage: [txDoc.coverage[0], txDoc.coverage[0]] }).some((e) => e.includes("coverage")), "중복");
+  assert.ok(validateTransactionsDoc({ ...txDoc, zone_rule: { version: 1, core: "가상동", comparison: [] } }).some((e) => e.includes("zone_rule")));
 });
