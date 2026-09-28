@@ -150,4 +150,11 @@ test("parcelYearSummary·yearSummaryRow: 연도별 요약, 0 건과 미수집·�
   assert.ok(validateTransactionsDoc({ ...txDoc, coverage: [{ lawd_cd: "99999", year: 2026, months_complete: 3, months_any: 2 }] }).some((e) => e.includes("coverage")));
   assert.ok(validateTransactionsDoc({ ...txDoc, coverage: [txDoc.coverage[0], txDoc.coverage[0]] }).some((e) => e.includes("coverage")), "중복");
   assert.ok(validateTransactionsDoc({ ...txDoc, zone_rule: { version: 1, core: "가상동", comparison: [] } }).some((e) => e.includes("zone_rule")));
+  // 범위 규칙의 시군구 (J5-048): 규칙 시군구가 필지 시군구와 다르면 이름이 같아도 범위 밖
+  const zrSgg = (lawd) => ({ ...txDoc, zone_rule: { ...txDoc.zone_rule, lawd_cd: lawd } });
+  assert.deepEqual(validateTransactionsDoc(zrSgg("99999")), []);
+  assert.deepEqual(validateTransactionsDoc(zrSgg(null)), []);
+  assert.ok(validateTransactionsDoc(zrSgg("9999")).some((e) => e.includes("zone_rule")));
+  assert.equal(parcelYearSummary(feature, [], zrSgg("11110"), [{ year: 2026, price: 1 }]).find((r) => r.year === 2026).tx, "outside");
+  assert.equal(parcelYearSummary(feature, [], zrSgg("99999"), [{ year: 2026, price: 1 }]).find((r) => r.year === 2026).tx, "counted");
 });
