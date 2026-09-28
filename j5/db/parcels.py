@@ -133,21 +133,22 @@ def _empty_attrs() -> dict:
     return c
 
 
-def _attrs_content(attrs: dict, as_of: str, kinds: set[str], base: dict | None = None) -> dict:
-    """번들 attrs → 정본 행 내용. kinds 에 든 자료 묶음의 필드만 번들 값으로 두고 나머지는 base(기존 행) 또는 null. 해시는 이 내용으로 계산한다."""
+def _attrs_content(attrs: dict, as_of: str, kinds: set[str], base: dict | None = None, corrected_names: list | None = None) -> dict:
+    """번들 attrs → 정본 행 내용. kinds 에 든 자료 묶음의 필드만 번들 값으로 두고 나머지는 base(기존 행) 또는 null. 해시는 이 내용으로 계산한다.
+    corrected_names 는 같은 기준일 토지이용계획 스냅샷의 정정된 이름 목록(빈 목록 포함, 없으면 None, _corrected_plan_names)이다."""
     c = dict(base) if base else _empty_attrs()
     for kind in kinds:
         for k in ATTR_GROUPS[kind]:
             c[k] = attrs.get(k)
     if "land_plan" in kinds and "plan_zone_names" not in attrs:
         # J5-025 형식(이름 목록 키 없음, 코드에 이름이 위치로 붙음)의 옛 번들 (리뷰 반영 PR #79): 위치 짝을 되살리지 않는다.
-        # 코드에 붙은 이름을 떼어 순서대로 이름 목록으로 옮기고(잘림 표시가 있으면 끊긴 마지막 조각은 뺀다), 같은 기준일에 정정된 이름 목록이 이미 있으면 그것을 지킨다
+        # 코드에 붙은 이름을 떼어 순서대로 이름 목록으로 옮기고(잘림 표시가 있으면 끊긴 마지막 조각은 뺀다), 같은 기준일에 정정된 이름 목록이 이미 있으면
+        # 빈 목록이어도 그것을 지킨다 (리뷰 반영 PR #80: 판정은 행 전체의 as_of 가 아니라 같은 기준일의 토지이용계획 스냅샷으로 한다)
         zones = attrs.get("plan_zones") or []
         legacy = [z["name"] for z in zones if isinstance(z, dict) and z.get("name")]
         if attrs.get("plan_zones_truncated") and legacy:
             legacy = legacy[:-1]
-        kept = base.get("plan_zone_names") if base and base.get("as_of") == as_of else None
-        c["plan_zone_names"] = kept or legacy
+        c["plan_zone_names"] = list(corrected_names) if corrected_names is not None else legacy
         c["plan_zones"] = [dict(z, name=None) for z in zones]
     c["plan_zones"] = c["plan_zones"] or []
     names = c.pop("plan_zone_names", None) or []
@@ -156,6 +157,19 @@ def _attrs_content(attrs: dict, as_of: str, kinds: set[str], base: dict | None =
     c["plan_zones_truncated"] = bool(c["plan_zones_truncated"])
     c["as_of"] = as_of
     return c
+
+
+def _corrected_plan_names(db: Db, pnu: str, as_of: str) -> list | None:
+    """같은 기준일 토지이용계획 스냅샷이 정정된 형식(코드에 이름을 붙이지 않음, J5-032)이면 그 이름 목록(키가 없으면 빈 목록), 아니면 None.
+    옛 형식 스냅샷(J5-025·026, 코드에 이름이 붙음)이나 그 기준일의 스냅샷이 없으면 정정된 값이 없는 것이다."""
+    row = db.conn.execute("SELECT s.values_json FROM parcel_attribute_snapshots s JOIN parcels p ON p.parcel_id = s.parcel_id"
+                          " WHERE p.pnu = ? AND s.kind = 'land_plan' AND s.as_of = ?", (pnu, as_of)).fetchone()
+    if row is None:
+        return None
+    values = json.loads(row["values_json"])
+    if any(isinstance(z, dict) and z.get("name") for z in values.get("plan_zones") or []):
+        return None
+    return list(values.get("plan_zone_names") or [])
 
 
 def _attrs_content_from_row(row) -> dict:
@@ -250,14 +264,15 @@ def load_bundle(db: Db, doc: dict) -> ParcelLoadResult:
                 continue
             as_of = attrs.get("as_of") or src["geometry_version"]
             cur = db.conn.execute("SELECT a.* FROM parcel_attributes a JOIN parcels p ON p.parcel_id = a.parcel_id WHERE p.pnu = ?", (feature["id"],)).fetchone()
+            corrected = _corrected_plan_names(db, feature["id"], as_of) if "land_plan" in kinds and "plan_zone_names" not in attrs else None
             if cur is None:
-                content = _attrs_content(attrs, as_of, kinds)
+                content = _attrs_content(attrs, as_of, kinds, corrected_names=corrected)
                 sources = list(attrs_sources)
                 attrs_plan.append(("insert", feature["id"], content, _hash(content), sources))
                 continue
             if as_of < cur["as_of"]:
                 raise DbError("parcel_attrs_older", f"PNU {feature['id']}: 속성 기준일 {as_of} 이 정본의 {cur['as_of']} 보다 오래됐다. 반영하지 않는다")
-            content = _attrs_content(attrs, as_of, kinds, base=_attrs_content_from_row(cur))
+            content = _attrs_content(attrs, as_of, kinds, base=_attrs_content_from_row(cur), corrected_names=corrected)
             h = _hash(content)
             sources = [s_ for s_ in json.loads(cur["sources_json"]) if s_["kind"] not in kinds] + list(attrs_sources)
             if cur["content_hash"] == h:

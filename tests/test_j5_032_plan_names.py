@@ -115,3 +115,34 @@ def test_legacy_bundle_does_not_erase_corrected_names(db):
     assert names(p3) == ["도시지역", "상대보호구역", "상대보호구역(가상)"], "새 기준일의 옛 형식은 그 자료의 이름(코드 수까지)을 쓴다"
     p2 = "9999900100100020000"
     assert names(p2) == ["도시지역", "제3종일반주거지역", "준주거지역"], "잘림 표시가 있으면 끊긴 조각은 이미 없다"
+
+
+def _only(bundle: dict, kind: str, geometry_version: str) -> dict:
+    b = copy.deepcopy(bundle)
+    b["attrs_sources"] = [a for a in b["attrs_sources"] if a["kind"] == kind]
+    b["source"]["geometry_version"] = geometry_version
+    return b
+
+
+def test_legacy_preservation_is_judged_by_same_date_plan_snapshot(db):
+    """리뷰 반영 PR #80 (P1): 정정된 이름 목록을 지킬지는 행 전체의 as_of 가 아니라 같은 기준일의 토지이용계획 스냅샷으로 정한다.
+    정정된 빈 목록도 지키고, 토지특성만 든 새 번들이 행의 기준일을 올려도 그 날짜의 옛 형식 토지이용계획은 그 자료의 이름을 쓴다."""
+    names = lambda pnu: json.loads(db.conn.execute("SELECT a.plan_zone_names_json FROM parcel_attributes a JOIN parcels p USING (parcel_id) WHERE p.pnu = ?", (pnu,)).fetchone()[0])
+    p3 = "9999900100100030000"
+    # 1) 정정된 빈 목록: 새 형식에서 이름이 없던 필지에 같은 기준일의 옛 형식(이름 있음)이 들어와도 빈 목록을 지킨다
+    new = vw_bundle()
+    for f in new["features"]:
+        if f["id"] == P1:
+            f["properties"]["attrs"]["plan_zone_names"] = []
+    load_bundle(db, new)
+    assert names(P1) == []
+    r = load_bundle(db, _old_format(vw_bundle()))
+    assert names(P1) == [], "정정된 빈 목록은 옛 형식의 이름으로 채우지 않는다"
+    assert r.outcome == "unchanged", r.to_text()
+    # 2) 토지특성만 든 새 기준일 번들이 행의 as_of 를 올린 뒤, 같은 새 기준일의 옛 형식 토지이용계획은 그 자료의 이름으로 반영된다
+    load_bundle(db, _only(vw_bundle(), "land_feature", "2026-10-01"))
+    assert names(p3) == ["도시지역", "상대보호구역", "상대보호구역(가상)", "준공업지역"], "토지특성만 든 번들은 이름 목록을 바꾸지 않는다"
+    load_bundle(db, _only(_old_format(vw_bundle()), "land_plan", "2026-10-01"))
+    assert names(p3) == ["도시지역", "상대보호구역", "상대보호구역(가상)"], "그 날짜의 정정된 토지이용계획 스냅샷이 없으므로 옛 형식 자료의 이름을 쓴다"
+    snap = db.conn.execute("SELECT s.values_json FROM parcel_attribute_snapshots s JOIN parcels p USING (parcel_id) WHERE p.pnu = ? AND s.kind = 'land_plan' AND s.as_of = '2026-10-01'", (p3,)).fetchone()
+    assert json.loads(snap[0])["plan_zone_names"] == ["도시지역", "상대보호구역", "상대보호구역(가상)"]
