@@ -325,7 +325,8 @@ def verify_projection_dir(out: Path, *, expected_version: int | None = None, exp
             if not set(f["properties"].get("asset_ids", [])) <= set(ids):
                 raise ProjectionError("verify_parcel_link", f"필지 {f['id']} 의 연결 물건이 물건 목록에 없다")
     n_tx = manifest["counts"].get("transactions", 0)
-    if (TRANSACTIONS_FILE in listed) != (n_tx > 0):
+    # 거래가 있으면 파일이 있어야 한다. 거래 0 건이어도 수집 개월을 싣는 파일은 있을 수 있다 (J5-047 리뷰 반영 PR #94)
+    if n_tx > 0 and TRANSACTIONS_FILE not in listed:
         raise ProjectionError("verify_transactions_file", "transactions.json 의 유무가 counts.transactions 와 맞지 않는다")
     if TRANSACTIONS_FILE in listed:
         tx = json.loads((out / TRANSACTIONS_FILE).read_text(encoding="utf-8"))

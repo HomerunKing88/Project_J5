@@ -62,3 +62,18 @@ def test_coverage_and_zone_rule_in_transactions_file(db, home, server, tmp_path)
     o3 = home / r3.output_dir
     tamper(o3, lambda t: (t.pop("coverage"), t.pop("zone_rule")))
     assert verify_projection_dir(o3)["counts"]["transactions"] == 2
+
+
+def test_file_with_zero_transactions_keeps_coverage(db, home, server, tmp_path):
+    """리뷰 반영 PR #94: 범위 거래가 0 건이어도(수집했고 결과 없음·범위 밖·취소만) 수집 개월을 싣는 파일을 만든다. 폰이 0 건과 모름을 가른다."""
+    apply_rules(db, load_rules(rules_file(tmp_path)))
+    r0 = build_projection(db, home)
+    assert r0.outcome == "published" and not (home / r0.output_dir / "transactions.json").exists(), "수집 기록도 거래도 없으면 파일이 없다"
+    load_month(db, home, server, [row(0, umdNm="당주동"), row(1, umdNm="종로5가", cdealType="O", cdealDay="26.08.20")])   # 범위 밖 1, 취소 확정 1
+    load_month(db, home, server, [], ym="202607")                                                                           # 수집했고 결과 0
+    r = build_projection(db, home)
+    assert r.outcome == "published" and r.counts["transactions"] == 0, r.findings
+    out = home / r.output_dir
+    tx = json.loads((out / "transactions.json").read_text(encoding="utf-8"))
+    assert tx["count"] == 0 and tx["transactions"] == [] and tx["coverage"] == [{"lawd_cd": "11110", "year": 2026, "months_complete": 2, "months_any": 2}]
+    assert verify_projection_dir(out)["counts"]["transactions"] == 0

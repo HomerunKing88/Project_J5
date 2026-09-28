@@ -153,7 +153,8 @@ def changes_text(c: dict) -> str:
 # ---------------------------------------------------------------- 파생본용
 
 def transactions_for_projection(db: Db, *, generated_at: str, study_id: str, source_dataset_version: int, data_mode: str) -> dict | None:
-    """핵심·비교 범위의 취소 확정 아닌 거래 목록. 범위 규칙이 없거나 해당 거래가 없으면 None (파일을 만들지 않는다)."""
+    """핵심·비교 범위의 취소 확정 아닌 거래 목록. 범위 규칙이 없거나, 해당 거래도 수집 기록도 없으면 None (파일을 만들지 않는다).
+    거래가 0 건이어도 수집 기록이 있으면 빈 목록과 수집 개월을 싣는다: 폰이 수집했고 거래 없는 기간을 모름과 가른다 (리뷰 반영 PR #94)."""
     if not db._has_table("zone_rules") or current_rules(db) is None:
         return None
     rows = db.conn.execute(
@@ -169,13 +170,14 @@ def transactions_for_projection(db: Db, *, generated_at: str, study_id: str, sou
                       "scope": t["scope"], "link_status": t["link_status"], "asset_id": t["linked_asset_id"] if t["link_state"] == "confirmed" else None,
                       "link_basis": t["basis_kind"] if t["link_state"] == "confirmed" else None, "missing_from_provider": t["missing_since_run_id"] is not None,
                       "first_seen_run_id": t["first_seen_run_id"], "last_seen_run_id": t["last_seen_run_id"]})
-    if not items:
-        return None
     from j5.db.transactions import coverage_rows  # 순환 import 방지
+    cov = coverage_rows(db)
+    if not items and not cov:
+        return None
     rules = current_rules(db)
     # J5-047: 폰 필지 연도별 요약이 0 건과 미수집·범위 밖을 가르도록 수집 개월(시군구·연도)과 범위 규칙(법정동 이름 목록)을 함께 싣는다.
     # 거래 목록은 핵심·비교 범위만이므로, 범위 밖 법정동 필지의 거래 수는 폰에서 모름이다.
     return {"j5transactions": TRANSACTIONS_FILE_VERSION, "study_id": study_id, "data_mode": data_mode, "source_dataset_version": source_dataset_version,
             "generated_at": generated_at, "count": len(items), "note": "핵심·비교 범위의 거래(취소 확정 제외). asset_id 는 확정 연결만. 마스킹 지번은 제공자 표기 그대로",
             "zone_rule": {"version": rules["version"], "core": list(rules["core"]), "comparison": list(rules["comparison"])},
-            "coverage": coverage_rows(db), "transactions": items}
+            "coverage": cov, "transactions": items}
