@@ -332,7 +332,7 @@ def load_run(db: Db, data_home: Path, lawd_cd: str, run_id: str) -> RunLoadResul
                         " :run_id, :run_id, :missing_since, :obs_id, :obs_id, :content_hash, :data_mode, :now, :now, :zone, :zone_rule_version)",
                         {**norm, "transaction_id": tid, "provider": doc["provider"], "lawd_cd": lawd_cd, "deal_ymd": deal_ymd, "identity_hash": ih, "ordinal": ordinal,
                          "run_id": run_id, "obs_id": obs_id, "content_hash": ch, "data_mode": db.data_mode, "now": now, "missing_since": missing_since,
-                         "zone": classify(rules, norm["emd_name"]), "zone_rule_version": rules["version"] if rules else None})
+                         "zone": classify(rules, norm["emd_name"], lawd_cd), "zone_rule_version": rules["version"] if rules else None})
                     r.transactions_new += 1
                     if missing_since:
                         r.transactions_missing += 1

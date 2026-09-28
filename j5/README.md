@@ -286,9 +286,9 @@ python -m j5 collect rt-recheck --lawd-cd 11110 --recent 6 | --failed [--from 20
 python -m j5 db [--db 경로] rt-changes --lawd-cd 11110 --since-run <실행ID> [--zone core] [--json]
 ```
 
-- `rt-zones apply` 는 법정동 목록으로 핵심(core)·비교(comparison) 범위를 정한 규칙(`schemas/zone_rules.schema.json`)을 새 버전으로 넣고 모든 거래를 다시 분류한다(db_schema 8, `transactions.zone`). 규칙 밖 법정동은 outside 다. `rt-load` 는 현재 규칙으로 새 거래를 분류한다. 지번 단위 경계는 두지 않는다.
+- `rt-zones apply` 는 법정동 목록으로 핵심(core)·비교(comparison) 범위를 정한 규칙(`schemas/zone_rules.schema.json`)을 새 버전으로 넣고 모든 거래를 다시 분류한다(db_schema 8, `transactions.zone`). 규칙 밖 법정동은 outside 다. `rt-load` 는 현재 규칙으로 새 거래를 분류한다. 지번 단위 경계는 두지 않는다. 규칙 파일에 `lawd_cd`(시군구 5자리, J5-048)를 주면 그 시군구의 거래만 핵심·비교로 분류하고 다른 시군구의 같은 이름 법정동은 범위 밖으로 둔다. 여러 시군구의 거래를 모으는 정본에서는 넣기를 권한다. 없으면 이전처럼 이름으로만 본다(`rt-zones show` 에 "시군구: 정하지 않음"). 시군구만 바꿔도 새 규칙 판이 된다.
 - `rt-recheck` 는 취소·정정 점검용 재수집이다. `--recent N` 은 이번 달 포함 최근 N개월, `--failed` 는 실행 기록상 complete/empty 가 아닌 달을 다시 받는다. 반영은 `rt-load`, 변경은 `rt-changes` 로 본다(새 거래·취소로 바뀜·응답에서 사라짐). 사라짐은 취소 확정이 아니다.
-- `project` 의 파생본에 `transactions.json`(핵심·비교 범위의 취소 확정 아닌 거래, 확정 연결의 `asset_id`)이 들어간다. 범위 규칙이 없으면 파일이 없다. 범위 거래가 0 건이어도 수집 기록이 있으면 빈 목록과 수집 개월을 싣는다. J5-047 부터 `zone_rule`(현재 범위 규칙의 판·핵심·비교 법정동 이름)과 `coverage`(시군구·연도별 수집 개월: `months_complete` complete/empty 인 달, `months_any` 실행이 있는 달)도 싣는다. 폰 필지 이력의 연도별 요약이 0 건과 미수집·실패·범위 밖을 가르는 근거다. 게시 전 확인이 두 키의 형식을 검사하며, 두 키가 없는 이전 파일은 폰이 "수집 현황 모름" 으로 보인다.
+- `project` 의 파생본에 `transactions.json`(핵심·비교 범위의 취소 확정 아닌 거래, 확정 연결의 `asset_id`)이 들어간다. 범위 규칙이 없으면 파일이 없다. 범위 거래가 0 건이어도 수집 기록이 있으면 빈 목록과 수집 개월을 싣는다. J5-047 부터 `zone_rule`(현재 범위 규칙의 판·핵심·비교 법정동 이름·시군구 `lawd_cd`(J5-048, 없으면 null))과 `coverage`(시군구·연도별 수집 개월: `months_complete` complete/empty 인 달, `months_any` 실행이 있는 달)도 싣는다. 폰 필지 이력의 연도별 요약이 0 건과 미수집·실패·범위 밖을 가르는 근거다. 게시 전 확인이 두 키의 형식을 검사하며, 두 키가 없는 이전 파일은 폰이 "수집 현황 모름" 으로 보인다.
 - 운영 주기(데이터 사전 §7.1): 월 1회 `rt-recheck --recent 6` → `rt-load` → `rt-changes`, 분기 `rt-recheck --failed`, 연 1회 전 기간 `rt-fetch --refresh`.
 
 ## 목표 매수가·투자판단 기록과 당시 기록 기준 조회 (R4, J5-015A)

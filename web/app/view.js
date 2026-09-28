@@ -77,7 +77,8 @@ export function validateTransactionsDoc(doc) {
   // J5-047: 범위 규칙·수집 개월 (없으면 이전 형식: 폰 연도별 요약은 모름으로 표시)
   if (doc.zone_rule !== undefined) {
     const zr = doc.zone_rule;
-    if (!zr || typeof zr !== "object" || !Number.isInteger(zr.version) || !["core", "comparison"].every((k) => Array.isArray(zr[k]) && zr[k].every((x) => typeof x === "string"))) errs.push("zone_rule 형식");
+    if (!zr || typeof zr !== "object" || !Number.isInteger(zr.version) || !["core", "comparison"].every((k) => Array.isArray(zr[k]) && zr[k].every((x) => typeof x === "string"))
+        || !(zr.lawd_cd === undefined || zr.lawd_cd === null || (typeof zr.lawd_cd === "string" && /^\d{5}$/.test(zr.lawd_cd)))) errs.push("zone_rule 형식");
   }
   if (doc.coverage !== undefined) {
     const seen = new Set();
@@ -232,7 +233,8 @@ export function parcelYearSummary(feature, items, txDoc, prices = [], { maxYears
   const hasCoverage = !!txDoc && Array.isArray(txDoc.coverage);
   if (hasCoverage) for (const c of txDoc.coverage) if (c.lawd_cd === sgg) cov.set(c.year, c);
   const zr = txDoc?.zone_rule;
-  const inRange = zr ? zr.core.includes(props.emd_name) || zr.comparison.includes(props.emd_name) : null;
+  // 규칙에 시군구가 있으면 다른 시군구의 같은 이름 법정동은 범위 밖이다 (J5-048, PC zones.classify 와 같다)
+  const inRange = zr ? (!zr.lawd_cd || zr.lawd_cd === sgg) && (zr.core.includes(props.emd_name) || zr.comparison.includes(props.emd_name)) : null;
   const txByYear = new Map();
   for (const it of items) {
     if (it.kind !== "transaction" || !/^\d{4}$/.test(it.year)) continue;

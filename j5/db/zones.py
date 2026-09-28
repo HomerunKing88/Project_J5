@@ -58,7 +58,7 @@ def load_rules(path: Path) -> dict:
         raise ValidationError([f"같은 법정동이 핵심과 비교 둘 다에 있다: {overlap}"])
     if len(set(core)) != len(core) or len(set(comp)) != len(comp):
         raise ValidationError(["같은 법정동이 한 목록에 두 번 있다 (앞뒤 공백 차이 포함)"])
-    return {"kind": "zone_rules", "name": doc["name"].strip(), "core": core, "comparison": comp, "note": doc.get("note")}
+    return {"kind": "zone_rules", "name": doc["name"].strip(), "core": core, "comparison": comp, "lawd_cd": doc.get("lawd_cd"), "note": doc.get("note")}
 
 
 def current_rules(db: Db) -> dict | None:
@@ -66,12 +66,16 @@ def current_rules(db: Db) -> dict | None:
     if row is None:
         return None
     rules = json.loads(row["rules_json"])
-    return {"version": row["version"], "name": row["name"], "core": rules["core"], "comparison": rules["comparison"], "note": row["note"], "recorded_at": row["recorded_at"]}
+    return {"version": row["version"], "name": row["name"], "core": rules["core"], "comparison": rules["comparison"], "lawd_cd": rules.get("lawd_cd"),
+            "note": row["note"], "recorded_at": row["recorded_at"]}
 
 
-def classify(rules: dict | None, emd_name: str | None) -> str:
+def classify(rules: dict | None, emd_name: str | None, lawd_cd: str | None = None) -> str:
+    """법정동 이름으로 범위를 정한다. 규칙에 시군구(lawd_cd)가 있으면 다른 시군구의 거래는 이름이 같아도 범위 밖이다 (J5-048: 여러 지역 정본, ADR-23)."""
     if rules is None:
         return "unclassified"
+    if rules.get("lawd_cd") and lawd_cd != rules["lawd_cd"]:
+        return "outside"
     if emd_name in rules["core"]:
         return "core"
     if emd_name in rules["comparison"]:
@@ -85,7 +89,8 @@ def apply_rules(db: Db, rules: dict) -> ZoneApplyResult:
     now = db.now()
     with db.transaction():
         cur = current_rules(db)
-        if cur is not None and cur["core"] == rules["core"] and cur["comparison"] == rules["comparison"] and cur["name"] == rules["name"]:
+        if (cur is not None and cur["core"] == rules["core"] and cur["comparison"] == rules["comparison"] and cur["name"] == rules["name"]
+                and cur.get("lawd_cd") == rules.get("lawd_cd")):
             r.outcome = "unchanged"
             r.version = cur["version"]
             r.dataset_version = int(db.meta("dataset_version") or 0)
@@ -93,10 +98,12 @@ def apply_rules(db: Db, rules: dict) -> ZoneApplyResult:
             return r
         version = (cur["version"] + 1) if cur else 1
         db.conn.execute("INSERT INTO zone_rules (version, name, rules_json, note, recorded_at) VALUES (?, ?, ?, ?, ?)",
-                        (version, rules["name"], json.dumps({"core": rules["core"], "comparison": rules["comparison"]}, ensure_ascii=False, sort_keys=True), rules.get("note"), now))
-        for row in db.conn.execute("SELECT transaction_id, emd_name FROM transactions").fetchall():
+                        (version, rules["name"], json.dumps({"core": rules["core"], "comparison": rules["comparison"],
+                                                             **({"lawd_cd": rules["lawd_cd"]} if rules.get("lawd_cd") else {})}, ensure_ascii=False, sort_keys=True),
+                         rules.get("note"), now))
+        for row in db.conn.execute("SELECT transaction_id, emd_name, lawd_cd FROM transactions").fetchall():
             db.conn.execute("UPDATE transactions SET zone = ?, zone_rule_version = ?, updated_at = ? WHERE transaction_id = ?",
-                            (classify(rules, row["emd_name"]), version, now, row["transaction_id"]))
+                            (classify(rules, row["emd_name"], row["lawd_cd"]), version, now, row["transaction_id"]))
         r.version = version
         r.dataset_version = db.bump_dataset_version()
         r.counts_by_zone = zone_counts(db)
@@ -110,7 +117,8 @@ def zone_counts(db: Db) -> dict:
 def rules_text(rules: dict | None, counts: dict) -> str:
     if rules is None:
         return "범위 규칙 없음: 모든 거래가 unclassified 다. `j5 db rt-zones apply <규칙.json>` 으로 정한다 (schemas/zone_rules.schema.json)\n"
-    return (f"범위 규칙 v{rules['version']} '{rules['name']}' ({rules['recorded_at']})\n  핵심: {', '.join(rules['core'])}\n  비교: {', '.join(rules['comparison']) or '(없음)'}\n"
+    return (f"범위 규칙 v{rules['version']} '{rules['name']}' ({rules['recorded_at']})\n"
+            f"  시군구: {rules['lawd_cd'] + ' 만' if rules.get('lawd_cd') else '정하지 않음 (다른 시군구의 같은 이름 법정동도 범위에 든다)'}\n  핵심: {', '.join(rules['core'])}\n  비교: {', '.join(rules['comparison']) or '(없음)'}\n"
             f"  거래(취소 제외): 핵심 {counts.get('core', 0)}, 비교 {counts.get('comparison', 0)}, 범위 밖 {counts.get('outside', 0)}, 미분류 {counts.get('unclassified', 0)}\n")
 
 
@@ -179,5 +187,5 @@ def transactions_for_projection(db: Db, *, generated_at: str, study_id: str, sou
     # 거래 목록은 핵심·비교 범위만이므로, 범위 밖 법정동 필지의 거래 수는 폰에서 모름이다.
     return {"j5transactions": TRANSACTIONS_FILE_VERSION, "study_id": study_id, "data_mode": data_mode, "source_dataset_version": source_dataset_version,
             "generated_at": generated_at, "count": len(items), "note": "핵심·비교 범위의 거래(취소 확정 제외). asset_id 는 확정 연결만. 마스킹 지번은 제공자 표기 그대로",
-            "zone_rule": {"version": rules["version"], "core": list(rules["core"]), "comparison": list(rules["comparison"])},
+            "zone_rule": {"version": rules["version"], "core": list(rules["core"]), "comparison": list(rules["comparison"]), "lawd_cd": rules.get("lawd_cd")},
             "coverage": cov, "transactions": items}

@@ -46,7 +46,7 @@ def test_coverage_and_zone_rule_in_transactions_file(db, home, server, tmp_path)
     out = home / r.output_dir
     tx = json.loads((out / "transactions.json").read_text(encoding="utf-8"))
     assert tx["coverage"] == coverage_rows(db)
-    assert tx["zone_rule"] == {"version": 1, "core": ["종로5가", "종로6가", "효제동"], "comparison": ["예지동", "장사동"]}
+    assert tx["zone_rule"] == {"version": 1, "core": ["종로5가", "종로6가", "효제동"], "comparison": ["예지동", "장사동"], "lawd_cd": None}, "시군구를 정하지 않은 규칙 (J5-048)"
     for bad, code in ((lambda t: t.update(coverage=[{"lawd_cd": "11110", "year": 2026, "months_complete": 3, "months_any": 2}]), "verify_transactions_coverage"),
                       (lambda t: t.update(coverage=[t["coverage"][0], t["coverage"][0]]), "verify_transactions_coverage"),
                       (lambda t: t.update(coverage=[{"lawd_cd": "1111", "year": 2026, "months_complete": 1, "months_any": 1}]), "verify_transactions_coverage"),

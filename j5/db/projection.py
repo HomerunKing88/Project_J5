@@ -241,7 +241,9 @@ def _generate(snapshot: dict, out: Path, *, photos: bool, data_home: Path, run_i
 def _verify_tx_extras(tx: dict) -> None:
     """transactions.json 의 범위 규칙·수집 개월 (J5-047). 없으면 이전 형식으로 본다(폰은 모름으로 표시)."""
     zr = tx.get("zone_rule")
-    if zr is not None and not (isinstance(zr, dict) and isinstance(zr.get("version"), int) and all(isinstance(zr.get(k), list) and all(isinstance(x, str) for x in zr[k]) for k in ("core", "comparison"))):
+    lawd_ok = zr is None or not isinstance(zr, dict) or zr.get("lawd_cd") is None or (isinstance(zr["lawd_cd"], str) and len(zr["lawd_cd"]) == 5 and zr["lawd_cd"].isdigit())
+    if zr is not None and not (isinstance(zr, dict) and isinstance(zr.get("version"), int) and lawd_ok
+                               and all(isinstance(zr.get(k), list) and all(isinstance(x, str) for x in zr[k]) for k in ("core", "comparison"))):
         raise ProjectionError("verify_transactions_zone_rule", "transactions.json 의 zone_rule 형식이 맞지 않는다")
     cov = tx.get("coverage")
     if cov is None:

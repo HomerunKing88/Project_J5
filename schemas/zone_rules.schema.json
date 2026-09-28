@@ -19,6 +19,10 @@
       "type": "array", "maxItems": 500, "uniqueItems": true,
       "items": { "type": "string", "minLength": 1, "maxLength": 50 }
     },
+    "lawd_cd": {
+      "description": "규칙을 적용할 시군구 코드 5자리 (J5-048, 선택). 주면 이 시군구의 거래만 핵심·비교로 분류하고 다른 시군구의 같은 이름 법정동은 범위 밖으로 둔다. 없으면 시군구와 무관하게 이름으로만 본다(이전 규칙)",
+      "type": ["string", "null"], "pattern": "^[0-9]{5}$"
+    },
     "note": { "type": ["string", "null"], "maxLength": 2000 }
   }
 }
