@@ -61,6 +61,8 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_response(403); self.send_header("Content-Type", "application/xml"); self.end_headers(); self.wfile.write(body); return
         if sc["kind"] == "api_error":
             data = xml_page([], 0, page, rows, code="99", msg="APPLICATION ERROR")
+        elif sc["kind"] == "stuck_page":   # pageNo 를 무시하고 늘 1페이지를 준다
+            data = xml_page(sc["items"][:rows], len(sc["items"]), 1, rows)
         elif sc["kind"] == "short_pages":
             data = xml_page(sc["items"] if page == 1 else [], sc["claimed_total"], page, rows)
         else:
@@ -115,8 +117,9 @@ def test_collect_outcomes_raw_paths_and_no_key(server, home):
         (P2, "getBrTitleInfo"): {"kind": "short_pages", "items": [title_item(9)], "claimed_total": 7},
         (P2, "getBrRecapTitleInfo"): {"kind": "api_error"},
         (PM, "getBrTitleInfo"): {"kind": "forbidden"},
+        (P1, "getBrFlrOulnInfo"): {"kind": "stuck_page", "items": [title_item(i) for i in range(4)]},
     }
-    run = BR.collect_buildings(home, key=KEY, key_source="config", pnus=[P1, P2, PM], ops=["title", "recap"], endpoint_base=server, num_rows=2, sleep=lambda s: None)
+    run = BR.collect_buildings(home, key=KEY, key_source="config", pnus=[P1, P2, PM], ops=["title", "recap", "floor"], endpoint_base=server, num_rows=2, sleep=lambda s: None)
     got = {(t.pnu, t.op): t for t in run.targets}
     assert got[(P1, "title")].outcome == "complete" and got[(P1, "title")].items == 5 and len(got[(P1, "title")].pages) == 3
     assert got[(P1, "recap")].outcome == "empty" and "API 실패가 아님" in got[(P1, "recap")].message
@@ -125,6 +128,9 @@ def test_collect_outcomes_raw_paths_and_no_key(server, home):
     fb = got[(PM, "title")]
     assert fb.outcome == "failed" and fb.pages[0].http_status == 403 and "SERVICE_ACCESS_DENIED_ERROR" in fb.pages[0].error
     assert got[(PM, "recap")].outcome == "empty", "하나가 실패해도 다음 대상을 계속한다"
+    st = got[(P1, "floor")]
+    assert st.outcome == "failed" and st.items == 2 and len(st.pages) == 2 and "pageNo 1" in st.pages[1].error, \
+        "앞 페이지를 되풀이하는 응답은 더하지 않고 실패로 둔다 (겹친 행으로 complete 가 되지 않게, 리뷰 반영 PR #81)"
     assert not run.ok
     # 원본 경로: raw/br_hub/<PNU>/<키>/pNNN-<실행>.xml, 오류 본문은 가려서 .txt
     assert (home / "raw" / "br_hub" / P1 / "title" / f"p003-{run.run_id}.xml").is_file()
@@ -135,7 +141,7 @@ def test_collect_outcomes_raw_paths_and_no_key(server, home):
     for form in (KEY, "abcDEF123%2B%2F%3D", "abcDEF123%2b%2f%3d"):
         assert form not in everything, "기록·요약·로그·오류 본문에 키가 없다"
     rec = json.loads((home / run.run_path).read_text(encoding="utf-8"))
-    assert rec["provider"] == BR.PROVIDER and {t["operation"] for t in rec["targets"]} == {"getBrTitleInfo", "getBrRecapTitleInfo"}
+    assert rec["provider"] == BR.PROVIDER and {t["operation"] for t in rec["targets"]} == {"getBrTitleInfo", "getBrRecapTitleInfo", "getBrFlrOulnInfo"}
     assert all(t["pages"][0]["url_redacted"].count("serviceKey=<redacted>") == 1 for t in rec["targets"])
     # 요약: 오퍼레이션별 결과 수·필드 채움. 긴 글(주소)의 값은 싣지 않고 짧은 분류 값은 싣는다
     rep = json.loads((home / run.report_path).read_text(encoding="utf-8"))
