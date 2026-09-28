@@ -196,6 +196,7 @@ python -m j5 db [--db 경로] parcels-load <번들.j5parcels.json> [--json]
 python -m j5 db [--db 경로] parcels-suggest [--out 제안.json] [--effective-from YYYY-MM-DD]
 python -m j5 db [--db 경로] parcels-link <제안.json> [--json]
 python -m j5 db [--db 경로] parcels-history <PNU> [--json]
+python -m j5 db [--db 경로] parcels-years [--pnu PNU,…] [--csv 찾은필지.csv] [--watchlist] [--from 2016] [--to 2026] [--out 표.csv] [--json]
 python -m j5 db [--db 경로] parcels-find [--zone com] [--area-min ㎡] [--area-max ㎡] [--price-min 만원] [--price-max 만원] [--owner 개인] [--restricted] [--assets none|any|watch] [--limit 50] [--csv 경로] [--json]
 python -m j5 db [--db 경로] asset-from-parcels (--pnu PNU[,PNU…] | --csv 후보.csv) [--track watch] [--reason 사유] [--effective-from YYYY-MM-DD] [--dry-run] [--json]
 python -m j5 db [--db 경로] phone-scope [--emd 코드[,코드…]] [--all] [--json]
@@ -207,6 +208,7 @@ python -m j5 db [--db 경로] phone-scope [--emd 코드[,코드…]] [--all] [--
 - 조건으로 필지 찾기(J5-037): `parcels-find` 는 폰 조건 찾기와 같은 규칙으로 정본 필지 속성을 거른다. 조건은 용도지역 분류·공부면적·공시지가(만원/㎡ 입력)·소유구분·저촉 규제·물건 조건이다. 물건 조건의 기준은 오늘 유효한 정본 연결 또는 위치점 포함이고, 관찰목록은 watch·detailed_review·purchase_ready 다. 값이 없는 필지는 맞는 것으로 보지 않고 조건마다 따로 센다. 화면에는 공부면적 큰 순 앞 `--limit` 줄을 보인다. `--csv` 는 전부를 저장하고 결측은 빈 칸으로 둔다(덮어쓰지 않음). 정본에 쓰지 않으며 매입 가능성·규제 판단이 아니다.
 - 공시지가 추이(J5-030): `parcels-history <PNU>` 는 토지특성 스냅샷에서 공시지가가 바뀐 지점(기준연월·원/㎡·직전 대비 증감률·확인 기준일)을 보이고, 같은 기준연월에서 값이 바뀐 경우 정정 여부 확인을 적는다. `--json` 의 `price_series`. 폰 필지 패널의 공시지가 추이와 같은 규칙이다. 값은 자료 그대로이며 시세·가치 판단이 아니다.
 - 필지 이력의 실거래(J5-043): `parcels-history <PNU>` 는 이 필지에 닿는 정본 거래를 계약연도별로(최근 먼저) 함께 보인다. 같은 필지(법정동 이름·지번 일치), 번지대(지번 마스킹이 자릿수 범위 안, 필지 미확정: `1**` 는 본번 세 자리·부번 0, `16*-3`), 연결 물건의 거래(이 필지에 지금 연결된 물건에 확정 연결된 거래는 지번이 닿지 않아도)로 나눈다. 지번 대조는 `rt-candidates` 와 같고 폰 필지 이력과도 같다. 취소 확정 거래는 목록에서 빼고 수만 적는다. 폰 파생본(핵심·비교 범위만)과 달리 범위와 무관하게 정본의 거래를 모두 본다. 거래의 시군구 코드와 필지 PNU 앞 5자리가 다르면 이름·지번이 같아도 넣지 않고 "다른 시군구의 같은 이름 법정동 n건 제외" 로 수만 적는다(J5-044). 사람이 확정 연결한 거래는 시군구가 달라도 연결 물건의 거래로 들고 줄에 "시군구 코드 다름" 을 적는다. `--json` 에 `transactions`·`transactions_cancelled`·`transactions_other_sgg`·`years`. 번지대 거래를 이 필지의 거래로 확정하지 않으며 정본에 쓰지 않는다.
+- 여러 필지의 연도별 표(J5-045): `parcels-years` 는 대상 필지(`--pnu`, `parcels-find --csv` 의 파일, `--watchlist` 관찰목록 물건에 오늘 연결된 필지, 한 번에 500필지)마다 연도마다 한 줄을 낸다. 열: 그 연도 기준 공시지가(같은 기준연도 값이 바뀌었으면 나중 값과 `price_corrected`)·전년 대비(두 해 값이 있을 때만)·자료 없음 사유 `no_snapshot`, 그 필지 시군구의 그 연도 거래 수집 개월(`rt_months_complete` 완전·빈 결과, `rt_months_any` 결과 무관), 필지 이력과 같은 규칙의 거래 수(같은 필지·번지대·연결 물건)와 같은 필지의 마지막 거래일·금액, 소유 변동일(그 연도의 날짜, `ownership_snapshot` 이 0 이면 소유 자료 없음). 완전 수집한 달이 없는 연도의 거래 수는 빈 칸과 사유(`not_collected` 실행 없음, `collection_incomplete` 실패·부분만)이며 0 건이 아니다. 기본 범위는 공시지가·거래·수집이 있는 첫 해부터 올해(또는 자료의 마지막 해)까지, 최대 40개 연도. `--out` 은 덮어쓰지 않는다. 정본에 쓰지 않으며 값은 자료 그대로이고 시세·가치 판단이 아니다.
 
 ## 배경 도형 번들: 도로·건물 윤곽·도로명 (J5-022, ADR-16)
 
