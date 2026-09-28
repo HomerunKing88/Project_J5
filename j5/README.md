@@ -227,6 +227,20 @@ python -m j5 collect rt-report --lawd-cd 11110 --months 2026-08,2021-09,2006-03 
 - `rt-report` 는 그 실행의 기록 파일에서 totalCount·수집 결과를 함께 보인다. `--dist FIELD` 를 주면 그 필드는 값 종류가 20개를 넘어도 전체 분포를 보인다(법정동별 건수 등).
 - 나에게 보낼 것은 `rt-report` 의 요약(또는 `report-*.json`)이다. 원본 행·인증키는 보내지 않는다.
 
+## 건축물대장 표본 수집 (R2, J5-034)
+
+```text
+python -m j5 collect br-sample [--pnu PNU[,PNU…]]… [--linked [--db 경로]] [--ops basis,recap,title,floor,atch] [--endpoint-base URL] [--num-rows 100] [--max-pages 20] [--data-home] [--config] [--json]
+python -m j5 collect br-report [--run-id] [--json]
+```
+
+- 공공데이터포털의 국토교통부 건축HUB 건축물대장정보 서비스를 따로 활용신청해야 한다(실거래 API 승인과 별개). 인증키는 실거래와 같은 `config.env` 의 `DATA_GO_KR_SERVICE_KEY` 에서만 읽는다.
+- 대상은 지정한 필지뿐이다: `--pnu` 로 준 PNU 와 `--linked`(정본의 현재 물건↔필지 연결, 읽기 전용으로 연다). 한 번에 50필지까지. PNU 는 시군구·법정동·대지구분(산 구분 1→0, 2→1)·본번·부번으로 나눠 요청한다.
+- 오퍼레이션 키: `basis` 기본개요, `recap` 총괄표제부, `title` 표제부, `floor` 층별개요, `atch` 부속지번(기본 다섯), `expos` 전유부, `area` 전유공용면적, `zone` 지역지구구역. 소유자 정보는 요청하지 않는다.
+- 원본은 `raw/br_hub/<PNU>/<키>/pNNN-<실행>.xml` 에 그대로, 기록은 `raw/br_hub/run-<실행>.json`, 요약은 `report-<실행>.json`. 필지·오퍼레이션마다 `complete / empty(정상 0건) / partial / failed` 로 구분하고 HTTP 오류 본문(거절 사유)은 가려서 `.txt` 로 둔다. 정본에는 쓰지 않는다.
+- 기본 주소 `https://apis.data.go.kr/1613000/BldRgstHubService` 와 오퍼레이션 이름은 코드에 적은 알려진 값이며 실제 응답으로 확인하기 전까지 가정이다. API 상세 페이지의 요청주소와 다르면 `--endpoint-base` 로 준다.
+- 나에게 보낼 것은 `br-report` 의 요약이다. 요약은 오퍼레이션별 결과 수·필드 채움 비율과, 값 종류 20개 이하이면서 12자 이하인 값의 분포만 담는다(주소·건물명 같은 긴 글은 싣지 않는다). 원본 행·인증키는 보내지 않는다.
+
 ## 거래 범위 수집·정본 반영·현황 (R3, J5-014B-1)
 
 ```text

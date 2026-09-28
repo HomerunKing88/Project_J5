@@ -1,5 +1,5 @@
 """j5 명령줄. inspect(패키지 검사), copy(독립 사본), db(정본 SQLite: init/status/load-seed/import/project/backup/restore/check-photos/ops-check/archive/survey-*),
-view(조회 파생본 열람: inspect), parcels(연속지적도 SHP → 필지 번들: inspect/convert), collect(공식 API 수집: rt-sample/rt-report).
+view(조회 파생본 열람: inspect), parcels(연속지적도 SHP → 필지 번들: inspect/convert), collect(공식 API 수집: rt-sample/rt-report/br-sample/br-report).
 
 종료 코드: 0 ok·반영·중복 / 1 reject·실패 / 2 hold·보류 / 3 사용 오류.
 """
@@ -17,7 +17,7 @@ from j5 import APP_VERSION
 from j5.db.backup import EXIT_BY_OUTCOME as BACKUP_EXIT, BackupError, check_photos, check_photos_text, create_backup, restore_backup, verify_backup_dir
 from j5.db.importer import EXIT_BY_OUTCOME, import_package
 from j5.db.ingest import ingest_vworld
-from j5.db.parcels import BUNDLE_SCHEMA as PARCELS_BUNDLE_SCHEMA, LINKS_SCHEMA as PARCELS_LINKS_SCHEMA, apply_links, attribute_history, history_text, load_bundle, load_json as load_parcels_json, suggest_links
+from j5.db.parcels import BUNDLE_SCHEMA as PARCELS_BUNDLE_SCHEMA, LINKS_SCHEMA as PARCELS_LINKS_SCHEMA, active_links, apply_links, attribute_history, history_text, load_bundle, load_json as load_parcels_json, suggest_links
 from j5.db.projection import EXIT_BY_OUTCOME as PROJECT_EXIT, ProjectionError, build_projection, copy_latest
 from j5.db.store import Db, DbError, default_db_path
 from j5.db.survey import apply_input, compare, compare_text, load_input, overview, overview_text, vacancy, vacancy_text
@@ -25,6 +25,7 @@ from j5.db.validate import ValidationError
 from j5.package.preserve import PreserveError, copy_package
 from j5.package.validate import inspect_package
 from j5.collect.config import ConfigError, config_permission_warning, load_config, redact, service_key
+from j5.collect import br as BR
 from j5.collect.rt import DEFAULT_ENDPOINT, DEFAULT_MAX_PAGES, DEFAULT_NUM_ROWS, CollectError, check_lawd, collect_months, month_range, months_done_on_disk, parse_months, recent_months, report_from_raw, report_text, run_text
 from j5.db.transactions import coverage, coverage_text, load_run, unloaded_run_ids
 from j5.db.txlinks import apply_decisions, candidates, candidates_csv, candidates_text, read_decisions_csv
@@ -350,6 +351,21 @@ def _build_parser() -> argparse.ArgumentParser:
     cr.add_argument("--run-id", help="특정 실행의 파일만")
     cr.add_argument("--dist", action="append", default=[], metavar="FIELD", help="이 필드는 값 종류 수와 무관하게 전체 분포를 보인다 (예: --dist umdNm). 반복 가능")
     cr.add_argument("--json", action="store_true")
+    bs = csub.add_parser("br-sample", help="건축물대장 API(건축HUB)를 지정한 필지마다 불러 원본 응답과 요약을 남긴다 (J5-034 실측). 정본에 쓰지 않는다")
+    bs.add_argument("--pnu", action="append", default=[], metavar="PNU[,PNU…]", help="대상 필지 PNU 19자리. 반복 가능")
+    bs.add_argument("--linked", action="store_true", help="정본의 현재 물건↔필지 연결의 필지를 대상에 더한다 (정본은 읽기 전용으로 연다)")
+    bs.add_argument("--db", type=Path, help="--linked 의 정본. 생략 시 J5_DATA_HOME/db/j5.sqlite3")
+    bs.add_argument("--ops", help=f"오퍼레이션 키 목록 (기본 {','.join(BR.DEFAULT_OPS)}. 가능: {','.join(BR.OPERATIONS)})")
+    bs.add_argument("--data-home", type=Path, help="원본·기록·요약을 둘 실데이터 홈. 생략 시 J5_DATA_HOME")
+    bs.add_argument("--config", type=Path, help="인증키가 있는 env 파일. 생략 시 J5_DATA_HOME/config.env")
+    bs.add_argument("--endpoint-base", default=BR.DEFAULT_ENDPOINT_BASE, help="API 기본 주소 (오퍼레이션 이름 앞까지). 공공데이터포털 API 상세 페이지의 값과 대조한다")
+    bs.add_argument("--num-rows", type=int, default=BR.DEFAULT_NUM_ROWS, help="페이지당 행 수 (1~100)")
+    bs.add_argument("--max-pages", type=int, default=BR.DEFAULT_MAX_PAGES, help="필지·오퍼레이션당 최대 페이지 (1~100)")
+    bs.add_argument("--json", action="store_true")
+    br_ = csub.add_parser("br-report", help="저장된 건축물대장 원본만으로 요약을 다시 만든다 (네트워크 없음)")
+    br_.add_argument("--data-home", type=Path)
+    br_.add_argument("--run-id", help="특정 실행 (생략 시 가장 최근)")
+    br_.add_argument("--json", action="store_true")
     return p
 
 
@@ -870,10 +886,57 @@ def _parcels_main(args) -> int:
     return USAGE_ERROR
 
 
+def _collect_br(args, home: Path) -> int:
+    """건축물대장 표본 수집·재요약 (J5-034). 대상은 지정한 필지만."""
+    try:
+        if args.collect_command == "br-report":
+            rep = BR.report_from_raw(home, args.run_id)
+            sys.stdout.write(json.dumps(rep, ensure_ascii=False, indent=2) + "\n" if args.json else BR.report_text(rep))
+            return 0
+        pnus = BR.parse_pnus(args.pnu)
+        ops = BR.parse_ops(args.ops)
+        if args.linked:
+            path = _db_path(args)
+            if path is None:
+                return USAGE_ERROR
+            try:
+                db = Db.open_readonly(path)
+            except DbError as e:
+                print(f"정본 오류 [{e.code}]: {e.message}", file=sys.stderr)
+                return 1
+            try:
+                linked = sorted({lk["pnu"] for lk in active_links(db, on_date=db.now()[:10])})
+            finally:
+                db.close()
+            pnus += [p for p in linked if p not in pnus]
+            print(f"정본의 현재 물건↔필지 연결 {len(linked)}필지를 대상에 넣었다", file=sys.stderr)
+        if not pnus:
+            print("대상 필지가 없다: --pnu 또는 --linked 를 준다", file=sys.stderr)
+            return USAGE_ERROR
+        key, source = service_key(home, config_path=args.config)
+        warn = config_permission_warning(load_config(home, path=args.config)[1])
+        if warn:
+            print(f"주의: {warn}", file=sys.stderr)
+        print(f"건축물대장 수집 시작: {len(pnus)}필지 × {len(ops)}오퍼레이션({', '.join(ops)}), 인증키 출처 {source}."
+              f" 이 호출은 공공데이터포털 일일 트래픽을 약 {len(pnus) * len(ops)}회 이상 쓴다.", file=sys.stderr)
+        run = BR.collect_buildings(home, key=key, key_source=source, pnus=pnus, ops=ops, endpoint_base=args.endpoint_base, num_rows=args.num_rows, max_pages=args.max_pages)
+        text_ = json.dumps(run.to_dict(), ensure_ascii=False, indent=2) + "\n" if args.json else BR.run_text(run) + f"다음: `j5 collect br-report --run-id {run.run_id}` 의 요약을 공유한다.\n"
+        sys.stdout.write(redact(text_, key))
+        return 0 if run.ok else 1
+    except ConfigError as e:
+        print(f"설정 오류 [{e.code}]: {e.message}", file=sys.stderr)
+        return USAGE_ERROR
+    except CollectError as e:
+        print(f"수집 실패 [{e.code}]: {e.message}", file=sys.stderr)
+        return USAGE_ERROR if e.code in ("bad_pnu", "bad_op", "bad_paging", "bad_endpoint", "too_many_pnus", "no_pnu") else 1
+
+
 def _collect_main(args) -> int:
     home = _data_home(args)
     if home is None:
         return USAGE_ERROR
+    if args.collect_command in ("br-sample", "br-report"):
+        return _collect_br(args, home)
     try:
         lawd = check_lawd(args.lawd_cd)
         if args.collect_command == "rt-recheck":
