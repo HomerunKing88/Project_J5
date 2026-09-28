@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,6 +22,9 @@ from pathlib import Path
 from j5.db.store import Db, DbError
 from j5.db.validate import ValidationError, parse_date
 from j5.parcels.convert import MAX_FEATURES, point_in_ring
+
+CANONICAL_MAX_PARCELS = 100_000   # 정본 상한 (J5-039, ADR-23): 여러 지역을 담는다. 폰 파생본은 MAX_FEATURES 와 폰 범위로 따로 줄인다
+PHONE_SCOPE_KEY = "phone_parcel_scope"
 from j5.schemas_loader import schema_errors
 
 BUNDLE_SCHEMA = "parcels_bundle.schema.json"
@@ -295,8 +299,8 @@ def load_bundle(db: Db, doc: dict) -> ParcelLoadResult:
         changed = any(a in ("insert", "update") for a, *_ in plan) or any(a in ("insert", "update") for a, *_ in attrs_plan) or bool(snap_plan)
         n_insert = sum(1 for a, *_ in plan if a == "insert")
         total_after = db.conn.execute("SELECT COUNT(*) FROM parcels").fetchone()[0] + n_insert
-        if total_after > MAX_FEATURES:
-            raise DbError("parcels_limit", f"반영 후 정본 필지가 {total_after}개로 파생본·폰 상한 {MAX_FEATURES}개를 넘는다. 조사 범위를 좁힌 번들로 다시 만든다 (정본은 바꾸지 않았다)")
+        if total_after > CANONICAL_MAX_PARCELS:
+            raise DbError("parcels_limit", f"반영 후 정본 필지가 {total_after}개로 정본 상한 {CANONICAL_MAX_PARCELS}개를 넘는다. 조사 범위를 좁힌 번들로 다시 만든다 (정본은 바꾸지 않았다)")
         # 2) 출처 문서를 먼저 남기고(필지 행이 참조), 필지를 반영한다
         if changed:
             db.add_source_document({"document_id": doc_id, "document_kind": "official_file", "title": f"{src['name']} (도형 기준일 {src['geometry_version']}, {src['file']})",
@@ -591,10 +595,74 @@ def history_text(h: dict) -> str:
 
 # ---------------------------------------------------------------- 파생본용 조회
 
+# ---------------------------------------------------------------- 폰 파생본 필지 범위 (J5-039, ADR-23)
+# 정본은 여러 지역의 필지를 담는다(CANONICAL_MAX_PARCELS). 폰 파생본(parcels.geojson)은 폰 상한 MAX_FEATURES 안에서
+# 설정한 법정동 범위(meta phone_parcel_scope)의 필지와, 범위 밖이어도 물건이 연결된 필지를 싣는다. 범위를 정하지 않으면 전체다.
+
+def phone_scope(db: Db) -> list[str] | None:
+    """폰 파생본에 실을 법정동 코드 목록. 정하지 않았으면 None (전체)."""
+    raw = db.meta(PHONE_SCOPE_KEY)
+    if not raw:
+        return None
+    doc = json.loads(raw)
+    return list(doc.get("emd_codes") or []) or None
+
+
+def set_phone_scope(db: Db, emd_codes: list[str] | None) -> dict:
+    """폰 파생본 범위를 정한다. None 이면 전체로 되돌린다. 정본에 없는 법정동 코드는 거절한다. 정본 자료는 바꾸지 않으므로 dataset_version 을 올리지 않는다
+    (파생본은 매번 전량 생성하므로 다음 `project` 부터 반영된다)."""
+    codes = sorted(dict.fromkeys(c.strip() for c in (emd_codes or []) if c.strip())) or None
+    if codes:
+        bad = [c for c in codes if not re.fullmatch(r"\d{10}", c)]
+        if bad:
+            raise ValidationError([f"법정동 코드는 10자리 숫자: {', '.join(bad[:5])}"])
+        have = {r[0] for r in db.conn.execute(f"SELECT DISTINCT emd_code FROM parcels WHERE emd_code IN ({','.join('?' * len(codes))})", codes)}
+        missing = [c for c in codes if c not in have]
+        if missing:
+            raise ValidationError([f"정본 필지에 없는 법정동 코드: {', '.join(missing[:5])}. `db phone-scope` 로 법정동별 필지 수를 본다"])
+    with db.transaction():
+        if codes:
+            db.set_meta(PHONE_SCOPE_KEY, json.dumps({"emd_codes": codes}, ensure_ascii=False))
+        else:
+            db.conn.execute("DELETE FROM meta WHERE key = ?", (PHONE_SCOPE_KEY,))
+    return scope_overview(db)
+
+
+def scope_overview(db: Db) -> dict:
+    """법정동별 정본 필지 수와 현재 폰 범위, 범위를 적용했을 때 폰에 실릴 필지 수(연결 필지 포함)."""
+    codes = phone_scope(db)
+    by_emd = [{"emd_code": r[0], "emd_name": r[1], "parcels": r[2], "in_scope": codes is None or r[0] in codes}
+              for r in db.conn.execute("SELECT emd_code, MAX(emd_name), COUNT(*) FROM parcels GROUP BY emd_code ORDER BY emd_code")]
+    selected = len(_phone_parcel_pnus(db, codes, db.now()[:10]))
+    total = sum(e["parcels"] for e in by_emd)
+    return {"scope": codes, "total_parcels": total, "phone_parcels": selected, "phone_limit": MAX_FEATURES, "by_emd": by_emd}
+
+
+def _phone_parcel_pnus(db: Db, codes: list[str] | None, on_date: str) -> set[str]:
+    if codes is None:
+        return {r[0] for r in db.conn.execute("SELECT pnu FROM parcels")}
+    inside = {r[0] for r in db.conn.execute(f"SELECT pnu FROM parcels WHERE emd_code IN ({','.join('?' * len(codes))})", codes)}
+    return inside | {l["pnu"] for l in active_links(db, on_date)}
+
+
+def scope_text(o: dict) -> str:
+    scope = "전체 (범위를 정하지 않음)" if o["scope"] is None else ", ".join(o["scope"])
+    lines = [f"폰 파생본 필지 범위: {scope}", f"정본 필지 {o['total_parcels']}개 · 폰에 실릴 필지 {o['phone_parcels']}개 (범위 안 + 물건이 연결된 필지) · 폰 상한 {o['phone_limit']}개"]
+    for e in o["by_emd"]:
+        lines.append(f"  {'*' if e['in_scope'] else ' '} {e['emd_code']} {e['emd_name'] or ''} · {e['parcels']}필지")
+    if o["phone_parcels"] > o["phone_limit"]:
+        lines.append(f"폰 상한을 넘어 `project` 가 실패한다. `db phone-scope --emd <코드,…>` 로 범위를 좁힌다")
+    return "\n".join(lines) + "\n"
+
+
 def parcels_bundle_from_db(db: Db, *, generated_at: str, source_dataset_version: int | None = None) -> dict | None:
-    """정본 parcels 전체를 폰이 읽는 번들 형식(j5parcels 1.0.0)으로. 필지가 없으면 None. 물건 연결은 feature.properties.asset_ids (유효한 연결만).
+    """정본 parcels 를 폰이 읽는 번들 형식(j5parcels 1.0.0)으로. 필지가 없으면 None. 물건 연결은 feature.properties.asset_ids (유효한 연결만).
+    폰 범위(phone_scope)를 정했으면 그 법정동의 필지와 물건이 연결된 필지만 싣고 warnings 에 적는다 (J5-039). 정하지 않았으면 전체.
     출처 요약은 가장 최근 도형 기준일의 출처를 쓰고, 다른 출처가 섞여 있으면 warnings 에 적는다."""
-    rows = [dict(r) for r in db.conn.execute("SELECT * FROM parcels ORDER BY pnu")]
+    all_count = db.conn.execute("SELECT COUNT(*) FROM parcels").fetchone()[0]
+    codes = phone_scope(db)
+    keep = _phone_parcel_pnus(db, codes, generated_at[:10])
+    rows = [dict(r) for r in db.conn.execute("SELECT * FROM parcels ORDER BY pnu") if r["pnu"] in keep]
     if not rows:
         return None
     attrs_by_id: dict[str, dict] = {}
@@ -635,6 +703,8 @@ def parcels_bundle_from_db(db: Db, *, generated_at: str, source_dataset_version:
     latest = max(rows, key=lambda p: (p["geometry_version"], p["updated_at"]))
     sources = sorted({(p["source_name"], p["geometry_version"]) for p in rows})
     warnings = []
+    if codes is not None:
+        warnings.append(f"폰 범위: 정본 필지 {all_count}개 중 법정동 {', '.join(codes)} 과 물건이 연결된 필지 {len(rows)}개만 실었다")
     if len(sources) > 1:
         warnings.append("출처·도형 기준일이 섞여 있다: " + "; ".join(f"{n} {v}" for n, v in sources))
     bboxes = [json.loads(p["bbox_json"]) for p in rows]

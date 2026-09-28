@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from j5.db.parcels import parcels_bundle_from_db
+from j5.parcels.convert import MAX_FEATURES as PARCELS_PHONE_LIMIT
 from j5.db.store import Db
 from j5.package.preserve import PreserveError, copy_package
 from j5.schemas_loader import schema_errors
@@ -112,6 +113,10 @@ def _read_snapshot(db: Db, *, generated_at: str) -> dict:
         for r in db.conn.execute("SELECT record_id, sha256, mime, bytes, tags_json, taken_at, rel_path, viewpoint_id, heading_deg, previous_photo_sha256 FROM attachments ORDER BY record_id, sha256"):
             atts.setdefault(r["record_id"], []).append(dict(r))
         parcels = parcels_bundle_from_db(db, generated_at=generated_at, source_dataset_version=version) if db._has_table("parcels") else None
+        if parcels is not None and parcels["count"] > PARCELS_PHONE_LIMIT:
+            # 정본은 폰 상한보다 많은 필지를 담을 수 있다 (J5-039, ADR-23). 폰에 실을 범위를 좁히기 전에는 게시하지 않고 이전본을 유지한다
+            raise ProjectionError("parcels_phone_limit", f"폰에 실을 필지가 {parcels['count']}개로 폰 상한 {PARCELS_PHONE_LIMIT}개를 넘는다."
+                                                         " `db phone-scope --emd <법정동 코드,…>` 로 범위를 정한 뒤 다시 만든다")
         from j5.db.zones import transactions_for_projection  # 순환 import 방지
         transactions = (transactions_for_projection(db, generated_at=generated_at, study_id=db.meta("study_id") or "", source_dataset_version=version, data_mode=db.data_mode)
                         if db._has_table("transactions") else None)

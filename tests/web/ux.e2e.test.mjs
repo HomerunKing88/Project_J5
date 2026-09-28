@@ -26,7 +26,7 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
       const origAdd = IDBObjectStore.prototype.add;
       IDBObjectStore.prototype.add = function (v, k) { if (this.name === 'events' && window.__failSave) throw new DOMException('저장 공간 부족 (e2e)', 'QuotaExceededError'); return origAdd.call(this, v, k); };` });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor(`${txt("status-line")}.includes('앱 0.2.13')`);
+    await cdp.waitFor(`${txt("status-line")}.includes('앱 0.2.14')`);
 
     // 1. 처음 실행: 오늘 화면, 빈 상태 안내와 두 가지 다음 행동, 기술 용어 없음
     assert.ok(await cdp.eval(visible("view-home")) && await cdp.eval("document.getElementById('view-map').hidden"), "첫 화면은 오늘");

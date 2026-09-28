@@ -32,14 +32,14 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     // 지도 모듈 로드 실패: map.js 요청을 막고 첫 접속 (서비스 워커가 아직 없을 때). 목록·설정은 그대로 동작하고 지도 절만 안내를 낸다.
     await cdp.send("Network.setBlockedURLs", { urls: ["*/app/map.js"] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.13')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.14')");
     await cdp.waitFor("document.getElementById('map-note').textContent.includes('지도 표시 불가')");
     assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li').length"), 1, "지도 모듈 없이도 목록 절이 그려진다");
     const blockedLogs = cdp.errors.splice(0);
     assert.ok(blockedLogs.every((e) => e.includes("ERR_BLOCKED_BY_CLIENT") || e.includes("Failed to load resource") || e.includes("map.js")), blockedLogs.join("; "));
     await cdp.send("Network.setBlockedURLs", { urls: [] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.13')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.14')");
     await cdp.waitFor("document.getElementById('map-note').textContent === ''");
     // 설정
     await cdp.eval("document.getElementById('study-id').value = 'e2e-study'; document.getElementById('save-settings').click(); 'ok'");
@@ -164,11 +164,13 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.setFiles("#parcels-file", [parcelsOther]);
     await cdp.waitFor("document.getElementById('parcels-note').textContent.includes('study_id(other-study)가 설정(e2e-study)과 다르다')");
     linked.study_id = "e2e-study";
+    // 폰 범위 경고(J5-039)는 글 그대로, 다른 경고는 건수로
+    linked.warnings = ["폰 범위: 정본 필지 12개 중 법정동 9999900100 과 물건이 연결된 필지 6개만 실었다", "원본 좌표계가 섞여 있다: 가상"];
     const parcelsFile = join(tmp, "parcels.geojson");
     writeFileSync(parcelsFile, JSON.stringify(linked));
     await cdp.setFiles("#parcels-file", [parcelsFile]);
     await cdp.waitFor("document.getElementById('parcels-note').textContent.includes('file:parcels.geojson')");
-    assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /정본 v3 · file:parcels\.geojson · 가져오기 .+ · 정본 연결 포함$/);
+    assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /정본 v3 · file:parcels\.geojson · 가져오기 .+ · 폰 범위: 정본 필지 12개 중 법정동 9999900100 과 물건이 연결된 필지 6개만 실었다 · 경고 1건 \(변환 로그 참조\) · 정본 연결 포함$/);
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel').length"), 6);
     await cdp.clickRect('#map-svg path.parcel[data-pnu="9999900100100040002"]');
     await cdp.waitFor("!document.getElementById('parcel-panel').hidden && document.getElementById('parcel-title').textContent === '가상동 4-2'");

@@ -18,7 +18,7 @@ import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
 import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.13";
+export const APP_VERSION = "0.2.14";
 const $ = (id) => document.getElementById(id);
 const state = { store: null, parcelFilter: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, zoneColors: false, seedLoadedAt: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
                 nav: null, returnFocus: null, mapSelected: null, assetFilter: "all" };
@@ -550,7 +550,15 @@ function parcelsNote(rec) {
   const attrsNote = sm.withAttrs ? ` · 필지 속성 ${sm.withAttrs}개 (${(b.attrs_sources ?? []).map((a) => a.name).join(", ") || "출처 미기재"})` : "";
   text($("parcels-note"), `필지 ${b.features.length}개 (${b.data_mode}) · ${s.name} · 도형 기준일 ${s.geometry_version} · ${crs} · 이용허락 ${s.license ?? "미확인"}` + attrsNote +
     (b.source_dataset_version != null ? ` · 정본 v${b.source_dataset_version}` : " · 정본 버전 모름 (구본 여부 알 수 없음)") + ` · ${rec.source}` + (when ? ` · 가져오기 ${when}` : "") +
-    (b.warnings?.length ? ` · 경고 ${b.warnings.length}건 (변환 로그 참조)` : "") + linkNote, b.data_mode === "synthetic" ? "muted" : "ok");
+    warningsNote(b.warnings) + linkNote, b.data_mode === "synthetic" ? "muted" : "ok");
+}
+
+/** 번들 경고 안내. PC 가 폰 범위로 필지 일부만 실었다는 경고(J5-039, "폰 범위:")는 글 그대로 보인다: 폰에 없는 필지를 없는 필지로 오해하지 않게 */
+function warningsNote(warnings) {
+  const ws = Array.isArray(warnings) ? warnings : [];
+  const scope = ws.filter((w) => typeof w === "string" && w.startsWith("폰 범위:"));
+  const rest = ws.length - scope.length;
+  return scope.map((w) => ` · ${w}`).join("") + (rest ? ` · 경고 ${rest}건 (변환 로그 참조)` : "");
 }
 
 async function loadSyntheticParcels() {
