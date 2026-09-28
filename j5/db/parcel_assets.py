@@ -20,8 +20,9 @@ from pathlib import Path
 from j5.db.parcel_find import assets_by_parcel
 from j5.db.parcels import apply_links, geometry_contains
 from j5.db.store import Db, DbError
-from j5.db.tracking import set_status
-from j5.db.validate import parse_date
+from j5.db.schema import TRACKING_STATUSES
+from j5.db.tracking import REASON_REQUIRED, set_status
+from j5.db.validate import ValidationError, parse_date
 
 MAX_PARCELS = 50
 PNU_RE = re.compile(r"^\d{19}$")
@@ -59,15 +60,21 @@ def _label_point(geometry: dict):
 
 def interior_point(geometry: dict, bbox: list) -> list | None:
     """필지 안의 점 [경도, 위도] (소수 7자리). 면적 중심이 안이면 그것, 아니면 bbox 격자(5·11·23)에서 처음 안에 드는 점. 폰 interiorPoint 와 같다."""
+    # 반올림한 뒤에도 필지 안인지 다시 본다: 아주 가는 필지에서는 반올림이 점을 꼭짓점·밖으로 옮길 수 있다 (리뷰 반영 PR #85)
+    def inside(p):
+        r = [round(p[0], 7), round(p[1], 7)]
+        return r if geometry_contains(geometry, r[0], r[1]) else None
     lp = _label_point(geometry)
     if lp and geometry_contains(geometry, lp[0], lp[1]):
-        return [round(lp[0], 7), round(lp[1], 7)]
+        hit = inside(lp)
+        if hit:
+            return hit
     for n in (5, 11, 23):
         for i in range(1, n):
             for j in range(1, n):
-                p = (bbox[0] + (bbox[2] - bbox[0]) * i / n, bbox[1] + (bbox[3] - bbox[1]) * j / n)
-                if geometry_contains(geometry, p[0], p[1]):
-                    return [round(p[0], 7), round(p[1], 7)]
+                hit = inside((bbox[0] + (bbox[2] - bbox[0]) * i / n, bbox[1] + (bbox[3] - bbox[1]) * j / n))
+                if hit:
+                    return hit
     return None
 
 
@@ -125,6 +132,14 @@ def create_from_parcels(db: Db, pnus: list[str], *, track: str | None = None, re
     on_date = effective_from or db.now()[:10]
     if parse_date(on_date) is None:
         raise DbError("bad_date", f"연결 시작일이 달력상 날짜가 아니다: {on_date}")
+    # 관심 단계 검사는 미리 보기에서도 한다: 미리 보기가 성공하면 실제 실행도 단계 때문에 실패하지 않게 (리뷰 반영 PR #85). 규칙은 set_status 와 같다
+    if track is not None:
+        if track not in TRACKING_STATUSES:
+            raise ValidationError([f"관심 단계는 {'/'.join(TRACKING_STATUSES)} 중 하나다: {track}"])
+        if track == "purchase_ready":
+            raise ValidationError(["purchase_ready 전환은 준비 조건 판정 뒤 `db readiness-approve` 로만 한다"])
+        if track in REASON_REQUIRED and not (reason and reason.strip()):
+            raise ValidationError([f"{track} 로 옮길 때는 --reason 이 필요하다"])
     p = plan(db, pnus, on_date=on_date)
     result = {"dry_run": dry_run, "effective_from": on_date, "track": track, "created": [], "skipped": p["skip"], "dataset_version": int(db.meta("dataset_version") or 0)}
     if dry_run or not p["create"]:
