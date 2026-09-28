@@ -12,6 +12,9 @@
 
 from __future__ import annotations
 
+import math
+from decimal import ROUND_HALF_UP, Decimal
+
 from j5.db.parcels import active_links
 from j5.db.store import Db
 from j5.db.txlinks import jibun_matches, parse_jibun
@@ -22,14 +25,19 @@ KIND_TEXT = {"general": "일반", "collective": "집합"}
 
 
 def fmt_krw(v) -> str:
-    """폰 fmtKrw(web/app/view.js) 와 같은 표기: 1억 이상은 억(100억 미만은 소수 한 자리), 1만 이상은 만, 그 밖은 원."""
+    """폰 fmtKrw(web/app/view.js) 와 같은 표기: 1억 이상은 억(100억 미만은 소수 한 자리), 1만 이상은 만, 그 밖은 원.
+    억 자리 반올림은 JS toFixed 와 같게 double 의 정확한 값에서 반을 올린다 (Python 형식 지정자의 짝수 반올림을 쓰지 않는다, 리뷰 반영 PR #90)."""
     if v is None:
         return "금액 미확인"
     if v >= 1e8:
         x = v / 1e8
-        return (str(int(x)) if x == int(x) else f"{x:.{0 if x >= 100 else 1}f}".removesuffix(".0")) + "억"
+        if x == int(x):
+            return f"{int(x)}억"
+        digits = 0 if x >= 100 else 1
+        q = Decimal(x).quantize(Decimal(1).scaleb(-digits), rounding=ROUND_HALF_UP)
+        return f"{q:f}".removesuffix(".0") + "억"
     if v >= 1e4:
-        return f"{int(v / 1e4 + 0.5):,}만"
+        return f"{math.floor(v / 1e4 + 0.5):,}만"
     return f"{int(v):,}원"
 
 

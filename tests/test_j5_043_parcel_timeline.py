@@ -59,6 +59,13 @@ def test_years_and_text(db, home, server):
     assert [fmt_krw(x) for x in (1e9, 1.23e9, 15e8, 85e6, 9000, None)] == ["10억", "12.3억", "15억", "8,500만", "9,000원", "금액 미확인"], "폰 fmtKrw 와 같다"
 
 
+def test_fmt_krw_rounds_half_up_like_phone():
+    """리뷰 반영 PR #90: 억 자리의 반은 폰 toFixed 처럼 올린다. 기대값은 node 로 web/app/view.js fmtKrw 를 돌린 결과다."""
+    cases = {10_050_000_000: "101억", 1_225_000_000: "12.3억", 1_235_000_000: "12.3억", 1_215_000_000: "12.2억", 12_345_678_901: "123억",
+             105_000: "11만", 15_000: "2만", 100_000_000: "1억", 104_000_000: "1억", 99_999: "10만"}
+    assert {v: fmt_krw(v) for v in cases} == cases
+
+
 def test_no_transactions_table_rows(db):
     h = with_transactions(db, attribute_history(db, P1))
     assert h["transactions"] == [] and h["transactions_cancelled"] == 0
