@@ -106,3 +106,24 @@ def test_watchlist_and_cli(db, home, server, tmp_path, capsys):
     j = json.loads(capsys.readouterr().out)
     assert j["rows"][0]["tx_exact"] == 1 and j["year_from"] == j["year_to"] == 2026
     assert cli.main(["db", "--db", path, "parcels-years"]) == 1 and "no_pnu" in capsys.readouterr().err
+
+
+def test_review_fixes_latest_deal_and_text_order(db, home, server, monkeypatch):
+    """리뷰 반영 PR #92: 마지막 거래는 계약월 → 계약일 순으로 고른다(형식을 섞어 비교하지 않음). 글 출력은 입력 순서를 지킨다."""
+    loaded(db, home, server)
+    from j5.db import parcel_years as PY
+    real = PY.parcel_transactions
+
+    def fake(db_, pnu, on_date=None):
+        r = real(db_, pnu, on_date=on_date)
+        if pnu == P1:
+            base = dict(r["transactions"][0])
+            r["transactions"] = [dict(base, transaction_id="t-sep", deal_ymd="202609", deal_date=None, amount_krw=1),
+                                 dict(base, transaction_id="t-oct", deal_ymd="202610", deal_date="2026-10-01", amount_krw=2)]
+        return r
+    monkeypatch.setattr(PY, "parcel_transactions", fake)
+    y = by_year(parcel_years(db, [P1], on_date=TODAY), P1)[2026]
+    assert (y["tx_exact_last_date"], y["tx_exact_last_amount_krw"]) == ("2026-10-01", 2), "10월 거래가 9월(계약일 없음)보다 나중이다"
+    monkeypatch.setattr(PY, "parcel_transactions", real)
+    t = years_text(parcel_years(db, [P11, P1], on_date=TODAY))
+    assert t.index(f"(PNU {P11})") < t.index(f"(PNU {P1})"), "입력 순서 (CSV·JSON 과 같다)"

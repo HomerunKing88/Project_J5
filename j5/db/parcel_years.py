@@ -122,7 +122,8 @@ def parcel_years(db: Db, pnus: list[str], *, year_from: int | None = None, year_
             txs = by_year.get(str(y), [])
             collected = cov["complete"] > 0   # 완전 수집(complete/empty)한 달이 하나라도 있어야 거래 수를 적는다
             exact = [t for t in txs if t["match"] == "exact"]
-            last = max(exact, key=lambda t: (t["deal_date"] or t["deal_ymd"], t["transaction_id"])) if exact else None
+            # 계약월(YYYYMM)로 먼저 비교하고 같은 달 안에서 계약일(YYYY-MM-DD, 없으면 가장 앞)로 비교한다: 두 형식을 섞어 비교하지 않는다 (리뷰 반영 PR #92)
+            last = max(exact, key=lambda t: (t["deal_ymd"], t["deal_date"] or "", t["transaction_id"])) if exact else None
             price = p["price"] if p else None
             out_rows.append({
                 "pnu": pnu, "parcel": h["label"], "sgg_code": sgg, "year": y,
@@ -162,7 +163,8 @@ def years_csv(r: dict) -> str:
 def years_text(r: dict) -> str:
     lines = [f"필지 {r['parcels']}개 · {r['year_from']}~{r['year_to']}년 (최근 먼저). 값은 자료 그대로이며 시세·가치 판단이 아니다."]
     cur = None
-    for row in sorted(r["rows"], key=lambda x: (x["pnu"], -x["year"])):
+    order = {p: i for i, p in enumerate(dict.fromkeys(x["pnu"] for x in r["rows"]))}   # 입력 순서를 지키고 필지 안에서만 연도를 최근 먼저 (리뷰 반영 PR #92)
+    for row in sorted(r["rows"], key=lambda x: (order[x["pnu"]], -x["year"])):
         if row["pnu"] != cur:
             cur = row["pnu"]
             lines.append(f"{row['parcel']} (PNU {row['pnu']})")
