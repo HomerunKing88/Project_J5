@@ -89,7 +89,8 @@ def pnus_from_csv(path: Path) -> list[str]:
 
 
 def plan(db: Db, pnus: list[str], *, on_date: str) -> dict:
-    """무엇을 만들고 무엇을 건너뛸지 정한다 (쓰지 않는다)."""
+    """무엇을 만들고 무엇을 건너뛸지 정한다 (쓰지 않는다). 같은 PNU 가 여러 번 오면 한 번만 본다 (한 필지에 물건이 둘 생기지 않게)."""
+    pnus = list(dict.fromkeys(pnus))
     bad = [p for p in pnus if not PNU_RE.match(p)]
     if bad:
         raise DbError("bad_pnu", f"PNU 는 19자리 숫자: {', '.join(bad[:5])}")

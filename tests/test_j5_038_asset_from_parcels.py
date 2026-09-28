@@ -44,7 +44,7 @@ def test_interior_point_inside_even_for_concave_parcel():
 def test_create_link_track_and_skip_existing(db):
     load_bundle(db, vw_bundle())
     before = counts(db)
-    r = create_from_parcels(db, [P42, P1, PS12], track="watch", effective_from="2026-09-28")
+    r = create_from_parcels(db, [P42, P1, PS12, P42], track="watch", effective_from="2026-09-28")   # 같은 PNU 가 두 번 와도 물건은 하나
     assert [c["pnu"] for c in r["created"]] == [P42, PS12]
     assert [s["pnu"] for s in r["skipped"]] == [P1] and "이미 물건이 있다" in r["skipped"][0]["reason"], "위치점이 든 물건이 있는 필지는 건너뛴다"
     a, links, tc, v = counts(db)
