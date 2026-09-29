@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import uuid
 import zipfile
@@ -238,10 +239,18 @@ def _generate(snapshot: dict, out: Path, *, photos: bool, data_home: Path, run_i
     return manifest
 
 
+_LAWD_RE = re.compile(r"[0-9]{5}")
+
+
+def _is_lawd(v) -> bool:
+    return isinstance(v, str) and _LAWD_RE.fullmatch(v) is not None
+
+
 def _verify_tx_extras(tx: dict) -> None:
     """transactions.json 의 범위 규칙·수집 개월 (J5-047). 없으면 이전 형식으로 본다(폰은 모름으로 표시)."""
     zr = tx.get("zone_rule")
-    lawd_ok = zr is None or not isinstance(zr, dict) or zr.get("lawd_cd") is None or (isinstance(zr["lawd_cd"], str) and len(zr["lawd_cd"]) == 5 and zr["lawd_cd"].isdigit())
+    # 시군구 코드는 ASCII 숫자 다섯 자리만: str.isdigit() 는 전각 숫자(１２３４５)도 참이라 폰 검증(/^\d{5}$/)과 어긋난다 (리뷰 반영 PR #95)
+    lawd_ok = zr is None or not isinstance(zr, dict) or zr.get("lawd_cd") is None or _is_lawd(zr["lawd_cd"])
     if zr is not None and not (isinstance(zr, dict) and isinstance(zr.get("version"), int) and lawd_ok
                                and all(isinstance(zr.get(k), list) and all(isinstance(x, str) for x in zr[k]) for k in ("core", "comparison"))):
         raise ProjectionError("verify_transactions_zone_rule", "transactions.json 의 zone_rule 형식이 맞지 않는다")
@@ -251,7 +260,7 @@ def _verify_tx_extras(tx: dict) -> None:
     seen = set()
     ok = isinstance(cov, list)
     for c in cov if ok else []:
-        good = (isinstance(c, dict) and isinstance(c.get("lawd_cd"), str) and len(c["lawd_cd"]) == 5 and c["lawd_cd"].isdigit() and isinstance(c.get("year"), int)
+        good = (isinstance(c, dict) and _is_lawd(c.get("lawd_cd")) and isinstance(c.get("year"), int)
                 and all(isinstance(c.get(k), int) and not isinstance(c.get(k), bool) and 0 <= c[k] <= 12 for k in ("months_complete", "months_any"))
                 and c["months_complete"] <= c["months_any"] and (c["lawd_cd"], c["year"]) not in seen)
         if not good:
