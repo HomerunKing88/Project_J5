@@ -117,7 +117,7 @@ def ops_check(data_home: Path, *, db_path: Path | None = None, now: str | None =
     run_id = str(uuid.uuid4())
     r: dict = {"run_id": run_id, "checked_at": checked_at, "data_home": str(data_home), "db_path": str(path), "tool": tool_versions(),
                "ok": False, "actions": [], "warnings": [], "db": None, "schema": None, "backup": None, "projection": None, "photos": None, "raw": None,
-               "phone_scope": None, "collect_pending": None, "zone_rule": None, "last_activity": None, "last_good": None, "last_good_problem": None, "last_good_updated": False, "previous_last_good_at": None, "overdue": None}
+               "phone_scope": None, "collect_pending": None, "zone_rule": None, "transaction_sgg": None, "last_activity": None, "last_good": None, "last_good_problem": None, "last_good_updated": False, "previous_last_good_at": None, "overdue": None}
     prev, prev_problem = read_last_good(data_home)
     r["last_good"], r["last_good_problem"] = prev, prev_problem
     r["previous_last_good_at"] = (prev or {}).get("checked_at")
@@ -203,6 +203,15 @@ def _check_db(db: Db, data_home: Path, r: dict, now_dt: datetime) -> None:
             if not zr.get("lawd_cd") and len(sggs) > 1:
                 r["actions"].append({"code": "zone_rule_sgg_missing", "text": f"거래가 시군구 {', '.join(sggs)} 에서 들어왔는데 범위 규칙 v{zr['version']} 에 시군구가 없다."
                                      " 다른 시군구의 같은 이름 법정동 거래가 핵심·비교로 분류될 수 있다. 규칙 파일에 \"lawd_cd\" 를 넣어 `j5 db rt-zones apply <규칙.json>` 으로 반영한다"})
+    # 거래 응답의 시군구 (J5-050, J5-044 미확인 변수): 지번 대조·범위 규칙은 요청 시군구(lawd_cd)로 본다. 응답 행의 sggCd 가 요청과 다른
+    # 거래가 있으면 그 규칙이 맞지 않을 수 있다. 고칠 명령이 없으므로 조치 항목이 아니라 안내로 둔다
+    if db._has_table("transactions") and db._has_table("transaction_observations") and counts.get("transactions", 0):
+        r["transaction_sgg"] = transaction_sgg_summary(db)
+        ts = r["transaction_sgg"]
+        if ts["differs"]:
+            pairs = ", ".join(f"요청 {p['lawd_cd']} → 응답 {p['sgg_cd']} {p['count']}건" for p in ts["pairs"])
+            r["warnings"].append(f"거래 {ts['differs']}건의 응답 시군구(sggCd)가 요청 시군구와 다르다 ({pairs}). 지번 대조·범위 규칙은 요청 시군구로 보므로"
+                                 " 이 거래는 응답 시군구의 필지와 대조되지 않는다. 이 줄을 공유해 대조 규칙을 검토한다")
     # 백업·파생본 (기존 상태 함수. 읽기 전용 연결에서도 조회만 한다)
     bs = backup_status(db, data_home)
     bs["days_since"] = _days_since(bs.get("backup_at"), now_dt)
@@ -257,6 +266,23 @@ def _check_db(db: Db, data_home: Path, r: dict, now_dt: datetime) -> None:
     for v in la.values():
         v["days_since"] = _days_since(v["at"], now_dt)
     r["last_activity"] = la
+
+
+def transaction_sgg_summary(db: Db) -> dict:
+    """정본 거래마다 최신 응답 행의 sggCd 를 요청 시군구(lawd_cd)와 대조한 수. sggCd 는 식별 필드라 한 거래 안에서 바뀌지 않는다."""
+    out = {"same": 0, "differs": 0, "missing": 0, "pairs": []}
+    rows = db.conn.execute("SELECT t.lawd_cd, json_extract(o.content_json, '$.sggCd') AS sgg, COUNT(*) FROM transactions t"
+                           " JOIN transaction_observations o ON o.observation_id = t.latest_observation_id GROUP BY 1, 2 ORDER BY 1, 2")
+    for lawd, sgg, n in rows:
+        sgg = sgg.strip() if isinstance(sgg, str) else None
+        if not sgg:
+            out["missing"] += n
+        elif sgg == lawd:
+            out["same"] += n
+        else:
+            out["differs"] += n
+            out["pairs"].append({"lawd_cd": lawd, "sgg_cd": sgg, "count": n})
+    return out
 
 
 def _overdue(last_good_at: str | None, bs: dict | None, now_dt: datetime) -> dict:
@@ -315,6 +341,9 @@ def ops_text(r: dict) -> str:
     if r.get("zone_rule"):
         z = r["zone_rule"]
         lines.append(f"범위 규칙: v{z['version']} · 시군구 {z['lawd_cd'] + ' 만' if z['lawd_cd'] else '정하지 않음'} · 거래 시군구 {', '.join(z['transaction_sggs']) or '없음'}")
+    if r.get("transaction_sgg"):
+        ts = r["transaction_sgg"]
+        lines.append(f"거래 응답 시군구: 요청과 같음 {ts['same']}건 · 다름 {ts['differs']}건 · 응답에 없음 {ts['missing']}건")
     if r.get("collect_pending") and r["collect_pending"].get("rt"):
         lines.append("반영 대기 수집: " + ", ".join(f"시군구 {k} {n}건" for k, n in r["collect_pending"]["rt"].items()))
     if r["last_activity"]:
