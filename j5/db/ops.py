@@ -117,7 +117,7 @@ def ops_check(data_home: Path, *, db_path: Path | None = None, now: str | None =
     run_id = str(uuid.uuid4())
     r: dict = {"run_id": run_id, "checked_at": checked_at, "data_home": str(data_home), "db_path": str(path), "tool": tool_versions(),
                "ok": False, "actions": [], "warnings": [], "db": None, "schema": None, "backup": None, "projection": None, "photos": None, "raw": None,
-               "phone_scope": None, "collect_pending": None, "zone_rule": None, "transaction_sgg": None, "last_activity": None, "last_good": None, "last_good_problem": None, "last_good_updated": False, "previous_last_good_at": None, "overdue": None}
+               "phone_scope": None, "collect_pending": None, "zone_rule": None, "recent_collection": None, "transaction_sgg": None, "last_activity": None, "last_good": None, "last_good_problem": None, "last_good_updated": False, "previous_last_good_at": None, "overdue": None}
     prev, prev_problem = read_last_good(data_home)
     r["last_good"], r["last_good_problem"] = prev, prev_problem
     r["previous_last_good_at"] = (prev or {}).get("checked_at")
@@ -203,6 +203,16 @@ def _check_db(db: Db, data_home: Path, r: dict, now_dt: datetime) -> None:
             if not zr.get("lawd_cd") and len(sggs) > 1:
                 r["actions"].append({"code": "zone_rule_sgg_missing", "text": f"거래가 시군구 {', '.join(sggs)} 에서 들어왔는데 범위 규칙 v{zr['version']} 에 시군구가 없다."
                                      " 다른 시군구의 같은 이름 법정동 거래가 핵심·비교로 분류될 수 있다. 규칙 파일에 \"lawd_cd\" 를 넣어 `j5 db rt-zones apply <규칙.json>` 으로 반영한다"})
+    # 최근 거래 수집 (J5-052, 릴리스 계획 §11 "월별 최근 거래", "PC 가 꺼져 있으면 수집이 진행되지 않는다는 사실을 마지막 성공일로 표시"):
+    # 시군구마다 완전히 받은 마지막 계약월과 마지막 성공 수집 시각. 지난달까지 두 달 이상 비면 안내한다(비교 지역 표본처럼 일부러 멈춘 곳도 있어 조치 항목이 아니다)
+    if db._has_table("collection_runs"):
+        r["recent_collection"] = recent_collection(db, now_dt)
+        for c in r["recent_collection"]:
+            if c["months_behind"] is None or c["months_behind"] >= RECENT_BEHIND_MONTHS:
+                start = _ym_add(c["latest_complete_ym"], 1) if c["latest_complete_ym"] else c["closed_ym"]
+                since = f"계약월 {_ym_dash(c['latest_complete_ym'])} 뒤로" if c["latest_complete_ym"] else "완전히 받은 달이 없고"
+                r["warnings"].append(f"시군구 {c['lawd_cd']} 최근 거래: {since} {_ym_dash(c['closed_ym'])} 까지 받지 않았다 (마지막 성공 수집 {c['last_success_at'] or '없음'})."
+                                     f" 계속 모으는 시군구면 `j5 collect rt-fetch --lawd-cd {c['lawd_cd']} --from {_ym_dash(start)} --to {_ym_dash(c['closed_ym'])}` 뒤 `j5 db rt-load --lawd-cd {c['lawd_cd']}`")
     # 거래 응답의 시군구 (J5-050, J5-044 미확인 변수): 지번 대조·범위 규칙은 요청 시군구(lawd_cd)로 본다. 응답 행의 sggCd 가 요청과 다른
     # 거래가 있으면 그 규칙이 맞지 않을 수 있다. 고칠 명령이 없으므로 조치 항목이 아니라 안내로 둔다
     if db._has_table("transactions") and db._has_table("transaction_observations") and counts.get("transactions", 0):
@@ -266,6 +276,34 @@ def _check_db(db: Db, data_home: Path, r: dict, now_dt: datetime) -> None:
     for v in la.values():
         v["days_since"] = _days_since(v["at"], now_dt)
     r["last_activity"] = la
+
+
+RECENT_BEHIND_MONTHS = 2  # 지난달까지 이만큼 이상 비면 안내 (J5-052)
+
+
+def _ym_add(ym: str, n: int) -> str:
+    i = int(ym[:4]) * 12 + int(ym[4:]) - 1 + n
+    return f"{i // 12:04d}{i % 12 + 1:02d}"
+
+
+def _ym_dash(ym: str) -> str:
+    return f"{ym[:4]}-{ym[4:]}"
+
+
+def recent_collection(db: Db, now_dt: datetime) -> list[dict]:
+    """시군구마다 완전히 받은(complete/empty) 마지막 계약월, 마지막 성공 수집 시각, 지난달(점검 시각 기준)까지 빈 개월 수 (J5-052).
+    완전히 받은 달이 없으면 latest_complete_ym·months_behind 는 None 이다. 정본에 반영한 실행만 본다(받아 두고 반영하지 않은 실행은 rt_unloaded)."""
+    closed = _ym_add(f"{now_dt.year:04d}{now_dt.month:02d}", -1)
+    out = []
+    rows = db.conn.execute("SELECT lawd_cd, MAX(CASE WHEN outcome IN ('complete', 'empty') THEN deal_ymd END),"
+                           " MAX(CASE WHEN outcome IN ('complete', 'empty') THEN finished_at END) FROM collection_runs GROUP BY lawd_cd ORDER BY lawd_cd")
+    for lawd, latest, last_ok in rows:
+        behind = None
+        if latest:
+            behind = max(0, (int(closed[:4]) * 12 + int(closed[4:])) - (int(latest[:4]) * 12 + int(latest[4:])))
+        out.append({"lawd_cd": lawd, "latest_complete_ym": latest, "last_success_at": last_ok, "days_since_success": _days_since(last_ok, now_dt),
+                    "closed_ym": closed, "months_behind": behind})
+    return out
 
 
 def transaction_sgg_summary(db: Db) -> dict:
@@ -341,6 +379,10 @@ def ops_text(r: dict) -> str:
     if r.get("zone_rule"):
         z = r["zone_rule"]
         lines.append(f"범위 규칙: v{z['version']} · 시군구 {z['lawd_cd'] + ' 만' if z['lawd_cd'] else '정하지 않음'} · 거래 시군구 {', '.join(z['transaction_sggs']) or '없음'}")
+    for c in r.get("recent_collection") or []:
+        upto = f"계약월 {_ym_dash(c['latest_complete_ym'])} 까지 완전 수집" if c["latest_complete_ym"] else "완전히 받은 달 없음"
+        ok = f"마지막 성공 수집 {c['last_success_at']} ({c['days_since_success']}일 전)" if c["last_success_at"] else "성공한 수집 없음"
+        lines.append(f"최근 거래 수집: 시군구 {c['lawd_cd']} · {upto} · {ok}")
     if r.get("transaction_sgg"):
         ts = r["transaction_sgg"]
         lines.append(f"거래 응답 시군구: 요청과 같음 {ts['same']}건 · 다름 {ts['differs']}건 · 응답에 없음 {ts['missing']}건")
