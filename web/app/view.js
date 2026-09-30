@@ -226,7 +226,15 @@ export function parcelHistory(feature, assetsInside, data) {
  * items 는 parcelHistory 결과, txDoc 은 파생본 transactions.json(없으면 null), prices 는 [{year: 공시 기준연도, price}] (priceTrend 결과를 바꾼 것).
  * tx: "counted"(그해 거래가 있거나 완전 수집한 달이 있음: 수는 센 값) · "not_collected"(수집 실행 없음) · "incomplete"(실패·부분 수집만) ·
  * "outside"(이 필지의 법정동이 거래 범위 밖이라 파생본에 거래가 없음) · "unknown"(거래 파일이나 수집 현황이 없음). counted 가 아니면 수는 null 이다(0 건이 아니다). */
-export function parcelYearSummary(feature, items, txDoc, prices = [], { maxYears = 20 } = {}) {
+export function parcelYearSummary(feature, items, txDoc, prices = [], opts = {}) {
+  return parcelYearSummaryInfo(feature, items, txDoc, prices, opts).rows;
+}
+
+/** 폰 연도별 요약의 연도 상한. PC `db parcels-years` 의 MAX_YEARS 와 같다 (J5-051) */
+export const YEAR_SUMMARY_MAX = 40;
+
+/** parcelYearSummary 와 같은 줄에 더해, 상한 때문에 보이지 않는 앞 연도 {from, to, count}(자료가 있는 연도 수) 또는 null (J5-051) */
+export function parcelYearSummaryInfo(feature, items, txDoc, prices = [], { maxYears = YEAR_SUMMARY_MAX } = {}) {
   const props = feature?.properties ?? {};
   const sgg = typeof props.emd_code === "string" ? props.emd_code.slice(0, 5) : typeof feature?.id === "string" ? feature.id.slice(0, 5) : null;
   const cov = new Map();
@@ -246,8 +254,10 @@ export function parcelYearSummary(feature, items, txDoc, prices = [], { maxYears
   const priceByYear = new Map();
   for (const q of prices) if (Number.isInteger(q.year) && Number.isFinite(q.price)) priceByYear.set(q.year, q.price);
   const years = [...priceByYear.keys(), ...txByYear.keys(), ...cov.keys()];
-  if (!years.length) return [];
+  if (!years.length) return { rows: [], omitted: null };
   const y1 = Math.max(...years), y0 = Math.max(Math.min(...years), y1 - maxYears + 1);
+  const before = [...new Set(years.filter((y) => y < y0))];
+  const omitted = before.length ? { from: Math.min(...before), to: y0 - 1, count: before.length } : null;
   const rows = [];
   let prev = null;
   for (let y = y0; y <= y1; y++) {
@@ -267,7 +277,7 @@ export function parcelYearSummary(feature, items, txDoc, prices = [], { maxYears
                 monthsComplete: c?.months_complete ?? (hasCoverage ? 0 : null), monthsAny: c?.months_any ?? (hasCoverage ? 0 : null), tx });
     prev = price;
   }
-  return rows.reverse();
+  return { rows: rows.reverse(), omitted };
 }
 
 const TX_STATE_TEXT = { not_collected: "거래 미수집", incomplete: "거래 수집 실패·부분만", outside: "거래 범위 밖 (PC 자료에 거래가 없음)", unknown: "거래 수집 현황 모름" };
