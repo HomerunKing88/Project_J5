@@ -1,7 +1,7 @@
 // view.js (J5-023, ADR-17): manifest·기록·거래 검증, 금액 표기, 지번 대조, 물건·필지 이력 조립, 연도 묶음. DOM 없음.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, fmtKrw, parseJibun, jibunMatch, assetHistory, parcelHistory, attrHistoryItems, groupByYear, viewSummary, parcelYearSummary, yearSummaryRow } from "../../web/app/view.js";
+import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, fmtKrw, parseJibun, jibunMatch, assetHistory, parcelHistory, attrHistoryItems, groupByYear, viewSummary, parcelYearSummary, parcelYearSummaryInfo, YEAR_SUMMARY_MAX, yearSummaryRow } from "../../web/app/view.js";
 
 const A0 = "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a50", A1 = "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a51";
 const R = (id, asset, type, at, payload, extra = {}) => ({ record_id: id, asset_id: asset, record_type: type, observed_at: at, payload, attachments: [], supersedes_id: null, ...extra });
@@ -157,4 +157,17 @@ test("parcelYearSummary·yearSummaryRow: 연도별 요약, 0 건과 미수집·�
   assert.ok(validateTransactionsDoc(zrSgg("9999")).some((e) => e.includes("zone_rule")));
   assert.equal(parcelYearSummary(feature, [], zrSgg("11110"), [{ year: 2026, price: 1 }]).find((r) => r.year === 2026).tx, "outside");
   assert.equal(parcelYearSummary(feature, [], zrSgg("99999"), [{ year: 2026, price: 1 }]).find((r) => r.year === 2026).tx, "counted");
+});
+
+test("parcelYearSummaryInfo: 연도 상한은 PC 와 같은 40, 빠진 앞 연도를 알린다 (J5-051)", () => {
+  const feature = { id: "9999900100100010000", properties: { emd_name: "가상동", emd_code: "9999900100", label: "1", bon: 1, bu: 0, mountain: false } };
+  assert.equal(YEAR_SUMMARY_MAX, 40);
+  // 2006~2026 (21개 연도): 기본 상한에서 모두 보이고 빠진 연도가 없다
+  const prices = Array.from({ length: 21 }, (_, i) => ({ year: 2006 + i, price: 1e6 + i }));
+  const all = parcelYearSummaryInfo(feature, [], null, prices);
+  assert.deepEqual([all.rows.length, all.rows.at(-1).year, all.omitted], [21, 2006, null]);
+  // 상한보다 앞 연도는 자료가 있는 연도만 센다 (빈 연도는 세지 않는다)
+  const cut = parcelYearSummaryInfo(feature, [], null, [{ year: 2019, price: 1 }, { year: 2021, price: 2 }, { year: 2025, price: 3 }, { year: 2026, price: 4 }], { maxYears: 2 });
+  assert.deepEqual([cut.rows.map((r) => r.year), cut.omitted], [[2026, 2025], { from: 2019, to: 2024, count: 2 }]);
+  assert.deepEqual(parcelYearSummaryInfo(feature, [], null, []), { rows: [], omitted: null });
 });
