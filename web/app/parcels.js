@@ -229,6 +229,29 @@ export function priceTrend(attrs, history) {
   });
 }
 
+// ---- 소유 변동일 (J5-053): 파생본의 현재 속성과 토지소유 변화 항목에 적힌 소유 변동일. PC parcel_years._ownership_dates 와 같은 규칙 ----
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const OWNERSHIP_KEYS = ["ownership_kind_code", "ownership_kind", "co_owner_count", "ownership_changed_on", "ownership_change_cause_code", "national_institution_code"];
+
+/**
+ * { known, dates }. dates 는 자료에 적힌 소유 변동일(YYYY-MM-DD, 오름차순, 중복 없음). 변화 항목은 이전 값과 새 값을 함께 담으므로 기준일마다의 값이 모두 모인다.
+ * known 은 토지소유 자료가 이 필지에 있는지(현재 속성의 소유 필드 또는 토지소유 변화 항목). false 면 변동일이 없는 것이 아니라 모름이다.
+ * 파생본 이력 상한(200항목)으로 앞부분이 잘리면 그보다 오래된 변동일은 빠질 수 있다. 소유자 정보는 담지 않는다.
+ */
+export function ownershipChanges(attrs, history) {
+  const own = (Array.isArray(history) ? history : []).filter((h) => h && h.kind === "land_ownership" && h.changes && typeof h.changes === "object");
+  const dates = new Set();
+  const add = (v) => { if (typeof v === "string" && DATE_RE.test(v)) dates.add(v); };
+  const a = attrs && typeof attrs === "object" ? attrs : null;
+  if (a) add(a.ownership_changed_on);
+  for (const h of own) {
+    const c = h.changes.ownership_changed_on;
+    if (c && typeof c === "object") { add(c.from); add(c.to); }
+  }
+  const known = own.length > 0 || (!!a && OWNERSHIP_KEYS.some((k) => a[k] != null));
+  return { known, dates: [...dates].sort() };
+}
+
 /** 추이 한 점을 화면용 글 [기준, 값, 증감, 확인]. */
 export function priceTrendRow(q) {
   const base = q.year ? `${q.year}년${q.month ? ` ${q.month}월` : ""} 기준` : "기준연월 미확인";

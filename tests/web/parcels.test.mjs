@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { validateParcels, labelPoint, pointInFeature, assetsInParcel, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, polygonsOf, MAX_PARCELS, zoneCategory, ZONE_LABELS, fmtInt, attrLines, attrsSummary, fmtAttrValue, attrChangeText, parseParcelQuery, findParcels, parcelAt, interiorPoint, priceTrend, priceTrendRow, planZonesText, ownershipKinds, parseFilter, hasCriteria, filterParcels, filterRowText, FILTER_LIMIT } from "../../web/app/parcels.js";
+import { validateParcels, labelPoint, pointInFeature, assetsInParcel, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, polygonsOf, MAX_PARCELS, zoneCategory, ZONE_LABELS, fmtInt, attrLines, attrsSummary, fmtAttrValue, attrChangeText, parseParcelQuery, findParcels, parcelAt, interiorPoint, priceTrend, priceTrendRow, planZonesText, ownershipKinds, ownershipChanges, parseFilter, hasCriteria, filterParcels, filterRowText, FILTER_LIMIT } from "../../web/app/parcels.js";
 import { worldBbox, parcelPathD, parcelLabelVisible, mercator, fitView, FIT_MAX_SCALE, PARCEL_LOCAL_K } from "../../web/app/map.js";
 
 const bundle = () => JSON.parse(readFileSync(new URL("../fixtures/parcels/synthetic.j5parcels.json", import.meta.url), "utf8"));
@@ -398,4 +398,18 @@ test("조건으로 필지 찾기의 물건 조건 (J5-036): 없음·있음·관�
   assert.equal(filterRowText(by["1"].properties.attrs, assetsOf(by["1"])), "일반상업지역 · 1,771㎡ · 12,340,000원/㎡ · 개인 · 물건 1개 (관찰목록 1)");
   assert.equal(filterRowText(by["4-2"].properties.attrs, []), "자연녹지지역 · 1,080㎡ · 1,200,000원/㎡ · 국유지 · 물건 없음");
   assert.equal(filterRowText(by["1"].properties.attrs), "일반상업지역 · 1,771㎡ · 12,340,000원/㎡ · 개인", "물건 목록을 주지 않으면 이전과 같다");
+});
+
+test("ownershipChanges: 현재 속성과 토지소유 변화 항목의 소유 변동일, 자료 없음은 모름 (J5-053)", () => {
+  const attrs = { ownership_kind: "법인", ownership_changed_on: "2027-09-01", official_land_price_krw_m2: 1 };
+  const history = [
+    { as_of: "2026-09-05", kind: "land_ownership", first: true, changes: { ownership_kind: { from: null, to: "개인" }, ownership_changed_on: { from: null, to: "2017-01-01" } } },
+    { as_of: "2026-09-05", kind: "land_feature", first: true, changes: { official_land_price_krw_m2: { from: null, to: 1 } } },
+    { as_of: "2027-09-01", kind: "land_ownership", first: false, changes: { ownership_kind: { from: "개인", to: "법인" }, ownership_changed_on: { from: "2017-01-01", to: "2027-09-01" } } },
+  ];
+  assert.deepEqual(ownershipChanges(attrs, history), { known: true, dates: ["2017-01-01", "2027-09-01"] }, "이전 값과 새 값을 모두 모은다 (중복 없음, 오름차순)");
+  assert.deepEqual(ownershipChanges({ ownership_kind: "개인", ownership_changed_on: "2011-07-07" }, []), { known: true, dates: ["2011-07-07"] }, "이력이 없으면 현재 값");
+  assert.deepEqual(ownershipChanges({ ownership_kind: null, ownership_changed_on: null, official_land_price_krw_m2: 1 }, history.slice(1, 2)), { known: false, dates: [] }, "소유 값이 모두 null 이면 모름");
+  assert.deepEqual(ownershipChanges({ ownership_kind: "개인", ownership_changed_on: "2017-1-1" }, null), { known: true, dates: [] }, "날짜 형식이 아니면 넣지 않는다");
+  assert.deepEqual(ownershipChanges(null, undefined), { known: false, dates: [] });
 });

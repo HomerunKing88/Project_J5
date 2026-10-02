@@ -159,6 +159,18 @@ test("parcelYearSummary·yearSummaryRow: 연도별 요약, 0 건과 미수집·�
   assert.equal(parcelYearSummary(feature, [], zrSgg("99999"), [{ year: 2026, price: 1 }]).find((r) => r.year === 2026).tx, "counted");
 });
 
+test("parcelYearSummary·yearSummaryRow: 연도마다 소유 변동일, 소유 자료 없음은 모름 (J5-053)", () => {
+  const feature = { id: "9999900100100010000", properties: { emd_name: "가상동", emd_code: "9999900100", label: "1", bon: 1, bu: 0, mountain: false } };
+  const prices = [{ year: 2026, price: 1 }, { year: 2027, price: 2 }];
+  const rows = parcelYearSummary(feature, [], null, prices, { ownership: { known: true, dates: ["2017-01-01", "2027-09-01", "2027-11-02"] } });
+  assert.deepEqual(rows.map((r) => [r.year, r.owner.dates]), [[2027, ["2027-09-01", "2027-11-02"]], [2026, []]], "범위 안의 날짜만, 오래된 변동일은 범위를 넓히지 않는다");
+  assert.equal(yearSummaryRow(rows[0])[1], "공시지가 2원/㎡ (+100.0%) · 거래 수집 현황 모름 · 소유 변동 2027-09-01, 2027-11-02");
+  assert.equal(yearSummaryRow(rows[1])[1], "공시지가 1원/㎡ · 거래 수집 현황 모름", "변동이 없는 해는 덧붙이지 않는다");
+  const none = parcelYearSummary(feature, [], null, prices, { ownership: { known: false, dates: [] } });
+  assert.equal(yearSummaryRow(none[0])[1], "공시지가 2원/㎡ (+100.0%) · 거래 수집 현황 모름 · 소유 자료 없음", "PC years_text 와 같은 글");
+  assert.equal(parcelYearSummary(feature, [], null, prices)[0].owner, null, "주지 않으면 소유 칸 없음");
+});
+
 test("parcelYearSummaryInfo: 연도 상한은 PC 와 같은 40, 빠진 앞 연도를 알린다 (J5-051)", () => {
   const feature = { id: "9999900100100010000", properties: { emd_name: "가상동", emd_code: "9999900100", label: "1", bon: 1, bu: 0, mountain: false } };
   assert.equal(YEAR_SUMMARY_MAX, 40);
