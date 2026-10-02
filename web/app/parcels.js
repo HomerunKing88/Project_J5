@@ -132,7 +132,7 @@ export function attrLines(a, fallbackAsOf = null) {
     ["지형", [a.terrain_height, a.terrain_form].filter(Boolean).join(" · ") || miss],
     ["규제·지역지구", planText],
     ["소유구분", (own ?? miss) + (Number.isFinite(a.co_owner_count) && a.co_owner_count > 1 ? ` · 공유 ${a.co_owner_count}인` : "") + (a.ownership_changed_on ? ` · 변동 ${a.ownership_changed_on}` : "")],
-    ["속성 기준일", asOf ? `${asOf} (토지 자료 기준, 도형 기준일과 다를 수 있음)` : miss],
+    ["자료 기준일", asOf ?? miss],   // 토지 자료의 기준일. 도형 기준일과 다를 수 있다는 설명은 필지 카드의 "이 정보의 출처" 에 둔다 (J5-056)
   ];
 }
 
@@ -437,7 +437,8 @@ export function parcelAssets(feature, assets, { linksValid = true } = {}) {
   return assets.filter((a) => linked.has(a.asset_id) || inside.has(a.asset_id))
     .map((a) => ({ asset: a, basis: linked.has(a.asset_id) && inside.has(a.asset_id) ? "both" : linked.has(a.asset_id) ? "linked" : "inside" }));
 }
-export const BASIS_LABEL = { both: "정본 연결 · 위치점 포함", linked: "정본 연결", inside: "위치점 포함 (연결 미확정)" };
+// 필지 카드의 "이 필지의 대상" 근거 (J5-056 화면 글): PC 에서 이은 대상과 위치만 이 필지 안에 있는 대상을 구분한다
+export const BASIS_LABEL = { both: "PC 연결", linked: "PC 연결", inside: "위치로 찾음 (연결 전)" };
 
 export function parcelTitle(props) {
   return `${props.emd_name ?? props.emd_code} ${props.label}`;

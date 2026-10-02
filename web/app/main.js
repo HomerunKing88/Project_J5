@@ -18,11 +18,21 @@ import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
 import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummaryInfo, yearSummaryRow, yearSummaryCells } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.22";
+export const APP_VERSION = "0.2.23";
 const PARCEL_CARD_YEARS = 5;   // 필지 카드의 연도별 표에 보이는 최근 연도 수 (J5-055)
 const $ = (id) => document.getElementById(id);
 const state = { store: null, parcelFilter: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, zoneColors: false, seedLoadedAt: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
                 nav: null, returnFocus: null, mapSelected: null, assetFilter: "all" };
+
+const DATA_MODE_TEXT = { synthetic: "연습용 자료", private_real: "실제 자료" };
+
+/** 가져온 자리 (IndexedDB 의 source 값) 를 화면 글로 (J5-056) */
+function sourceText(source) {
+  if (source === "bundled_synthetic") return "앱에 든 연습용 파일";
+  if (typeof source === "string" && source.startsWith("file:")) return `파일 ${source.slice(5)}`;
+  if (typeof source === "string" && source.startsWith("view:")) return `PC 자료 파일 ${source.slice(5)}`;
+  return String(source ?? "출처 모름");
+}
 
 function text(el, value, cls) {
   el.textContent = value;
@@ -348,7 +358,7 @@ function renderSeedStatus() {
   const n = state.assets.length;
   const when = shortWhen(state.seedLoadedAt);
   const watch = state.assets.filter(isWatchlist).length;
-  text($("seed-status"), n ? `대상 ${n}곳 (${MODE_SHORT[state.assets[0].data_mode] ?? ""})${hasTracking(state.assets) ? `, 관찰목록 ${watch}곳` : ""}. ${when ?? "시각 모름"} 가져옴` : "가져온 대상 목록이 없습니다.");
+  text($("seed-status"), n ? `대상 ${n}곳 (${MODE_SHORT[state.assets[0].data_mode] ?? ""})${hasTracking(state.assets) ? `, 관찰목록 ${watch}곳` : ""}. ${when ?? "시각 모름"} 가져옴.` : "가져온 대상 목록이 없습니다.");
 }
 
 // ---- 관찰목록 필터 (J5-029, ADR-22): 파생본 시드의 관심 단계로 '전체/관찰목록만' 을 고른다. 선택은 이 기기(meta asset_filter)에 남는다. 관심 단계 자체는 PC 에서만 바꾼다 ----
@@ -563,16 +573,17 @@ async function toggleZoneColors() {
 
 function parcelsNote(rec) {
   if (!rec) return text($("parcels-note"), "필지 자료 없음. 지도에는 대상 위치만 보입니다.", "pencil");
+  // 문장 단위로 (J5-056): 무엇이 몇 개, 어디서 온 자료, 언제 가져왔는지. 좌표계·이용허락·정본 버전은 확인용으로 남긴다
   const b = rec.bundle, s = b.source;
-  const crs = s.crs?.epsg ? `EPSG:${s.crs.epsg}` : (s.crs?.name ?? "?");
+  const crs = s.crs?.epsg ? `EPSG:${s.crs.epsg}` : (s.crs?.name ?? "모름");
   const hasLinks = b.features.some((f) => (f.properties.asset_ids ?? []).length);
-  const linkNote = hasLinks ? (parcelLinksValid() ? " · 정본 연결 포함" : " · 정본 연결 포함 (시드가 바뀐 뒤라 표시하지 않음: 같은 파생본의 시드와 함께 다시 불러온다)") : "";
+  const linkNote = hasLinks ? (parcelLinksValid() ? " PC 에서 이은 대상 포함." : " PC 에서 이은 대상은 대상 목록이 바뀐 뒤라 보이지 않습니다. PC 자료 파일을 다시 가져오면 보입니다.") : "";
   const when = shortWhen(rec.loaded_at);
   const sm = attrsSummary(b);
-  const attrsNote = sm.withAttrs ? ` · 필지 속성 ${sm.withAttrs}개 (${(b.attrs_sources ?? []).map((a) => a.name).join(", ") || "출처 미기재"})` : "";
-  text($("parcels-note"), `필지 ${b.features.length}개 (${b.data_mode}) · ${s.name} · 도형 기준일 ${s.geometry_version} · ${crs} · 이용허락 ${s.license ?? "미확인"}` + attrsNote +
-    (b.source_dataset_version != null ? ` · 정본 v${b.source_dataset_version}` : " · 정본 버전 모름 (구본 여부 알 수 없음)") + ` · ${rec.source}` + (when ? ` · 가져오기 ${when}` : "") +
-    warningsNote(b.warnings) + linkNote, b.data_mode === "synthetic" ? "muted" : "ok");
+  const attrsNote = sm.withAttrs ? ` 토지 자료가 든 필지 ${sm.withAttrs}개 (${(b.attrs_sources ?? []).map((a) => a.name).join(", ") || "출처 적혀 있지 않음"}).` : "";
+  text($("parcels-note"), `필지 ${b.features.length}개 (${DATA_MODE_TEXT[b.data_mode] ?? b.data_mode}). ${s.name}, 도형 기준일 ${s.geometry_version}, 좌표계 ${crs}, 이용허락 ${s.license ?? "미확인"}.` + attrsNote +
+    (b.source_dataset_version != null ? ` 정본 v${b.source_dataset_version}.` : " 정본 버전이 적혀 있지 않아 오래된 파일인지 알 수 없습니다.") + ` ${sourceText(rec.source)}` + (when ? `, ${when} 가져옴.` : ".") +
+    warningsNote(b.warnings) + linkNote, b.data_mode === "synthetic" ? "pencil" : "ok");
 }
 
 /** 번들 경고 안내. PC 가 폰 범위로 필지 일부만 실었다는 경고(J5-039, "폰 범위:")는 글 그대로 보인다: 폰에 없는 필지를 없는 필지로 오해하지 않게 */
@@ -580,7 +591,7 @@ function warningsNote(warnings) {
   const ws = Array.isArray(warnings) ? warnings : [];
   const scope = ws.filter((w) => typeof w === "string" && w.startsWith("폰 범위:"));
   const rest = ws.length - scope.length;
-  return scope.map((w) => ` · ${w}`).join("") + (rest ? ` · 경고 ${rest}건 (변환 로그 참조)` : "");
+  return scope.map((w) => ` ${w}.`).join("") + (rest ? ` 변환 경고 ${rest}건 (PC 의 변환 기록에서 봅니다).` : "");
 }
 
 async function loadSyntheticParcels() {
@@ -803,10 +814,10 @@ function applyBasemap(rec) {
 function basemapNote(rec) {
   if (!rec) return text($("basemap-note"), "배경 자료 없음. 지도에는 대상 위치와 필지만 보입니다.", "pencil");
   const b = rec.bundle, s0 = b.sources[0];
-  const parts = BASEMAP_LAYERS.filter((k) => b.counts[k] > 0).map((k) => `${BASEMAP_LAYER_LABEL[k]} ${b.counts[k]}`).join(" · ");
+  const parts = BASEMAP_LAYERS.filter((k) => b.counts[k] > 0).map((k) => `${BASEMAP_LAYER_LABEL[k]} ${b.counts[k]}`).join(", ");
   const when = shortWhen(rec.loaded_at);
-  text($("basemap-note"), `배경 도형 ${b.count}개 (${parts}) · ${b.data_mode === "synthetic" ? "연습용" : s0.name} · 도형 기준일 ${s0.geometry_version} · 이용허락 ${s0.license ?? "미확인"}` +
-    (when ? ` · 가져오기 ${when}` : ""), "muted");
+  text($("basemap-note"), `건물·도로 윤곽 ${b.count}개 (${parts}). ${b.data_mode === "synthetic" ? "연습용 자료" : s0.name}, 도형 기준일 ${s0.geometry_version}, 이용허락 ${s0.license ?? "미확인"}.` +
+    (when ? ` ${when} 가져옴.` : ""), "pencil");
 }
 
 async function loadSyntheticBasemap() {
