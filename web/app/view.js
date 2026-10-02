@@ -8,7 +8,7 @@ export const VIEW_FORMAT = "j5view";
 export const VIEW_SCHEMA_VERSIONS = ["1.0.0"];
 export const TRANSACTIONS_FORMAT = "1.0.0";
 export const RECORD_TYPE_LABEL = {
-  field_observation: "관측", target_price: "목표 매수가", investment_judgment: "투자판단", regulation_review: "규제 검토",
+  field_observation: "현장 기록", target_price: "목표 매수가", investment_judgment: "투자판단", regulation_review: "규제 검토",
   development_plan: "개발안", financing_plan: "자금안", acquisition_review: "매입 준비 검토",
 };
 export const PRICE_KIND_LABEL = { target_buy: "목표 매수가", walk_away: "상한(중단선)", reference: "참고 추정" };
@@ -164,7 +164,7 @@ function recordItem(r, supersededIds, subject) {
 function eventItem(e, subject) {
   const p = e.event?.payload ?? {};
   const n = e.event?.attachment_refs?.length ?? 0;
-  return { id: e.event_id, date: dateOf(e.event?.observed_at), year: dateOf(e.event?.observed_at).slice(0, 4), kind: "field_observation", kindLabel: "관측",
+  return { id: e.event_id, date: dateOf(e.event?.observed_at), year: dateOf(e.event?.observed_at).slice(0, 4), kind: "field_observation", kindLabel: "현장 기록",
            text: (CHANGE_STATUS_LABEL[p.change_status] ?? p.change_status ?? "") + (p.note ? ` · ${p.note}` : "") + (n ? ` · 사진 ${n}장` : ""),
            source: "device", deviceStatus: e.status, superseded: false, subject };
 }

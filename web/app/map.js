@@ -156,6 +156,13 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}
 
   let view = fitView([], 320, 280);
   let size = { w: 320, h: 280 };
+  // 지도 위를 덮는 화면 요소(아래 시트·위 찾기 칸, J5-054)의 두께. 전체 보기·필지 맞추기·확대 중심·축척 막대는 덮이지 않은 영역 기준이다
+  let inset = { top: 0, right: 0, bottom: 0, left: 0 };
+  const visibleRect = () => {
+    const w = Math.max(80, size.w - inset.left - inset.right), h = Math.max(80, size.h - inset.top - inset.bottom);
+    return { x: Math.min(inset.left, size.w - w), y: Math.min(inset.top, size.h - h), w, h };
+  };
+  const centerAt = (c, scale) => { const v = visibleRect(); return { scale, tx: v.x + v.w / 2 - c.x * scale, ty: v.y + v.h / 2 - c.y * scale }; };
   const markers = new Map(); // asset_id → { g, dot, world, asset }
   const parcels = new Map(); // pnu → { path, text, wb, lp, feature, visible }
   let parcelOrigin = { x: 0, y: 0 };
@@ -184,7 +191,9 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}
   const renderTiles = () => {
     if (!tiles) return;
     const z = tileZoom(view.scale, { minZoom: tiles.minZoom, maxZoom: tiles.maxZoom, dpr });
-    const want = tilesFor(view, size.w, size.h, z, 1);
+    // 시트에 덮인 곳의 타일은 받지 않는다 (보이지 않는 곳의 요청을 줄인다). 시트를 접으면 setInset 이 다시 그려 받는다
+    const vr = visibleRect();
+    const want = tilesFor({ scale: view.scale, tx: view.tx - vr.x, ty: view.ty - vr.y }, vr.w, vr.h, z, 1);
     const keep = new Set();
     for (const t of want) {
       keep.add(t.key);
@@ -206,7 +215,8 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}
 
   const render = () => {
     renderTiles();
-    attribText.setAttribute("x", size.w - 6); attribText.setAttribute("y", size.h - 6);
+    const vr = visibleRect();
+    attribText.setAttribute("x", vr.x + vr.w - 6); attribText.setAttribute("y", vr.y + vr.h - 6);
     if (baseCount) {
       const o = toScreen(baseOrigin, view);
       layerBase.setAttribute("transform", `translate(${o.x.toFixed(2)},${o.y.toFixed(2)}) scale(${(view.scale / PARCEL_LOCAL_K).toPrecision(8)})`);
@@ -242,11 +252,11 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}
       const r = Number.isFinite(location.accuracy) ? location.accuracy / metersPerPixel(location.lat, view) : 0;
       locateRing.setAttribute("r", Math.max(0, Math.min(r, 5000)).toFixed(1));
     }
-    const lat = unmercator(toWorld(size.w / 2, size.h / 2, view))[1];
+    const lat = unmercator(toWorld(vr.x + vr.w / 2, vr.y + vr.h / 2, view))[1];
     const bar = scaleBar(lat, view);
-    const y = size.h - 10;
-    scaleLine.setAttribute("y1", y); scaleLine.setAttribute("y2", y); scaleLine.setAttribute("x2", 10 + bar.px);
-    scaleText.setAttribute("y", y - 6);
+    const y = vr.y + vr.h - 10, x0 = vr.x + 10;
+    scaleLine.setAttribute("x1", x0); scaleLine.setAttribute("y1", y); scaleLine.setAttribute("y2", y); scaleLine.setAttribute("x2", x0 + bar.px);
+    scaleText.setAttribute("x", x0); scaleText.setAttribute("y", y - 6);
     scaleText.textContent = bar.meters >= 1000 ? `${bar.meters / 1000} km` : `${bar.meters} m`;
   };
 
@@ -295,6 +305,17 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}
         setClass(m);
         m.dot.setAttribute("r", m.asset.asset_id === selectedId ? DOT_R_SEL : DOT_R);
       }
+    },
+    /** 고른 대상의 점이 시트 등에 가려졌으면 보이는 영역 가운데로 옮긴다 (축척 유지). 보이면 그대로. 옮겼으면 true */
+    reveal(assetId, margin = 40) {
+      const m = markers.get(assetId);
+      if (!m) return false;
+      measure();
+      const p = toScreen(m.world, view), vr = visibleRect();
+      if (p.x >= vr.x + margin && p.x <= vr.x + vr.w - margin && p.y >= vr.y + margin && p.y <= vr.y + vr.h - margin) return false;
+      view = centerAt(m.world, view.scale);
+      render();
+      return true;
     },
     /** 필지 번들(.j5parcels.json, 검증된 것) 또는 null. 경계·라벨을 전부 다시 만들고 전체 보기. */
     setParcels(bundle) {
@@ -390,10 +411,11 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}
       if (!pc) return false;
       measure();
       const pad = 40, dx = Math.max(pc.wb.x1 - pc.wb.x0, 1e-12), dy = Math.max(pc.wb.y1 - pc.wb.y0, 1e-12);
-      const fit = Math.min((size.w - 2 * pad) / dx, (size.h - 2 * pad) / dy);   // fitView 의 FIT_MAX_SCALE 상한 대신 FOCUS_MAX_SCALE 까지 확대한다
+      const vr = visibleRect();
+      const fit = Math.min((vr.w - 2 * pad) / dx, (vr.h - 2 * pad) / dy);   // fitView 의 FIT_MAX_SCALE 상한 대신 FOCUS_MAX_SCALE 까지 확대한다
       const c = { x: (pc.wb.x0 + pc.wb.x1) / 2, y: (pc.wb.y0 + pc.wb.y1) / 2 };
       const scale = clampScale(Math.min(Math.max(fit, view.scale), FOCUS_MAX_SCALE));   // 이미 더 확대돼 있으면 유지, 축소는 하지 않는다
-      view = { scale, tx: size.w / 2 - c.x * scale, ty: size.h / 2 - c.y * scale };
+      view = centerAt(c, scale);
       render();
       return true;
     },
@@ -404,7 +426,7 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}
       layerLocate.setAttribute("visibility", "visible");
       if (center) {
         measure();
-        view = { scale: view.scale, tx: size.w / 2 - location.world.x * view.scale, ty: size.h / 2 - location.world.y * view.scale };
+        view = centerAt(location.world, view.scale);
       }
       render();
     },
@@ -430,19 +452,30 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}
     },
     fit() {
       measure();
-      view = fitView(fitPoints(), size.w, size.h);
+      const vr = visibleRect();
+      // 보이는 영역이 낮으면(시트를 펼친 작은 화면) 여백을 줄여 점들이 너무 작게 모이지 않게 한다
+      const v = fitView(fitPoints(), vr.w, vr.h, Math.min(FIT_PAD, Math.max(12, Math.min(vr.w, vr.h) * 0.12)));
+      view = { scale: v.scale, tx: v.tx + vr.x, ty: v.ty + vr.y };
       render();
     },
     zoomBy(factor) {
       measure();
-      view = zoomAt(view, factor, size.w / 2, size.h / 2);
+      const vr = visibleRect();
+      view = zoomAt(view, factor, vr.x + vr.w / 2, vr.y + vr.h / 2);
       render();
     },
     resize() {
-      // 크기가 바뀌어도 화면 중심의 세계 좌표를 유지한다 (기기 회전).
-      const c = toWorld(size.w / 2, size.h / 2, view);
+      // 크기가 바뀌어도 보이는 영역 중심의 세계 좌표를 유지한다 (기기 회전).
+      const vr = visibleRect();
+      const c = toWorld(vr.x + vr.w / 2, vr.y + vr.h / 2, view);
       measure();
-      view = { scale: view.scale, tx: size.w / 2 - c.x * view.scale, ty: size.h / 2 - c.y * view.scale };
+      view = centerAt(c, view.scale);
+      render();
+    },
+    /** 지도를 덮는 화면 요소의 두께(px). 화면은 옮기지 않고 다음 맞추기·확대부터 쓴다. 축척 막대·출처 글은 바로 옮긴다 */
+    setInset(next = {}) {
+      const n = (v) => (Number.isFinite(v) && v > 0 ? v : 0);
+      inset = { top: n(next.top), right: n(next.right), bottom: n(next.bottom), left: n(next.left) };
       render();
     },
     getView() { return { ...view }; },

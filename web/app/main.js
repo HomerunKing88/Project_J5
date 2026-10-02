@@ -1,4 +1,4 @@
-// 앱 진입점 (R1a). 화면: 오늘(대상 목록) → 지도 → 기록 → 내보내기 → 설정. 관측은 전체 화면 작업 패널(sheet)에서 한다 (J5-020).
+// 앱 진입점 (R1a). 화면: 현장(지도 + 아래 시트의 대상 목록) · 기록(PC 로 보내기 + 이 폰의 기록) · 설정 (J5-054). 기록하기는 전체 화면 작업 패널(sheet)에서 한다 (J5-020).
 // 저장 형식·이벤트 바이트·해시·ZIP·IndexedDB 계약은 그대로다. 외부 통신 없음.
 import { Store } from "./db.js";
 import { sniffImage, SUPPORTED } from "./sniff.js";
@@ -18,7 +18,7 @@ import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
 import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummaryInfo, yearSummaryRow } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.20";
+export const APP_VERSION = "0.2.21";
 const $ = (id) => document.getElementById(id);
 const state = { store: null, parcelFilter: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, zoneColors: false, seedLoadedAt: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
                 nav: null, returnFocus: null, mapSelected: null, assetFilter: "all" };
@@ -39,7 +39,7 @@ function trackingBadges(a) {
     out.push(el("span", { class: `badge track-${a.tracking_status}` + (isWatchlist(a) ? " track-watchlist" : ""), text: TRACKING_LABEL[a.tracking_status] ?? a.tracking_status,
                           title: "관심 단계 (PC 정본에서 정함)" }));
   }
-  if (a.resolution_status === "pending") out.push(el("span", { class: "badge src-pending", text: "확인 전 · PC 에서 확정", title: "기기에서 만든 임시 매입 단위. PC 의 db asset-confirm 으로 확정한다" }));
+  if (a.resolution_status === "pending") out.push(el("span", { class: "badge src-pending", text: "PC 확인 전", title: "폰에서 만든 임시 대상입니다. PC 에서 확정합니다 (db asset-confirm)" }));
   return out;
 }
 
@@ -57,8 +57,8 @@ function visibleAssets() {
 function renderExtLinks(container, point) {
   const links = externalMapLinks(point);
   container.hidden = links.length === 0;
-  container.replaceChildren(...(links.length ? [el("span", { text: "다른 지도에서 보기:" }),
-    ...links.map((l) => el("a", { href: l.href, text: l.name, ...LINK_ATTRS, ...(l.verified ? {} : { title: "링크 형식 미검증. 열리지 않으면 기록해 둔다" }) }))] : []));
+  container.replaceChildren(...(links.length ? [el("span", { text: "다른 지도에서 보기" }),
+    ...links.map((l) => el("a", { href: l.href, text: l.name, ...LINK_ATTRS, ...(l.verified ? {} : { title: "링크 형식을 아직 확인하지 않았습니다. 열리지 않으면 알려 주세요" }) }))] : []));
 }
 
 function el(tag, props = {}, ...children) {
@@ -67,6 +67,7 @@ function el(tag, props = {}, ...children) {
     if (k === "class") node.className = v;
     else if (k === "text") node.textContent = v;
     else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+    else if (k.startsWith("aria-")) node.setAttribute(k, v);
     else node[k] = v;
   }
   node.append(...children);
@@ -118,7 +119,7 @@ function applyTileSettings({ provider, key, template }, { quiet = false } = {}) 
   }
   state.tiles = cfg;
   mapCall((m) => m.setTiles({ url: cfg.url, minZoom: cfg.minZoom, maxZoom: cfg.maxZoom, attribution: cfg.attribution }));
-  if (!quiet) text($("tiles-note"), `저장했습니다: ${PROVIDERS[provider].name} · ${cfg.url}` + (cfg.needsKey ? " · 인증키는 이 기기에만 저장" : ""), "ok");
+  if (!quiet) text($("tiles-note"), `저장했습니다: ${PROVIDERS[provider].name} · ${cfg.url}` + (cfg.needsKey ? ". 인증키는 이 폰에만 저장합니다" : ""), "ok");
   return true;
 }
 
@@ -183,10 +184,10 @@ async function prefetchTiles() {
   if (!state.tiles) return text($("tiles-prefetch-note"), "먼저 배경 지도를 켜고 저장합니다.", "warn");
   if (!navigator.onLine) return text($("tiles-prefetch-note"), "오프라인이라 받을 수 없습니다.", "warn");
   const bbox = prefetchBbox();
-  if (!bbox) return text($("tiles-prefetch-note"), "범위를 정할 대상·필지가 없습니다. 물건 목록이나 필지를 먼저 넣습니다.", "warn");
+  if (!bbox) return text($("tiles-prefetch-note"), "범위를 정할 대상·필지가 없습니다. 자료를 먼저 가져옵니다.", "warn");
   const plan = prefetchPlan(bbox, { minZoom: Math.max(PREFETCH_ZOOMS.min, state.tiles.minZoom), maxZoom: Math.min(PREFETCH_ZOOMS.max, state.tiles.maxZoom) });
   if (plan.tooMany) return text($("tiles-prefetch-note"), `범위가 넓어 타일이 ${plan.count}장을 넘습니다 (한도 ${plan.cap}). 대상 범위를 좁힙니다.`, "warn");
-  if (!(await swControlled())) return text($("tiles-prefetch-note"), "아직 이 기기에 저장할 준비가 되지 않았습니다 (서비스 워커 미활성: https 또는 localhost 로 열고 한 번 새로고침). 받아도 저장되지 않아 시작하지 않습니다.", "warn");
+  if (!(await swControlled())) return text($("tiles-prefetch-note"), "아직 이 폰에 타일을 저장할 준비가 되지 않았습니다. https 주소로 열고 한 번 새로고침한 뒤 다시 누릅니다.", "warn");
   state.prefetching = true;
   $("tiles-prefetch").disabled = true;
   const before = (await tileCacheCount()) ?? 0;
@@ -232,11 +233,11 @@ async function saveSettings() {
   const route = $("route-version").value.trim();
   const idErr = studyIdError(studyId);
   if (idErr) return text($("settings-note"), idErr, "bad");
-  if (route && !isUuid(route)) return text($("settings-note"), "조사 경로 ID 는 UUID 형식이어야 한다", "bad");
+  if (route && !isUuid(route)) return text($("settings-note"), "조사 경로 ID 는 PC 에서 받은 UUID 그대로 넣습니다", "bad");
   await state.store.setMeta("study_id", studyId);
   await state.store.setMeta("data_mode", $("data-mode").value);
   await state.store.setMeta("route_version_id", route || null);
-  text($("settings-note"), "저장됨", "ok");
+  text($("settings-note"), "저장했습니다", "ok");
   renderModeBadge($("data-mode").value);
   await renderMigrate(await state.store.listEvents());  // 설정(study_id·모드)이 바뀌면 '현재 설정' 기준이 바뀐다
   await refreshStatus();
@@ -246,13 +247,13 @@ async function saveSettings() {
 async function loadSeedObject(seed, source) {
   // 스키마 전체 규칙으로 검증한다. 시드는 통째로 교체하며 저장된 관측은 건드리지 않는다.
   const errs = validateSeed(seed);
-  if (errs.length) return text($("seed-note"), "물건 목록 파일 오류: " + errs.slice(0, 5).join("; ") + (errs.length > 5 ? ` 외 ${errs.length - 5}건` : ""), "bad");
+  if (errs.length) return text($("seed-note"), "대상 목록 파일을 넣지 못했습니다: " + errs.slice(0, 5).join("; ") + (errs.length > 5 ? ` 외 ${errs.length - 5}건` : ""), "bad");
   await state.store.replaceAssets(seed, source);
   const from = source === "bundled_synthetic" ? "연습용" : source.replace(/^file:/, "");
   await renderAssets();
   await renderRecords();
   // 안내는 목록·기록을 다 그린 뒤에 쓴다 (이 문구가 보이면 화면이 새 목록이다)
-  text($("seed-note"), `물건 ${seed.length}개를 불러왔습니다 (${from}). 이전 목록은 교체됐고 저장된 기록은 그대로입니다.`, "ok");
+  text($("seed-note"), `대상 ${seed.length}곳을 가져왔습니다 (${from}). 이전 목록은 바뀌었고 저장한 기록은 그대로입니다.`, "ok");
 }
 
 async function loadSyntheticSeed() {
@@ -261,8 +262,17 @@ async function loadSyntheticSeed() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     await loadSeedObject(await res.json(), "bundled_synthetic");
   } catch (e) {
-    text($("seed-note"), "연습용 물건 목록을 읽지 못함: " + e, "bad");
+    text($("seed-note"), "연습용 대상 목록을 읽지 못했습니다: " + e, "bad");
   }
+}
+
+/** 시작하기의 '연습용 자료로 둘러보기': 연습용 대상·필지·배경을 함께 넣어 지도가 바로 보이게 한다. 이미 넣은 필지·배경 파일이 있으면 그대로 둔다 */
+async function loadSyntheticAll() {
+  await loadSyntheticSeed();
+  if (!state.parcelsRec) await loadSyntheticParcels();
+  if (!state.basemapRec) await loadSyntheticBasemap();
+  text($("home-note"), $("seed-note").textContent, $("seed-note").className);
+  showFieldAfterLoad();
 }
 
 async function loadSeedFile(input) {
@@ -271,13 +281,13 @@ async function loadSeedFile(input) {
   try {
     await loadSeedObject(JSON.parse(await file.text()), "file:" + file.name);
   } catch (e) {
-    text($("seed-note"), "물건 목록 파일을 읽지 못함: " + e, "bad");
+    text($("seed-note"), "대상 목록 파일을 읽지 못했습니다: " + e, "bad");
   }
   input.value = "";
 }
 
 function assetSub(a) {
-  return a.address ? a.address : a.location_point ? "지도에 위치 표시됨" : "위치 정보 없음 (목록에서 선택)";
+  return a.address ? a.address : a.location_point ? "지도에 위치 있음" : "위치 없음, 목록에서 고릅니다";
 }
 
 async function renderAssets() {
@@ -288,34 +298,40 @@ async function renderAssets() {
   applyAssetFilterUi();
   const visible = visibleAssets();
   const list = $("asset-list");
+  // 한 줄 = 대상 하나 (J5-054). 줄을 누르면 지도에서 고르고(아래 카드), 오른쪽 "기록" 은 바로 기록하기를 연다. 버튼 안에 버튼을 두지 않으려고 이력·삭제는 줄 아래(row-extra)에 둔다
   list.replaceChildren(...visible.map((a) => {
     const s = assetSummary(a.asset_id, state.events);
     const meta = el("span", { class: "meta" });
     if (s.count) {
       meta.append(el("span", { class: `badge status-${s.lastStatus}`, text: CHANGE_STATUS_LABEL[s.lastStatus] ?? s.lastStatus }),
-                  el("span", { text: `마지막 기록 ${shortWhen(s.lastAt)} · 기록 ${s.count}건 · 사진 ${s.photos}장` }));
-      if (s.unexported) meta.append(el("span", { class: "warn", text: `안 내보냄 ${s.unexported}건` }));
+                  el("span", { text: shortWhen(s.lastAt) }), el("span", { text: `기록 ${s.count}건` }));
+      if (s.photos) meta.append(el("span", { text: `사진 ${s.photos}장` }));
+      if (s.unexported) meta.append(el("span", { class: "unsent", text: `안 보냄 ${s.unexported}` }));
     } else {
-      meta.append(el("span", { text: "이 기기에 기록 없음" }));
+      meta.append(el("span", { text: "아직 기록 없음" }));
     }
-    meta.append(el("button", { class: "quiet", text: "이력", onclick: () => openAssetHistory(a) }));
-    meta.append(...trackingBadges(a));
+    const extra = el("div", { class: "row-extra" });
+    if (s.count || state.view) extra.append(el("button", { class: "quiet small", text: "이력", onclick: () => openAssetHistory(a) }));
+    extra.append(...trackingBadges(a));
     if (a.origin === "device") {
-      meta.append(el("span", { class: "badge src-device", text: "이 기기에서 만듦 · PC 반영 전" }));
-      if (!s.count) meta.append(el("button", { class: "quiet", text: "삭제", onclick: () => deleteDeviceAsset(a) }));
+      extra.append(el("span", { class: "badge src-device", text: "이 폰에서 만듦" }));
+      if (!s.count) extra.append(el("button", { class: "quiet small", text: "삭제", onclick: () => deleteDeviceAsset(a) }));
     }
     const li = el("li", { class: state.mapSelected === a.asset_id ? "selected" : "" },
-      el("span", { class: "title", text: a.label }),
-      el("button", { text: "기록하기", onclick: () => startObservation(a) }),
-      el("span", { class: "sub" }, modeBadge(a.data_mode), document.createTextNode(" " + assetSub(a))),
-      meta,
+      el("button", { class: "row-main", onclick: () => selectOnMap(a) },
+        el("span", { class: "title", text: a.label }),
+        el("span", { class: "sub" }, modeBadge(a.data_mode), document.createTextNode(" " + assetSub(a))),
+        meta),
+      el("button", { class: "row-act secondary", text: "기록", "aria-label": `${a.label} 기록하기`, onclick: () => startObservation(a) }),
     );
+    if (extra.childNodes.length) li.append(extra);
     li.dataset.assetId = a.asset_id;
     return li;
   }));
-  if (!state.assets.length) list.append(el("li", { class: "empty", text: "아직 대상이 없습니다. 설정의 자료 관리에서 물건 목록을 가져오세요." }));
-  else if (!visible.length) list.append(el("li", { class: "empty", text: "관찰목록 단계(관찰·상세 검토·매입 준비)인 물건이 없습니다. 관심 단계는 PC 에서 정합니다 (db asset-track). '전체' 로 바꾸면 모두 보입니다." }));
+  if (!state.assets.length) list.append(el("li", { class: "empty", text: "아직 대상이 없습니다. 위의 시작하기에서 자료를 가져옵니다." }));
+  else if (!visible.length) list.append(el("li", { class: "empty", text: "관찰목록에 든 대상이 없습니다. 관심 단계는 PC 에서 정합니다. '전체' 를 누르면 모두 보입니다." }));
   // 목록을 먼저 채운 뒤 지도를 갱신한다. 지도 실패는 목록에 영향을 주지 않는다.
+  updateMapInset();   // 목록이 바뀌어 시트 높이가 달라졌을 수 있다: 맞추기 전에 덮인 영역을 다시 잰다
   mapCall((m) => mapNote(m.setAssets(visible)));
   // 조건 찾기 결과는 물건 목록에 따라 달라진다(물건 조건·결과 줄의 물건 수): 켜져 있으면 마지막으로 찾은 조건으로 다시 그린다 (리뷰 반영 PR #83)
   if (state.parcelFilter) renderParcelFilter(state.parcelFilter);
@@ -331,7 +347,7 @@ function renderSeedStatus() {
   const n = state.assets.length;
   const when = shortWhen(state.seedLoadedAt);
   const watch = state.assets.filter(isWatchlist).length;
-  text($("seed-status"), n ? `물건 ${n}개 (${MODE_SHORT[state.assets[0].data_mode] ?? ""})${hasTracking(state.assets) ? ` · 관찰목록 ${watch}개` : ""} · 마지막 가져오기 ${when ?? "시각 모름"}` : "가져온 물건 목록이 없습니다.");
+  text($("seed-status"), n ? `대상 ${n}곳 (${MODE_SHORT[state.assets[0].data_mode] ?? ""})${hasTracking(state.assets) ? `, 관찰목록 ${watch}곳` : ""}. ${when ?? "시각 모름"} 가져옴` : "가져온 대상 목록이 없습니다.");
 }
 
 // ---- 관찰목록 필터 (J5-029, ADR-22): 파생본 시드의 관심 단계로 '전체/관찰목록만' 을 고른다. 선택은 이 기기(meta asset_filter)에 남는다. 관심 단계 자체는 PC 에서만 바꾼다 ----
@@ -342,7 +358,7 @@ function applyAssetFilterUi() {
   bar.hidden = !tracked;
   for (const b of bar.querySelectorAll("button[data-filter]")) b.setAttribute("aria-pressed", String(b.dataset.filter === filter));
   const watch = state.assets.filter(isWatchlist).length;
-  text($("asset-filter-note"), tracked ? (filter === "watchlist" ? `관찰목록 ${watch}개만 표시 (전체 ${state.assets.length}개)` : `전체 ${state.assets.length}개 (관찰목록 ${watch}개)`) : "", "muted");
+  text($("asset-filter-note"), tracked ? (filter === "watchlist" ? `관찰목록 ${watch}곳만 보는 중 (전체 ${state.assets.length}곳)` : `관찰목록 ${watch}곳`) : "", "pencil");
 }
 
 async function setAssetFilter(filter) {
@@ -356,11 +372,11 @@ async function setAssetFilter(filter) {
 // 필지 번들은 지도의 보조 층이다. 없거나 실패해도 목록·기록·내보내기는 그대로 동작한다.
 async function loadParcelsObject(doc, source) {
   const errs = validateParcels(doc);
-  if (errs.length) return text($("parcels-note"), "필지 파일 오류: " + errs.slice(0, 5).join("; ") + (errs.length > 5 ? ` 외 ${errs.length - 5}건` : ""), "bad");
+  if (errs.length) return text($("parcels-note"), "필지 파일을 넣지 못했습니다: " + errs.slice(0, 5).join("; ") + (errs.length > 5 ? ` 외 ${errs.length - 5}건` : ""), "bad");
   // 파생본의 필지 파일은 정본의 study_id 를 담는다. 설정과 다르면 다른 정본의 연결이므로 넣지 않는다.
   const studyId = await state.store.getMeta("study_id");
   if (doc.study_id && studyId && doc.study_id !== studyId) {
-    return text($("parcels-note"), `필지 파일의 study_id(${doc.study_id})가 설정(${studyId})과 다르다. 같은 정본의 파생본을 넣는다`, "bad");
+    return text($("parcels-note"), `필지 파일의 작업 공간(${doc.study_id})이 설정(${studyId})과 다릅니다. 같은 작업 공간에서 만든 파일을 넣습니다`, "bad");
   }
   await state.store.replaceParcels(doc, source);
   applyParcels(await state.store.getParcels());
@@ -377,10 +393,12 @@ function applyParcels(rec) {
   state.parcels = rec?.bundle ?? null;
   state.parcelsCount = state.parcels?.features.length ?? 0;
   closeParcelPanel();
+  updateMapInset();
   mapCall((m) => m.setParcels(state.parcels));
   applyZoneColors();
   applySearchUi();
   parcelsNote(rec);
+  updateMapInset();
   mapCall((m) => mapNote(m.setAssets(visibleAssets())));
 }
 
@@ -390,7 +408,7 @@ function applySearchUi() {
   const has = state.parcelsCount > 0;
   $("parcel-search-form").hidden = !has;
   $("map-locate").disabled = !("geolocation" in navigator);
-  $("map-locate").title = "geolocation" in navigator ? "" : "이 브라우저에서는 위치를 읽을 수 없습니다";
+  $("map-locate").hidden = !("geolocation" in navigator);
   if (!has) { $("parcel-search-results").replaceChildren(); $("parcel-search-results").hidden = true; text($("parcel-search-note"), "", "muted"); }
   applyFilterUi();
 }
@@ -446,7 +464,7 @@ function renderParcelFilter(criteria) {
   const tail = (unk.length ? ` · 값 없는 필지: ${unk.join(", ")}` : "") + (r.undetermined ? ` · 값이 없어 맞는지 모르는 필지 ${r.undetermined}개는 결과에서 뺌` : "");
   if (!r.total) return text($("parcel-filter-note"), `속성 있는 필지 ${r.withAttrs}개 중 맞는 필지가 없습니다${tail}.`, "warn");
   list.replaceChildren(...r.matches.map((f) => el("li", {}, el("span", { class: "title", text: parcelTitle(f.properties) }), el("span", { class: "sub", text: filterRowText(f.properties.attrs, assetsOf(f)) }),
-    el("button", { text: "열기", onclick: () => openParcel(f) }))));
+    el("button", { class: "secondary", text: "열기", onclick: () => openParcel(f) }))));
   list.hidden = false;
   text($("parcel-filter-note"), `속성 있는 필지 ${r.withAttrs}개 중 ${r.total}개 일치` + (r.total > r.matches.length ? ` (공부면적 큰 순 앞 ${FILTER_LIMIT}개만 목록)` : " (공부면적 큰 순)") +
     (shown != null ? ` · 지도에 테두리로 표시` : "") + tail, "ok");
@@ -462,9 +480,9 @@ function clearParcelFilter() {
 }
 
 function openParcel(feature, { focus = true, move = true } = {}) {
+  showParcel(feature);   // 시트를 먼저 펼쳐야 필지 맞추기가 시트에 덮이지 않는 곳에 그린다
   if (move) mapCall((m) => m.focusParcel(feature.id));
-  showParcel(feature);
-  if (focus) $("parcel-history").focus();
+  if (focus) $("parcel-history").focus({ preventScroll: true });
 }
 
 function searchParcels(q) {
@@ -472,26 +490,28 @@ function searchParcels(q) {
   const list = $("parcel-search-results");
   list.replaceChildren();
   list.hidden = true;
-  if (!feats.length) return text($("parcel-search-note"), "필지 파일을 먼저 넣습니다.", "warn");
+  openSheet();
+  if (!feats.length) return text($("parcel-search-note"), "필지 자료가 없어 찾을 수 없습니다. 설정에서 PC 자료 파일을 가져옵니다.", "warn");
   const r = findParcels(feats, q);
-  if (!r.query) return text($("parcel-search-note"), "지번(예: 182-13, 산1-2, 동 이름 182-13) 또는 PNU 19자리를 넣습니다.", "warn");
-  if (!r.matches.length) return text($("parcel-search-note"), `'${String(q).trim()}' 에 맞는 필지가 불러온 ${feats.length}개 안에 없습니다. 동 이름·지번을 확인하거나 PC 에서 범위를 넓힌 파일을 넣습니다.`, "warn");
+  if (!r.query) return text($("parcel-search-note"), "지번(예: 182-13, 산1-2, 예지동 182-13)이나 필지 번호 19자리를 넣습니다.", "warn");
+  if (!r.matches.length) return text($("parcel-search-note"), `'${String(q).trim()}' 필지가 가져온 ${feats.length}개 안에 없습니다. 동 이름과 지번을 확인하거나, PC 에서 범위를 넓혀 자료 파일을 다시 만듭니다.`, "warn");
   if (r.matches.length === 1) {
     openParcel(r.matches[0]);
-    return text($("parcel-search-note"), `${parcelTitle(r.matches[0].properties)} 필지로 이동`, "ok");
+    return text($("parcel-search-note"), "", "note");
   }
-  list.replaceChildren(...r.matches.map((f) => el("li", {}, el("span", { class: "title", text: parcelTitle(f.properties) }), el("span", { class: "mono muted", text: f.id }),
-    el("button", { text: "열기", onclick: () => { openParcel(f); list.hidden = true; } }))));
+  list.replaceChildren(...r.matches.map((f) => el("li", {}, el("span", { class: "title", text: parcelTitle(f.properties) }), el("span", { class: "sub num", text: f.id }),
+    el("button", { class: "secondary", text: "열기", onclick: () => { openParcel(f); list.hidden = true; } }))));
   list.hidden = false;
-  text($("parcel-search-note"), `${r.total}개 일치${r.total > r.matches.length ? ` (앞 ${r.matches.length}개만 표시)` : ""}. 하나를 고릅니다.`, "muted");
+  text($("parcel-search-note"), `${r.total}개 찾음${r.total > r.matches.length ? ` (앞 ${r.matches.length}개만 보입니다)` : ""}. 하나를 고릅니다.`, "pencil");
 }
 
 function locateMe() {
   if (!("geolocation" in navigator)) return text($("parcel-search-note"), "이 브라우저에서는 위치를 읽을 수 없습니다.", "warn");
-  if (!window.isSecureContext) return text($("parcel-search-note"), "위치는 보안 컨텍스트(https 또는 localhost)에서만 읽을 수 있습니다.", "warn");
+  openSheet();
+  if (!window.isSecureContext) return text($("parcel-search-note"), "위치는 https 주소로 연 앱에서만 읽을 수 있습니다.", "warn");
   const btn = $("map-locate");
   btn.disabled = true;
-  text($("parcel-search-note"), "현재 위치를 읽는 중…", "muted");
+  text($("parcel-search-note"), "현재 위치를 읽는 중…", "pencil");
   navigator.geolocation.getCurrentPosition((pos) => {
     btn.disabled = false;
     const { longitude: lon, latitude: lat, accuracy } = pos.coords;
@@ -504,14 +524,14 @@ function locateMe() {
     const f = parcelAt(state.parcels?.features ?? [], [lon, lat]);
     if (f) {
       openParcel(f, { focus: false, move });
-      text($("parcel-search-note"), `현재 위치는 ${parcelTitle(f.properties)} 필지 안${acc}. 위치는 저장하지 않습니다.${tileNote}`, "ok");
+      text($("parcel-search-note"), `지금 ${parcelTitle(f.properties)} 필지 안에 있습니다${acc}. 위치는 저장하지 않습니다.${tileNote}`, "ok");
     } else {
-      text($("parcel-search-note"), (state.parcelsCount ? `현재 위치${acc}가 불러온 필지 범위 밖입니다. 위치는 저장하지 않습니다.` : `현재 위치를 표시했습니다${acc}. 필지 파일을 넣으면 그 자리의 필지를 엽니다.`) + tileNote, "muted");
+      text($("parcel-search-note"), (state.parcelsCount ? `지금 위치${acc}는 가져온 필지 범위 밖입니다. 위치는 저장하지 않습니다.` : `지금 위치를 표시했습니다${acc}. 필지 자료가 있으면 그 자리의 필지를 엽니다.`) + tileNote, "pencil");
     }
   }, (err) => {
     btn.disabled = false;
-    const why = err.code === 1 ? "위치 권한이 거부됐습니다 (브라우저 설정에서 허용)" : err.code === 2 ? "위치를 구할 수 없습니다 (실내·기내 모드)" : "위치 읽기 시간이 지났습니다";
-    text($("parcel-search-note"), why + ". 위치는 저장·전송하지 않습니다.", "warn");
+    const why = err.code === 1 ? "위치 권한이 꺼져 있습니다. 브라우저 설정에서 이 사이트의 위치를 허용합니다" : err.code === 2 ? "위치를 구하지 못했습니다. 실내이거나 기내 모드인지 확인합니다" : "위치를 읽는 데 시간이 너무 걸렸습니다. 다시 누릅니다";
+    text($("parcel-search-note"), why + ".", "warn");
   }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
 }
 
@@ -519,8 +539,9 @@ function applyZoneColors() {
   const sm = attrsSummary(state.parcels);
   const btn = $("map-zones");
   btn.disabled = !sm.withAttrs;
+  btn.hidden = !sm.withAttrs;   // 토지 자료가 든 필지 파일일 때만 보인다
   btn.setAttribute("aria-pressed", state.zoneColors && sm.withAttrs ? "true" : "false");
-  btn.textContent = state.zoneColors && sm.withAttrs ? "용도지역 색 끄기" : "용도지역 색";
+  btn.textContent = "용도지역";
   mapCall((m) => m.setZoneColors(state.zoneColors && sm.withAttrs));
   const legend = $("zone-legend");
   if (state.zoneColors && sm.withAttrs) {
@@ -540,7 +561,7 @@ async function toggleZoneColors() {
 }
 
 function parcelsNote(rec) {
-  if (!rec) return text($("parcels-note"), "필지 없음. 지도에는 물건 위치만 보입니다.", "muted");
+  if (!rec) return text($("parcels-note"), "필지 자료 없음. 지도에는 대상 위치만 보입니다.", "pencil");
   const b = rec.bundle, s = b.source;
   const crs = s.crs?.epsg ? `EPSG:${s.crs.epsg}` : (s.crs?.name ?? "?");
   const hasLinks = b.features.some((f) => (f.properties.asset_ids ?? []).length);
@@ -567,7 +588,7 @@ async function loadSyntheticParcels() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     await loadParcelsObject(await res.json(), "bundled_synthetic");
   } catch (e) {
-    text($("parcels-note"), "연습용 필지를 읽지 못함: " + e, "bad");
+    text($("parcels-note"), "연습용 필지를 읽지 못했습니다: " + e, "bad");
   }
 }
 
@@ -577,7 +598,7 @@ async function loadParcelsFile(input) {
   try {
     await loadParcelsObject(JSON.parse(await file.text()), "file:" + file.name);
   } catch (e) {
-    text($("parcels-note"), "필지 파일을 읽지 못함: " + e, "bad");
+    text($("parcels-note"), "필지 파일을 읽지 못했습니다: " + e, "bad");
   }
   input.value = "";
 }
@@ -589,35 +610,37 @@ async function clearParcels() {
 
 // ---- PC 자료 파일 (조회 파생본 .j5view.zip, J5-023, ADR-17) ----
 // 물건 목록·필지·정본 기록·거래를 한 번에 넣는다. 사진은 넣지 않는다. 이 기기의 관측·사진은 건드리지 않는다. 최신 여부는 파일만으로 모른다.
-async function loadViewFile(input) {
+async function loadViewFile(input, note = $("view-note")) {
   const file = input.files?.[0];
   if (!file) return;
   input.value = "";
-  if (file.size > VIEW_LIMITS.file) return text($("view-note"), `파일이 너무 큽니다 (${fmtBytes(file.size)}, 한도 ${fmtBytes(VIEW_LIMITS.file)}). PC 에서 사진 없이 다시 만듭니다`, "bad");
-  text($("view-note"), "읽는 중…", "muted");
+  // 첫 화면(시작하기)과 설정 두 곳에서 부른다. 안내는 누른 자리 옆(note)에 쓰고, 설정의 안내도 같은 글로 맞춘다
+  const say = (msg, cls) => { text(note, msg, cls); if (note !== $("view-note")) text($("view-note"), msg, cls); };
+  if (file.size > VIEW_LIMITS.file) return say(`파일이 너무 큽니다 (${fmtBytes(file.size)}, 한도 ${fmtBytes(VIEW_LIMITS.file)}). PC 에서 다시 만듭니다`, "bad");
+  say("읽는 중…", "pencil");
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const { manifest, files, photosSkipped } = await readViewZip(bytes);
     const [studyId, dataMode] = await Promise.all([state.store.getMeta("study_id"), state.store.getMeta("data_mode")]);
     const errs = validateViewManifest(manifest, { studyId: studyId || null, dataMode: dataMode ?? null });
-    if (errs.length) return text($("view-note"), "PC 자료 파일 오류: " + errs.slice(0, 5).join("; "), "bad");
+    if (errs.length) return say("PC 자료 파일을 넣지 못했습니다: " + errs.slice(0, 5).join("; "), "bad");
     const seed = JSON.parse(decodeText(files.get("assets.seed.json")));
     const seedErrs = validateSeed(seed);
-    if (seedErrs.length) return text($("view-note"), "파일 안 물건 목록 오류: " + seedErrs.slice(0, 5).join("; "), "bad");
+    if (seedErrs.length) return say("파일 안의 대상 목록이 올바르지 않습니다: " + seedErrs.slice(0, 5).join("; "), "bad");
     const parcels = files.has("parcels.geojson") ? JSON.parse(decodeText(files.get("parcels.geojson"))) : null;
     if (parcels) {
       const pe = validateParcels(parcels);
-      if (pe.length) return text($("view-note"), "파일 안 필지 오류: " + pe.slice(0, 5).join("; "), "bad");
+      if (pe.length) return say("파일 안의 필지가 올바르지 않습니다: " + pe.slice(0, 5).join("; "), "bad");
     }
     const records = parseRecordsJsonl(decodeText(files.get("records.jsonl")));
     const transactions = files.has("transactions.json") ? JSON.parse(decodeText(files.get("transactions.json"))) : null;
     if (transactions) {
       const te = validateTransactionsDoc(transactions);
-      if (te.length) return text($("view-note"), "파일 안 거래 목록 오류: " + te.slice(0, 5).join("; "), "bad");
+      if (te.length) return say("파일 안의 거래 목록이 올바르지 않습니다: " + te.slice(0, 5).join("; "), "bad");
     }
     // 파일들이 같은 정본 버전에서 나왔는지 manifest 와 대조한다 (리뷰 반영: 다른 정본의 거래·필지가 섞여 들어오지 않게)
     const ce = checkProjectionConsistency(manifest, { transactions, parcels });
-    if (ce.length) return text($("view-note"), "PC 자료 파일 오류: " + ce.slice(0, 5).join("; "), "bad");
+    if (ce.length) return say("PC 자료 파일을 넣지 못했습니다: " + ce.slice(0, 5).join("; "), "bad");
     // 설정이 비어 있으면 파일의 작업 공간·자료 종류를 설정으로 쓴다 (다르면 위에서 거절됨). 설정·물건·필지·정본 기록·거래를 한 트랜잭션으로 넣는다 (리뷰 반영):
     // 중간에 실패하면 이전 상태가 그대로 남고, 파생본에 필지가 없으면 기존 필지는 지운다 (같은 정본 버전의 자료만 남게)
     const source = "view:" + file.name;
@@ -633,25 +656,25 @@ async function loadViewFile(input) {
     await renderRecords();
     renderViewStatus();
     const sm = viewSummary(state.view);
-    text($("view-note"), `PC 자료를 가져왔습니다: 정본 v${sm.version} · 물건 ${seed.length}개 · 필지 ${parcels ? parcels.count : 0}개 · 정본 기록 ${records.length}건 · 거래 ${sm.transactions}건` +
-      (photosSkipped ? ` · 사진 ${photosSkipped}장은 넣지 않음` : "") + ". 이 기기의 기록은 그대로입니다.", "ok");
+    say(`PC 자료를 가져왔습니다. 대상 ${seed.length}곳, 필지 ${parcels ? parcels.count : 0}개, PC 기록 ${records.length}건, 거래 ${sm.transactions}건 (정본 v${sm.version})` +
+      (photosSkipped ? `. 사진 ${photosSkipped}장은 넣지 않았습니다` : "") + ". 이 폰의 기록은 그대로입니다.", "ok");
   } catch (e) {
-    text($("view-note"), (e instanceof UnzipError ? `PC 자료 파일을 읽지 못함 [${e.code}]: ` : "PC 자료 파일을 읽지 못함: ") + (e?.message || e), "bad");
+    say((e instanceof UnzipError ? `PC 자료 파일을 읽지 못했습니다 [${e.code}]: ` : "PC 자료 파일을 읽지 못했습니다: ") + (e?.message || e), "bad");
   }
 }
 
 function renderViewStatus() {
   const sm = viewSummary(state.view);
-  if (!sm) return text($("view-status"), "가져온 PC 자료가 없습니다. 정본 기록·거래 이력은 PC 자료 파일을 넣으면 보입니다.");
+  if (!sm) return text($("view-status"), "아직 가져오지 않았습니다. PC 기록과 거래 이력은 이 파일을 가져오면 보입니다.");
   const gen = sm.generatedAt ? shortWhen(sm.generatedAt) ?? sm.generatedAt : "?";
-  text($("view-status"), `정본 v${sm.version} (PC 생성 ${gen}) · 정본 기록 ${sm.records}건 · 거래 ${sm.transactions}건 · 가져오기 ${shortWhen(sm.loadedAt) ?? "?"} · 더 새 정본이 있는지는 PC 에서 확인`);
+  text($("view-status"), `PC 에서 ${gen} 에 만든 자료 (정본 v${sm.version}). PC 기록 ${sm.records}건, 거래 ${sm.transactions}건. ${shortWhen(sm.loadedAt) ?? "?"} 에 가져왔습니다. 더 새 자료가 있는지는 PC 에서 확인합니다.`);
 }
 
 async function clearView() {
   await state.store.clearView();
   state.view = null;
   renderViewStatus();
-  text($("view-note"), "PC 기록·거래를 지웠습니다. 물건 목록·필지·이 기기의 기록은 그대로입니다.", "muted");
+  text($("view-note"), "PC 기록과 거래를 지웠습니다. 대상 목록, 필지, 이 폰의 기록은 그대로입니다.", "pencil");
 }
 
 function historyData() {
@@ -668,7 +691,7 @@ function historyItemNode(it) {
     else if (it.match === "linked") head.append(el("span", { class: "badge match-exact", text: LINK_LABEL[it.link] ?? it.link }));
     if (it.masked && it.match !== "prefix") head.append(el("span", { class: "badge", text: "지번 일부 가려짐" }));
   }
-  head.append(el("span", { class: `badge ${it.source === "device" ? "src-device" : "src-pc"}`, text: it.source === "device" ? (it.deviceStatus === "exported" ? "이 기기 · 내보냄" : "이 기기") : "정본" }));
+  head.append(el("span", { class: `badge ${it.source === "device" ? "src-device" : "src-pc"}`, text: it.source === "device" ? (it.deviceStatus === "exported" ? "이 폰 · 보냄" : "이 폰") : "PC" }));
   if (it.superseded) head.append(el("span", { class: "badge", text: "정정으로 대체됨" }));
   const li = el("li", { class: it.superseded ? "superseded" : "" }, el("span", { class: "tl-date", text: it.date || "날짜 미상" }), head, el("span", { class: "tl-text", text: it.text || "(내용 없음)" }));
   if (it.where) li.append(el("span", { class: "tl-where", text: it.where }));
@@ -681,7 +704,7 @@ function openHistory({ title, sub, items, asset = null, years = [], yearsOmitted
   $("history-title").textContent = title;
   $("history-sub").textContent = sub;
   const sm = viewSummary(state.view);
-  text($("history-source"), sm ? `PC 자료: 정본 v${sm.version} (PC 생성 ${shortWhen(sm.generatedAt) ?? sm.generatedAt}) 기준. 더 새 정본이 있는지는 PC 에서 확인합니다.` : "PC 자료 파일을 아직 넣지 않아 이 기기의 관측만 보입니다.", "help");
+  text($("history-source"), sm ? `PC 에서 ${shortWhen(sm.generatedAt) ?? sm.generatedAt} 에 만든 자료(정본 v${sm.version})와 이 폰의 기록입니다.` : "PC 자료를 아직 가져오지 않아 이 폰의 기록만 보입니다.", "help");
   // 필지 연도별 요약 (J5-047): 필지 이력에서만. 모르는 연도는 0 이 아니라 사유로 적는다
   $("history-years-list").replaceChildren(...years.map((r) => {
     const [y, v] = yearSummaryRow(r);
@@ -693,7 +716,7 @@ function openHistory({ title, sub, items, asset = null, years = [], yearsOmitted
   $("history-years").hidden = !years.length;
   // 상한(40개 연도)보다 앞 연도는 폰에 보이지 않는다. 빠진 것을 알리고 PC 명령을 안내한다 (J5-051)
   const om = yearsOmitted;
-  text($("history-years-more"), om ? `${om.from}~${om.to}년 중 자료가 있는 ${om.count}개 연도는 여기 보이지 않습니다. PC 에서 \`j5 db parcels-years\` 로 봅니다.` : "", "help");
+  text($("history-years-more"), om ? `${om.from}~${om.to}년 가운데 자료가 있는 ${om.count}개 연도는 여기 보이지 않습니다. PC 에서 \`j5 db parcels-years\` 로 봅니다.` : "", "help");
   $("history-years-more").hidden = !om;
   const groups = groupByYear(items);
   $("history-list").replaceChildren(...groups.map((g) => el("section", {}, el("h3", { text: g.year }), el("ul", {}, ...g.items.map(historyItemNode)))));
@@ -706,7 +729,7 @@ function openHistory({ title, sub, items, asset = null, years = [], yearsOmitted
 
 function openAssetHistory(asset) {
   const items = assetHistory(asset.asset_id, historyData());
-  openHistory({ title: asset.label, sub: `${assetSub(asset)} · 기록 ${items.length}건`, items, asset });
+  openHistory({ title: asset.label, sub: `${assetSub(asset)}, 기록 ${items.length}건`, items, asset });
 }
 
 /** PC 자료 파일을 만든 해 (연도별 요약의 끝 연도, PC parcels-years 의 올해와 같은 뜻). 파일이 없으면 null */
@@ -720,7 +743,7 @@ function openParcelHistory(feature, assetsInside) {
   const items = parcelHistory(feature, assetsInside, historyData());
   const prices = priceTrend(p.attrs, p.attrs_history).map((q) => ({ year: q.year, price: q.price }));
   const { rows: years, omitted } = parcelYearSummaryInfo(feature, items, state.view?.transactions ?? null, prices, { ownership: ownershipChanges(p.attrs, p.attrs_history), thisYear: viewYear() });
-  openHistory({ title: `${parcelTitle(p)} 필지`, sub: `필지 번호 ${feature.id} · 안의 물건 ${assetsInside.length}개 · 기록·거래 ${items.length}건`, items, asset: null, years, yearsOmitted: omitted });
+  openHistory({ title: `${parcelTitle(p)} 필지`, sub: `필지 번호 ${feature.id}. 대상 ${assetsInside.length}곳, 기록·거래 ${items.length}건`, items, asset: null, years, yearsOmitted: omitted });
 }
 
 function closeHistory() {
@@ -739,7 +762,7 @@ function closeHistory() {
 // 배경은 지도의 참고 층이다. 없거나 실패해도 목록·기록·내보내기·필지는 그대로 동작한다. 기록과 연결되지 않는다.
 async function loadBasemapObject(doc, source) {
   const errs = validateBasemap(doc);
-  if (errs.length) return text($("basemap-note"), "배경 파일 오류: " + errs.slice(0, 5).join("; ") + (errs.length > 5 ? ` 외 ${errs.length - 5}건` : ""), "bad");
+  if (errs.length) return text($("basemap-note"), "배경 파일을 넣지 못했습니다: " + errs.slice(0, 5).join("; ") + (errs.length > 5 ? ` 외 ${errs.length - 5}건` : ""), "bad");
   await state.store.replaceBasemap(doc, source);
   applyBasemap(await state.store.getBasemap());
 }
@@ -747,13 +770,15 @@ async function loadBasemapObject(doc, source) {
 function applyBasemap(rec) {
   state.basemapRec = rec ?? null;
   state.basemapCount = rec?.bundle?.features.length ?? 0;
+  updateMapInset();
   mapCall((m) => m.setBasemap(rec?.bundle ?? null));
   basemapNote(rec);
+  updateMapInset();
   mapCall((m) => mapNote(m.setAssets(visibleAssets())));
 }
 
 function basemapNote(rec) {
-  if (!rec) return text($("basemap-note"), "배경 없음. 지도에는 물건 위치와 필지만 보입니다.", "muted");
+  if (!rec) return text($("basemap-note"), "배경 자료 없음. 지도에는 대상 위치와 필지만 보입니다.", "pencil");
   const b = rec.bundle, s0 = b.sources[0];
   const parts = BASEMAP_LAYERS.filter((k) => b.counts[k] > 0).map((k) => `${BASEMAP_LAYER_LABEL[k]} ${b.counts[k]}`).join(" · ");
   const when = shortWhen(rec.loaded_at);
@@ -767,7 +792,7 @@ async function loadSyntheticBasemap() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     await loadBasemapObject(await res.json(), "bundled_synthetic");
   } catch (e) {
-    text($("basemap-note"), "연습용 배경을 읽지 못함: " + e, "bad");
+    text($("basemap-note"), "연습용 배경을 읽지 못했습니다: " + e, "bad");
   }
 }
 
@@ -777,7 +802,7 @@ async function loadBasemapFile(input) {
   try {
     await loadBasemapObject(JSON.parse(await file.text()), "file:" + file.name);
   } catch (e) {
-    text($("basemap-note"), "배경 파일을 읽지 못함: " + e, "bad");
+    text($("basemap-note"), "배경 파일을 읽지 못했습니다: " + e, "bad");
   }
   input.value = "";
 }
@@ -789,13 +814,15 @@ async function clearBasemap() {
 
 function showParcel(feature) {
   const p = feature.properties;
+  // 시트 위 카드는 하나만 (J5-054): 필지를 열면 고른 대상 카드는 닫는다
+  if (state.mapSelected) clearMapSelection();
   mapCall((m) => m.selectParcel(feature.id));
   $("parcel-title").textContent = parcelTitle(p);
-  $("parcel-mode").textContent = state.parcels?.data_mode === "synthetic" ? "연습용 필지" : "연속지적도";
+  $("parcel-mode").textContent = state.parcels?.data_mode === "synthetic" ? "연습용 필지" : "필지";
   $("parcel-pnu").textContent = feature.id;
   const src = state.parcels?.source;
-  $("parcel-meta").textContent = `도형면적 ${fmtArea(p.area_m2_geom, p.area_missing_reason)} (공부면적 아님)` + (p.jimok ? ` · 지목 ${p.jimok}` : "") + (p.jibun_mismatch ? " · 원본 지번과 PNU 불일치" : "") +
-    (src ? ` · ${src.name} ${src.geometry_version}` : "");
+  $("parcel-meta").textContent = (p.jimok ? `지목 ${p.jimok}, ` : "") + `지도상 면적 ${fmtArea(p.area_m2_geom, p.area_missing_reason)} (대장 면적 아님)` + (p.jibun_mismatch ? ". 원본 지번과 필지 번호가 맞지 않습니다" : "") +
+    (src ? `. 경계 ${src.name} ${src.geometry_version}` : "");
   renderExtLinks($("parcel-ext"), bboxCenter(p.bbox));
   const lines = attrLines(p.attrs, src?.geometry_version ?? null);
   $("parcel-attrs").replaceChildren(...lines.map(([k, v]) => el("li", {}, el("span", { class: "k", text: k }), el("span", { class: "v", text: v }))));
@@ -813,37 +840,39 @@ function showParcel(feature) {
   const inside = parcelAssets(feature, state.assets, { linksValid });
   $("parcel-assets").replaceChildren(...inside.map(({ asset: a, basis }) => el("li", {},
     el("span", { class: "title", text: a.label }), modeBadge(a.data_mode), ...trackingBadges(a), el("span", { class: "badge", text: BASIS_LABEL[basis] }),
-    el("button", { text: "기록하기", onclick: () => startObservation(a) }),
+    el("button", { class: "secondary", text: "기록", "aria-label": `${a.label} 기록하기`, onclick: () => startObservation(a) }),
   )));
-  if (!linksValid && (p.asset_ids ?? []).length) $("parcel-assets").append(el("li", { class: "warn", text: `정본 연결 ${p.asset_ids.length}건은 시드가 바뀐 뒤 확인되지 않아 표시하지 않는다. 같은 파생본의 시드와 필지 파일을 함께 다시 불러온다.` }));
-  if (!inside.length) $("parcel-assets").append(el("li", { class: "empty", text: "이 필지에 연결되거나 위치점이 들어 있는 물건이 없다. 아래 버튼으로 이 필지를 물건으로 만들어 바로 기록할 수 있다 (PC 반영 때 임시 매입 단위로 승계)." }));
+  if (!linksValid && (p.asset_ids ?? []).length) $("parcel-assets").append(el("li", { class: "warn", text: `PC 에서 이 필지에 이은 대상 ${p.asset_ids.length}곳은 대상 목록이 바뀐 뒤라 보이지 않습니다. PC 자료 파일을 다시 가져오면 보입니다.` }));
+  if (!inside.length) $("parcel-assets").append(el("li", { class: "empty", text: "이 필지에 든 대상이 없습니다. 아래 버튼으로 이 필지를 대상으로 만들어 바로 기록할 수 있습니다." }));
   $("parcel-new-asset").hidden = inside.length > 0;
   $("parcel-new-asset").onclick = () => createAssetFromParcel(feature);
   $("parcel-history").onclick = () => openParcelHistory(feature, inside.map((x) => x.asset));
   $("parcel-panel").hidden = false;
+  openSheet();
+  $("field-sheet").querySelector(".sheet-body").scrollTop = 0;
 }
 
 /** 필지에서 물건 만들기 (J5-028, ADR-21): 이 기기에만 있는 임시 매입 단위. 위치점은 필지 안의 점, 이름은 동·지번. 내보내기에 assets.new.json 으로 실려 PC 가 pending 물건으로 만든다. */
 async function createAssetFromParcel(feature) {
   const pt = interiorPoint(feature);
-  if (!pt) return text($("parcel-search-note"), "이 필지 안의 점을 정하지 못해 물건을 만들 수 없습니다.", "warn");
+  if (!pt) return text($("parcel-search-note"), "이 필지 안의 점을 정하지 못해 대상을 만들 수 없습니다.", "warn");
   const dataMode = (await state.store.getMeta("data_mode")) ?? "synthetic";
   const asset = { asset_id: uuid4(), label: parcelTitle(feature.properties), location_point: pt, data_mode: dataMode, created_at: isoWithOffset(), notes: null, pnu: feature.id, origin: "device" };
   try {
     await state.store.addDeviceAsset(asset);
   } catch (e) {
-    return text($("parcel-search-note"), "물건을 저장하지 못했습니다: " + (e?.message || e), "bad");
+    return text($("parcel-search-note"), "대상을 저장하지 못했습니다: " + (e?.message || e), "bad");
   }
   await renderAssets();
   closeParcelPanel();
-  text($("parcel-search-note"), `${asset.label} 물건을 이 기기에 만들었습니다 (PC 반영 전). 기록을 내보내면 PC 가 임시 매입 단위로 승계합니다.`, "ok");
+  text($("parcel-search-note"), `${asset.label} 을 이 폰의 대상으로 만들었습니다. PC 로 보내면 PC 에서 확인 전 대상으로 들어갑니다.`, "ok");
   startObservation(asset);
 }
 
 async function deleteDeviceAsset(asset) {
   try {
     await state.store.deleteDeviceAsset(asset.asset_id);
-    text($("seed-note"), `${asset.label} (이 기기에서 만든 물건) 을 지웠습니다.`, "muted");
+    text($("seed-note"), `이 폰에서 만든 대상 ${asset.label} 을 지웠습니다.`, "pencil");
   } catch (e) {
     text($("seed-note"), "지우지 못했습니다: " + (e?.message || e), "warn");
   }
@@ -876,8 +905,9 @@ function mapFailed(e) {
   try { state.map?.destroy(); } catch {}
   state.map = null;
   $("map-empty").hidden = false;
-  $("map-empty").replaceChildren(el("div", {}, el("strong", { text: "지도를 그릴 수 없습니다" }), document.createTextNode("오늘 화면의 목록에서 대상을 골라 기록할 수 있습니다.")));
-  text($("map-note"), `지도 표시 불가: ${e?.message || e}. 목록에서 선택한다`, "warn");
+  $("map-empty").replaceChildren(el("div", {}, el("strong", { text: "지도를 그릴 수 없습니다" }), document.createTextNode("아래 목록에서 대상을 골라 기록할 수 있습니다.")));
+  text($("map-note"), `지도를 그리지 못했습니다 (${e?.message || e}). 목록에서 고릅니다.`, "warn");
+  openSheet();
 }
 
 function mapCall(fn) {
@@ -890,34 +920,39 @@ function mapNote(c) {
   state.lastMapCounts = c;
   $("map-empty").hidden = c.total > 0 || state.parcelsCount > 0 || state.basemapCount > 0 || !!state.tiles;
   const ts = state.tiles ? mapCall((m) => m.tileStatus()) : null;
-  const tileNote = state.tiles ? (ts?.failed ? ` · 배경 타일 ${ts.failed}장 못 받음 (${navigator.onLine ? "제공자 응답 없음 또는 키·주소 확인" : "오프라인, 저장된 타일만 보임"})` : " · 배경 타일 켜짐") : "";
-  const parcels = (state.parcelsCount ? ` · 필지 ${state.parcelsCount}개` : "") + (state.basemapCount ? ` · 배경 ${state.basemapCount}개` : "") + tileNote;
-  if (c.total === 0) return text($("map-note"), parcels ? `물건 없음${parcels}` : "", "muted");
-  if (c.located === 0) return text($("map-note"), `위치점 있는 물건이 없다. 목록에서 선택한다${parcels}`, "muted");
-  let msg = `위치점 ${c.located}개 표시 (가상 ${c.synthetic} · 실제 ${c.privateReal})`;
-  if (c.unlocated > 0) msg += ` · 위치점 없는 물건 ${c.unlocated}개 (목록에서 선택)`;
-  text($("map-note"), msg + parcels, "muted");
+  // 지도 아래 한 줄 요약 (J5-054): 지도에 무엇이 그려졌는지와 지도에 없는 대상 수. 문장 단위로 끊어 가운뎃점 줄이 길게 이어지지 않게 한다
+  const tileNote = state.tiles ? (ts?.failed ? ` 배경 타일 ${ts.failed}장을 받지 못했습니다 (${navigator.onLine ? "제공자 응답 없음, 키·주소를 확인합니다" : "오프라인이라 저장된 타일만 보입니다"}).` : " 배경 타일 켜짐.") : "";
+  const layers = [state.parcelsCount ? `필지 ${state.parcelsCount}개` : "", state.basemapCount ? `건물·도로 ${state.basemapCount}개` : ""].filter(Boolean).join(", ");
+  const parcels = (layers ? ` ${layers}.` : "") + tileNote;
+  if (c.total === 0) return text($("map-note"), parcels ? `대상 없음.${parcels}` : "", "pencil small");
+  if (c.located === 0) return text($("map-note"), `지도에 위치가 있는 대상이 없습니다. 목록에서 고릅니다.${parcels}`, "pencil small");
+  const kinds = [c.synthetic ? `연습용 ${c.synthetic}` : "", c.privateReal ? `실제 ${c.privateReal}` : ""].filter(Boolean).join(", ");
+  let msg = `지도에 대상 ${c.located}곳 (${kinds}).`;
+  if (c.unlocated > 0) msg += ` 위치 없는 대상 ${c.unlocated}곳은 목록에만 있습니다.`;
+  text($("map-note"), msg + parcels, "pencil small");
 }
 
-/** 지도의 점을 탭하면 바로 기록 화면을 열지 않고 대상 요약과 '기록 시작' 을 보여 준다. */
+/** 지도의 점이나 목록 줄을 누르면 바로 기록 화면을 열지 않고 시트 위에 대상 카드와 '기록하기' 를 보여 준다. */
 function selectOnMap(asset, { focus = true } = {}) {
   state.mapSelected = asset.asset_id;
   mapCall((m) => m.select(asset.asset_id));
   const s = assetSummary(asset.asset_id, state.events);
   $("map-selected-label").textContent = asset.label;
-  $("map-selected-sub").textContent = assetSub(asset) + (s.count ? ` · 마지막 기록 ${shortWhen(s.lastAt)} (${CHANGE_STATUS_LABEL[s.lastStatus] ?? ""})` : " · 이 기기에 기록 없음");
+  $("map-selected-sub").textContent = assetSub(asset) + (s.count ? `. 마지막 기록 ${shortWhen(s.lastAt)}, ${CHANGE_STATUS_LABEL[s.lastStatus] ?? ""}` : ". 아직 기록 없음");
   $("map-selected-badges").replaceChildren(...trackingBadges(asset));
   renderExtLinks($("map-selected-ext"), asset.location_point);
   $("map-selected").hidden = false;
+  $("start-observing").hidden = true;
   $("map-selected-start").onclick = () => startObservation(asset);
   $("map-selected-history").onclick = () => openAssetHistory(asset);
   for (const li of $("asset-list").children) li.classList.toggle("selected", li.dataset.assetId === asset.asset_id);
-  if (focus) $("map-selected-start").focus();
+  if (focus) { if (!$("parcel-panel").hidden) closeParcelPanel(); openSheet(); $("field-sheet").querySelector(".sheet-body").scrollTop = 0; mapCall((m) => m.reveal(asset.asset_id)); $("map-selected-start").focus(); }
 }
 
 function clearMapSelection() {
   state.mapSelected = null;
   $("map-selected").hidden = true;
+  $("start-observing").hidden = state.assets.length === 0;
   $("map-selected-start").onclick = null;
   $("map-selected-history").onclick = null;
   renderExtLinks($("map-selected-ext"), null);
@@ -944,7 +979,7 @@ function startObservation(asset) {
   mapCall((m) => m.select(asset.asset_id));
   $("target-label").textContent = asset.label;
   const s = assetSummary(asset.asset_id, state.events);
-  $("target-sub").textContent = assetSub(asset) + (s.count ? ` · 마지막 기록 ${shortWhen(s.lastAt)}` : "");
+  $("target-sub").textContent = assetSub(asset) + (s.count ? `. 마지막 기록 ${shortWhen(s.lastAt)}` : ". 첫 기록");
   setStatusValue("");
   $("date-only").checked = false;
   $("observed-at").type = "datetime-local";
@@ -989,14 +1024,14 @@ async function addPhotos(input) {
     const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
     const ext = sniffImage(head);
     const item = { name: file.name, bytes: file.size, ext, tags: new Set(), error: null, blob: null, sha256: null, viewpoint_id: "", heading_deg: "", previous_photo_sha256: "" };
-    if (ext === "heic") item.error = "HEIC 는 미지원. 사진 앱에서 JPEG 로 변환해 다시 선택 (이 사진은 저장하지 않음)";
-    else if (!SUPPORTED.has(ext)) item.error = "JPEG/PNG/WebP 가 아님";
-    else if (file.size > PHOTO_LIMIT) item.error = `20MB 초과 (${file.size} 바이트)`;
+    if (ext === "heic") item.error = "HEIC 사진은 넣을 수 없습니다. 카메라 설정의 '높은 호환성' 으로 찍거나 JPEG 로 바꿔 다시 고릅니다";
+    else if (!SUPPORTED.has(ext)) item.error = "JPEG·PNG·WebP 사진만 넣을 수 있습니다";
+    else if (file.size > PHOTO_LIMIT) item.error = `20MB 를 넘는 사진입니다 (${fmtBytes(file.size)})`;
     if (!item.error) {
       const buf = await file.arrayBuffer();
       item.sha256 = await sha256Hex(buf);
       item.blob = new Blob([buf], { type: file.type || "application/octet-stream" });
-      if (state.photos.some((p) => p.sha256 === item.sha256)) item.error = "같은 사진이 이미 선택됨 (이 항목을 제거)";
+      if (state.photos.some((p) => p.sha256 === item.sha256)) item.error = "같은 사진이 이미 선택됨. 이 항목을 뺍니다";
     }
     state.photos.push(item);
   }
@@ -1007,7 +1042,7 @@ async function addPhotos(input) {
 function renderPhotos() {
   $("photo-list").replaceChildren(...state.photos.map((p, idx) => {
     const box = el("div", { class: "photo-item" });
-    box.append(el("div", { text: `${p.name} · ${fmtBytes(p.bytes)} · ${p.ext ?? "형식 모름"}` }));
+    box.append(el("div", { class: "photo-name", text: `${p.name} (${fmtBytes(p.bytes)})` }));
     if (p.error) box.append(el("div", { class: "bad", text: p.error }));
     else {
       const tags = el("div", { class: "tags" });
@@ -1016,7 +1051,7 @@ function renderPhotos() {
         box2.addEventListener("change", () => { box2.checked ? p.tags.add(t) : p.tags.delete(t); });
         tags.append(el("label", {}, box2, ` ${PHOTO_TAG_LABEL[t]}`));
       }
-      box.append(el("div", { class: "field-name", text: "무엇을 찍었나요? (선택)" }), tags);
+      box.append(el("div", { class: "field-name", text: "무엇을 찍었나요" }), tags);
       // 반복 촬영(연차 비교)용 선택 입력. 이전 사진은 이 기기에 저장된 같은 물건의 사진 중에서 고른다. 기본 흐름을 막지 않게 접어 둔다
       const series = el("div", { class: "series" });
       const vp = el("input", { class: "viewpoint", type: "text", maxlength: String(VIEWPOINT_MAX), placeholder: "예: 전면-남측", value: p.viewpoint_id });
@@ -1024,7 +1059,7 @@ function renderPhotos() {
       const hd = el("input", { class: "heading", type: "number", min: "0", max: "359", step: "1", inputmode: "numeric", value: p.heading_deg });
       hd.addEventListener("input", () => { p.heading_deg = hd.value === "" ? "" : Number(hd.value); });
       const prev = el("select", { class: "previous" });
-      prev.append(el("option", { value: "", text: state.prevPhotos.length ? "없음" : "없음 (이 기기에 이 물건의 이전 사진 없음)" }));
+      prev.append(el("option", { value: "", text: state.prevPhotos.length ? "없음" : "없음 (이 폰에 이 대상의 이전 사진 없음)" }));
       for (const q of state.prevPhotos) {
         if (q.sha256 === p.sha256) continue;
         prev.append(el("option", { value: q.sha256, text: q.label, selected: q.sha256 === p.previous_photo_sha256 }));
@@ -1034,11 +1069,10 @@ function renderPhotos() {
         const q = state.prevPhotos.find((x) => x.sha256 === prev.value);
         if (q?.viewpoint_id && !p.viewpoint_id) { p.viewpoint_id = q.viewpoint_id; vp.value = q.viewpoint_id; }
       });
-      series.append(el("label", { text: "촬영 지점 (선택) " }, vp), el("label", { text: "방향 ° (선택) " }, hd), el("label", { text: "이전 사진 (선택) " }, prev));
-      box.append(el("details", { class: "disclosure" }, el("summary", { text: "촬영 정보 추가 (선택)" }), series));
-      box.append(el("div", { class: "muted small", text: "고유값 " + p.sha256.slice(0, 12) + "…" }));
+      series.append(el("label", { text: "촬영 지점 " }, vp), el("label", { text: "방향 ° " }, hd), el("label", { text: "비교할 이전 사진 " }, prev));
+      box.append(el("details", { class: "disclosure quiet" }, el("summary", { text: "해마다 같은 자리에서 찍는다면" }), series));
     }
-    box.append(el("button", { text: "제거", class: "danger", onclick: () => { state.photos.splice(idx, 1); renderPhotos(); } }));
+    box.append(el("button", { text: "빼기", class: "danger small", onclick: () => { state.photos.splice(idx, 1); renderPhotos(); } }));
     return box;
   }));
 }
@@ -1082,22 +1116,22 @@ async function doSaveObservation() {
   const status = statusValue();
   const dateOnly = $("date-only").checked;
   const problems = [];
-  if (!status) problems.push("관측 상태를 선택");
+  if (!status) problems.push("달라짐·그대로·확인 어려움 가운데 하나를 고릅니다");
   const observedAt = dateOnly ? ($("observed-at").value || "").slice(0, 10) : fromDatetimeLocal($("observed-at").value);
-  if (!observedAt) problems.push("관측 시각이 올바르지 않음");
+  if (!observedAt) problems.push("본 시각을 다시 넣습니다");
   const bad = state.photos.filter((p) => p.error);
-  if (bad.length) problems.push("오류가 있는 사진을 제거해야 함");
+  if (bad.length) problems.push("빨간 글이 붙은 사진을 뺍니다");
   const good = state.photos.filter((p) => !p.error);
   const uniq = new Map(good.map((p) => [p.sha256, p]));
-  if (uniq.size !== good.length) problems.push("같은 사진이 두 번 선택됨");
-  if (problems.length) return text($("observe-note"), "저장하지 못했습니다: " + problems.join(". "), "bad");
+  if (uniq.size !== good.length) problems.push("같은 사진이 두 번 들어 있습니다");
+  if (problems.length) return text($("observe-note"), "아직 저장하지 않았습니다. " + problems.join(". ") + ".", "bad");
 
   const [routeVersionId, studyId, dataMode] = await Promise.all([
     state.store.getMeta("route_version_id"), state.store.getMeta("study_id"), state.store.getMeta("data_mode"),
   ]);
-  if (!studyId) return text($("observe-note"), "설정에서 작업 공간 이름을 먼저 저장해야 한다", "bad");
+  if (!studyId) return text($("observe-note"), "아직 저장하지 않았습니다. 설정에서 작업 공간 이름을 먼저 저장합니다.", "bad");
   if (state.target.data_mode !== (dataMode ?? "synthetic")) {
-    return text($("observe-note"), `물건의 자료 종류(${MODE_SHORT[state.target.data_mode]})와 설정(${MODE_SHORT[dataMode ?? "synthetic"]})이 다르다. 설정을 맞춘 뒤 저장`, "bad");
+    return text($("observe-note"), `아직 저장하지 않았습니다. 이 대상은 ${MODE_SHORT[state.target.data_mode]} 자료인데 설정은 ${MODE_SHORT[dataMode ?? "synthetic"]} 자료입니다. 설정의 자료 종류를 맞춘 뒤 저장합니다.`, "bad");
   }
   const ev = buildEvent({
     eventId: uuid4(), assetId: state.target.asset_id, observedAt, precision: dateOnly ? "date" : "datetime",
@@ -1106,7 +1140,7 @@ async function doSaveObservation() {
                                                   heading_deg: p.heading_deg === "" ? null : p.heading_deg, previous_photo_sha256: p.previous_photo_sha256 || "" })),
   });
   const errs = validateEvent(ev);
-  if (errs.length) return text($("observe-note"), "저장 불가: " + errs.join(", "), "bad");
+  if (errs.length) return text($("observe-note"), "아직 저장하지 않았습니다. " + errs.join(", "), "bad");
 
   const line = lineBytes(ev);
   // 저장 시점의 study_id·data_mode 를 기록에 고정한다. 나중에 설정을 바꿔도 이 기록의 맥락은 바뀌지 않는다 (J5-007 은 이 값으로 묶는다).
@@ -1120,9 +1154,9 @@ async function doSaveObservation() {
     await state.store.saveObservation(record, photos);
   } catch (e) {
     // 용량 부족 등. '저장됨' 으로 표시하지 않는다.
-    return text($("observe-note"), `저장 실패: ${e?.name || ""} ${e?.message || e}. 기록은 남지 않았다`, "bad");
+    return text($("observe-note"), `저장하지 못했습니다 (${[e?.name, e?.message || e].filter(Boolean).join(": ")}). 기록은 남지 않았습니다. 폰 저장 공간을 확인하고 다시 저장합니다.`, "bad");
   }
-  text($("observe-note"), "저장됨 (이 기기). PC 반영 여부 미확인", "ok");
+  text($("observe-note"), "이 폰에 저장했습니다.", "ok");
   await renderRecords();
   await renderAssets();
   showObservationDone(record, photos.length);
@@ -1130,10 +1164,10 @@ async function doSaveObservation() {
 
 function showObservationDone(record, photoCount) {
   const asset = state.target;
-  $("done-text").textContent = `${asset.label} · ${CHANGE_STATUS_LABEL[record.event.payload.change_status]} · 사진 ${photoCount}장. 이 기기에 저장됐고 아직 내보내지 않았습니다. PC 반영 여부는 이 화면에서 알 수 없습니다.`;
+  $("done-text").textContent = `${asset.label}, ${CHANGE_STATUS_LABEL[record.event.payload.change_status]}${photoCount ? `, 사진 ${photoCount}장` : ""}. 이 폰에 저장했고 아직 PC 로 보내지 않았습니다.`;
   const next = nextAsset(visibleAssets(), asset.asset_id, state.events);
   $("done-next").hidden = !next;
-  if (next) $("done-next").textContent = `다음 대상 기록: ${next.label}`;
+  if (next) $("done-next").textContent = `다음: ${next.label}`;
   $("done-next").onclick = () => { if (next) startObservation(next); };
   $("observe-form").hidden = true;
   $("observe-done").hidden = false;
@@ -1147,17 +1181,17 @@ function exportNote(msg, cls = "") { text($("export-note"), msg, cls); }
 
 async function exportPlan({ quiet = false } = {}) {
   const [studyId, dataMode] = await Promise.all([state.store.getMeta("study_id"), state.store.getMeta("data_mode")]);
-  if (!studyId) { if (!quiet) exportNote("설정에서 작업 공간 이름을 먼저 저장해야 한다", "bad"); text($("export-summary"), "작업 공간 이름이 없어 내보낼 수 없습니다. 설정에서 저장하세요.", "summary warn"); return null; }
+  if (!studyId) { if (!quiet) exportNote("설정에서 작업 공간 이름을 먼저 저장합니다.", "bad"); text($("export-summary"), "작업 공간 이름이 없어 보낼 수 없습니다. 설정에서 저장합니다.", "summary warn"); return null; }
   const records = await state.store.listEvents();
   const sel = selectRecords(records, { studyId, dataMode: dataMode ?? "synthetic", includeExported: $("include-exported").checked });
   const meta = await state.store.photoMeta();
   const { batches, errors } = planBatches(sel.selected, meta);
   const photoCount = new Set(batches.flatMap((b) => b.shas)).size;
   const est = batches.reduce((s, b) => s + b.estBytes, 0);
-  text($("export-summary"), `대상 ${sel.selected.length}건 · 사진 ${photoCount}장 · 예상 ${fmtBytes(est)} · 묶음 ${batches.length}개` +
-    (sel.excludedExported ? ` · 이미 내보낸 ${sel.excludedExported}건 제외` : "") + (sel.otherContext ? ` · 다른 작업 공간/자료 종류 ${sel.otherContext}건 제외` : "") +
-    (sel.selected.length ? "" : " · 내보낼 기록이 없습니다"), "summary");
-  $("export-errors").replaceChildren(...errors.map((e) => el("li", { class: "bad", text: `${e.event_id.slice(0, 8)}… 제외: ${e.reason}` })));
+  // 보낼 것을 먼저 문장으로 (J5-054). 묶음은 둘 이상일 때만 말한다
+  const head = sel.selected.length ? `보낼 기록 ${sel.selected.length}건${photoCount ? `, 사진 ${photoCount}장` : ""} (약 ${fmtBytes(est)})` + (batches.length > 1 ? `. 파일 ${batches.length}개로 나눠 만듭니다` : "") + "." : "보낼 기록이 없습니다.";
+  text($("export-summary"), head + (sel.excludedExported ? ` 이미 보낸 ${sel.excludedExported}건은 넣지 않습니다.` : "") + (sel.otherContext ? ` 다른 작업 공간·자료 종류의 기록 ${sel.otherContext}건은 넣지 않습니다.` : ""), "summary");
+  $("export-errors").replaceChildren(...errors.map((e) => el("li", { class: "bad", text: `기록 ${e.event_id.slice(0, 8)}… 은 넣지 않았습니다: ${e.reason}` })));
   return { studyId, dataMode: dataMode ?? "synthetic", batches, errors, k: 0, package: null, url: null, attempted: false, recordsById: new Map(sel.selected.map((r) => [r.event_id, r])) };
 }
 
@@ -1168,6 +1202,12 @@ function fmtBytes(n) {
 function renderExportSteps() {
   const ex = state.export;
   const step = ex ? exportStep({ hasPackage: !!ex.package, attempted: !!ex.attempted, done: false }) : 1;
+  // 지금 단계의 버튼만 보인다 (J5-054). 저장을 요청한 뒤에는 '저장 확인' 과 함께 '다시 저장' 을 남긴다
+  $("export-prepare").hidden = step >= 3;
+  $("export-save").hidden = step < 3;
+  $("export-save").className = step === 4 ? "secondary" : "primary";
+  if (step === 4) $("export-save").textContent = "다시 저장";
+  $("export-confirm").hidden = step < 4;
   for (const li of $("export-steps").children) {
     const n = Number(li.dataset.step);
     li.classList.toggle("done", n < step);
@@ -1183,10 +1223,10 @@ async function exportPrepare() {
     // 기존 계획에 남은 묶음이 있으면 그 계획의 k번째 묶음을 만든다. "파일 만들기" 버튼은 state.export 를 비워 새 계획을 잡는다.
     const plan = hasRemainingBatches(state.export) ? state.export : await exportPlan();
     if (!plan) return;
-    if (!plan.batches.length) { state.export = null; $("export-save").disabled = true; $("export-confirm").disabled = true; return exportNote("내보낼 기록이 없다", "muted"); }
+    if (!plan.batches.length) { state.export = null; $("export-save").disabled = true; $("export-confirm").disabled = true; return exportNote("보낼 기록이 없습니다.", "pencil"); }
     const k = plan.k;
     const batch = plan.batches[k];
-    exportNote(`묶음 ${k + 1}/${plan.batches.length} 만드는 중…`, "muted");
+    exportNote(`파일 ${k + 1}/${plan.batches.length} 만드는 중…`, "pencil");
     const pkg = await buildPackage(batch, plan.recordsById, {
       loadPhoto: async (sha) => { const p = await state.store.getPhoto(sha); return p ? { blob: p.blob, ext: p.ext } : undefined; },
       studyId: plan.studyId, dataMode: plan.dataMode, k: k + 1, n: plan.batches.length,
@@ -1194,12 +1234,12 @@ async function exportPrepare() {
     });
     plan.package = pkg; plan.attempted = false;
     state.export = plan;
-    $("export-save").textContent = `파일 저장 ${k + 1}/${plan.batches.length}`;
+    $("export-save").textContent = plan.batches.length > 1 ? `파일 저장 ${k + 1}/${plan.batches.length}` : "파일 저장";
     $("export-save").disabled = false;
     $("export-confirm").disabled = true;
-    exportNote(`묶음 ${k + 1}/${plan.batches.length} 준비됨: ${pkg.filename} (${fmtBytes(pkg.bytes)}, 관측 ${pkg.eventIds.length}건, 사진 ${pkg.photoCount}장${pkg.newAssetCount ? `, 기기가 만든 물건 ${pkg.newAssetCount}개` : ""}). 다음은 "파일 저장" 입니다.`, "ok");
+    exportNote(`파일을 만들었습니다 (기록 ${pkg.eventIds.length}건${pkg.photoCount ? `, 사진 ${pkg.photoCount}장` : ""}${pkg.newAssetCount ? `, 이 폰에서 만든 대상 ${pkg.newAssetCount}곳` : ""}, ${fmtBytes(pkg.bytes)}). 이제 "파일 저장" 을 누릅니다.`, "ok");
   } catch (e) {
-    exportNote("묶음 준비 실패: " + (e?.message || e), "bad");
+    exportNote("파일을 만들지 못했습니다: " + (e?.message || e), "bad");
   } finally {
     $("export-prepare").disabled = false;
     renderExportSteps();
@@ -1222,10 +1262,10 @@ function exportSave() {
   state.store.appendExport({
     package_id: ex.package.packageId, created_at: ex.package.createdAt, filename: ex.package.filename,
     study_id: ex.studyId, data_mode: ex.dataMode, event_ids: ex.package.eventIds, photo_count: ex.package.photoCount, bytes: ex.package.bytes,
-  }).then(renderExportHistory).catch((e) => exportNote("이력 기록 실패: " + e, "bad"));
+  }).then(renderExportHistory).catch((e) => exportNote("만든 파일 목록에 남기지 못했습니다: " + e, "bad"));
   $("export-confirm").disabled = false;
   renderExportSteps();
-  exportNote(`${ex.package.filename} 저장을 요청했다. '파일' 앱 등에서 실제로 저장됐는지 확인한 뒤 "저장 확인"을 누른다. 확인 전에는 아직 내보냄이 아니다.`, "warn");
+  exportNote(`${ex.package.filename} 저장을 요청했습니다. 파일 앱에서 저장된 것을 확인한 뒤 "저장 확인" 을 누릅니다. 누르기 전에는 보낸 기록으로 치지 않습니다.`, "warn");
 }
 
 async function exportConfirm() {
@@ -1236,7 +1276,7 @@ async function exportConfirm() {
     await state.store.markExported(ex.package.eventIds, ex.package.packageId, new Date().toISOString());
   } catch (e) {
     $("export-confirm").disabled = false;
-    return exportNote("상태 갱신 실패: " + (e?.message || e), "bad");
+    return exportNote("보낸 기록으로 바꾸지 못했습니다. 다시 누릅니다: " + (e?.message || e), "bad");
   }
   if (ex.url) { URL.revokeObjectURL(ex.url); ex.url = null; }
   ex.k += 1; ex.package = null; ex.attempted = false;
@@ -1245,10 +1285,10 @@ async function exportConfirm() {
   await renderAssets();
   await renderExportHistory();
   if (ex.k < ex.batches.length) {
-    exportNote(`묶음 ${ex.k}/${ex.batches.length} 확인됨. 다음 묶음을 준비한다.`, "ok");
+    exportNote(`파일 ${ex.k}/${ex.batches.length} 을 확인했습니다. 다음 파일을 만듭니다.`, "ok");
     await exportPrepare();
   } else {
-    exportNote(`묶음 ${ex.batches.length}개 모두 확인됨 (내보냄). PC 반영·백업 여부는 이 화면에서 알 수 없다.`, "ok");
+    exportNote(`보냈습니다. 이제 파일을 PC 로 옮겨 반영합니다. 반영과 백업은 PC 에서 확인합니다.`, "ok");
     state.export = null;
     await exportPlan({ quiet: true });
     renderExportSteps();
@@ -1258,10 +1298,11 @@ async function exportConfirm() {
 async function renderExportHistory() {
   const list = await state.store.listExports();
   $("export-history").replaceChildren(...list.slice().reverse().map((e) => el("li", {},
-    el("div", { text: `${e.filename} · 관측 ${e.event_ids.length}건 · 사진 ${e.photo_count}장 · ${fmtBytes(e.bytes)}` }),
-    el("div", { class: e.confirmed_at ? "ok" : "warn", text: e.confirmed_at ? `저장 확인 ${e.confirmed_at}` : "저장 미확인 (다시 내보낼 수 있음)" }),
+    el("div", { class: "num", text: e.filename }),
+    el("div", { class: "pencil small", text: `기록 ${e.event_ids.length}건, 사진 ${e.photo_count}장, ${fmtBytes(e.bytes)}` }),
+    el("div", { class: e.confirmed_at ? "ok small" : "warn small", text: e.confirmed_at ? `저장 확인 ${shortWhen(e.confirmed_at) ?? e.confirmed_at}` : "저장 확인 안 됨. 그 기록은 다시 보낼 수 있습니다" }),
   )));
-  if (!list.length) $("export-history").append(el("li", { class: "empty", text: "없음" }));
+  if (!list.length) $("export-history").append(el("li", { class: "empty", text: "아직 만든 파일이 없습니다." }));
 }
 
 // ---- 목록·상태 ----
@@ -1269,16 +1310,18 @@ async function renderRecords() {
   const events = await state.store.listEvents();
   state.events = events;
   const labels = new Map(state.assets.map((a) => [a.asset_id, a.label]));
-  $("record-list").replaceChildren(...events.map((r) => el("li", {},
+  // 최근 기록이 위로 (J5-054). 아직 PC 로 안 보낸 기록은 형광펜 표시
+  const sorted = events.slice().sort((a, b) => (a.saved_at < b.saved_at ? 1 : a.saved_at > b.saved_at ? -1 : 0));
+  $("record-list").replaceChildren(...sorted.map((r) => el("li", {},
     el("span", { class: "title" }, el("span", { text: labels.get(r.asset_id) ?? r.asset_label ?? r.asset_id }),
-      labels.has(r.asset_id) ? el("span") : el("span", { class: "warn", text: " (현재 목록에 없는 물건)" })),
-    el("span", { class: r.status === "saved" ? "badge state-saved" : "badge state-exported", text: r.status === "saved" ? "저장됨" : "내보냄" }),
+      labels.has(r.asset_id) ? el("span") : el("span", { class: "warn small", text: " 지금 목록에 없는 대상" })),
+    el("span", { class: r.status === "saved" ? "badge state-saved" : "badge state-exported", text: r.status === "saved" ? "안 보냄" : "보냄" }),
     el("span", { class: "sub" }, el("span", { class: `badge status-${r.event.payload.change_status}`, text: CHANGE_STATUS_LABEL[r.event.payload.change_status] }),
-      document.createTextNode(` ${r.event.observed_at.replace("T", " ").slice(0, 16)} · 사진 ${r.event.attachment_refs.length}장 · `), modeBadge(r.data_mode), document.createTextNode(` ${r.study_id}`)),
+      el("span", { class: "num", text: r.event.observed_at.replace("T", " ").slice(0, 16) }), r.event.attachment_refs.length ? el("span", { text: `사진 ${r.event.attachment_refs.length}장` }) : "", modeBadge(r.data_mode)),
     r.event.payload.note ? el("div", { class: "note", text: r.event.payload.note }) : el("span"),
   )));
-  if (!events.length) $("record-list").append(el("li", { class: "empty", text: "저장된 기록이 없습니다. 오늘 화면에서 대상을 골라 기록하세요." }));
-  text($("record-count"), `${events.length}건`);
+  if (!events.length) $("record-list").append(el("li", { class: "empty", text: "아직 기록이 없습니다. 현장 화면에서 대상을 골라 기록합니다." }));
+  text($("record-count"), events.length ? `${events.length}건` : "");
   await renderMigrate(events);
   await refreshStatus();
 }
@@ -1304,29 +1347,35 @@ function renderHome(readiness) {
   $("stat-targets").textContent = String(c.assets);
   $("stat-records").textContent = String(c.events);
   $("stat-unexported").textContent = String(unexported);
-  $("stat-unexported").parentElement.classList.toggle("zero", unexported === 0);
+  $("stat-unexported").parentElement.classList.toggle("has", unexported > 0);
   let last = null;
   for (const r of state.events) if (!last || r.saved_at > last.saved_at) last = r;
-  $("home-last").textContent = last ? `최근 저장: ${shortWhen(last.saved_at)} · ${last.asset_label ?? ""} · ${last.status === "saved" ? "이 기기에 저장됨 (아직 안 내보냄)" : "파일로 내보냄 (PC 반영 여부는 PC 에서 확인)"}` : "아직 저장된 기록이 없습니다.";
+  $("home-last").textContent = last ? `최근 기록 ${shortWhen(last.saved_at)}, ${last.asset_label ?? ""}. ${last.status === "saved" ? "아직 PC 로 안 보냈습니다." : "PC 로 보냈습니다."}` : "";
   $("home-empty").hidden = c.assets > 0;
-  $("home-cta").hidden = c.assets === 0;
-  $("start-observing").textContent = c.events ? "관측 계속하기" : "관측 시작";
-  const nb = $("nav-export-badge");
-  nb.hidden = unexported === 0;
-  nb.textContent = String(unexported);
-  nb.setAttribute("aria-label", `안 내보낸 기록 ${unexported}건`);
+  if (!c.assets) openSheet();
+  $("start-observing").hidden = c.assets === 0 || !!state.mapSelected;   // 대상 카드가 열려 있으면 카드의 '기록하기' 하나만 둔다
+  $("start-observing").textContent = c.events ? "이어서 기록" : "기록 시작";
+  // 기록 탭의 배지는 아직 PC 로 안 보낸 기록 수 (보낼 일이 남았다는 표시)
   const rb = $("nav-records-badge");
-  rb.hidden = c.events === 0;
-  rb.textContent = String(c.events);
-  rb.setAttribute("aria-label", `기록 ${c.events}건`);
+  rb.hidden = unexported === 0;
+  rb.textContent = String(unexported);
+  rb.setAttribute("aria-label", `안 보낸 기록 ${unexported}건`);
 }
 
 async function refreshStatus() {
   const c = await state.store.counts();
   const studyId = await state.store.getMeta("study_id");
   const mode = (await state.store.getMeta("data_mode")) ?? "synthetic";
-  text($("status-line"), `앱 ${APP_VERSION} · ${mode} · study ${studyId ?? "(미설정)"} · 물건 ${c.assets} · 관측 ${c.events} · 사진 ${c.photos} · ${navigator.onLine ? "온라인" : "오프라인"}`);
+  text($("status-line"), `앱 ${APP_VERSION} · ${mode} · study ${studyId ?? "(미설정)"} · 대상 ${c.assets} · 기록 ${c.events} · 사진 ${c.photos} · ${navigator.onLine ? "온라인" : "오프라인"}`);
   $("offline-banner").hidden = navigator.onLine;
+  syncBannerSpace();
+}
+
+/** 오프라인 배너의 실제 높이만큼 상단 바 아래 화면을 내린다 (리뷰 반영 PR #101). 글자 크기·폭에 따라 배너가 여러 줄이 되므로 고정값을 쓰지 않는다.
+ *  CSSOM 으로 CSS 변수 하나만 바꾼다 (style 속성 문자열을 쓰지 않아 CSP style-src 'self' 와 맞다) */
+function syncBannerSpace() {
+  const h = $("offline-banner").hidden ? 0 : Math.ceil($("offline-banner").getBoundingClientRect().height);
+  document.documentElement.style.setProperty("--banner-h", `${h}px`);
 }
 
 function registerSw() {
@@ -1335,20 +1384,50 @@ function registerSw() {
   navigator.serviceWorker.register("./sw.js").catch(() => {});
 }
 
-/** 오늘 화면의 '관측 시작': 현재 필터 안에서 이 기기에 기록이 없는 첫 대상, 없으면 첫 대상의 기록 화면을 연다. 필터로 보이는 물건이 없으면 숨은 물건으로 넘어가지 않고 안내한다 (리뷰 반영 PR #75). */
+/** 현장 시트의 '기록 시작': 현재 필터 안에서 이 폰에 기록이 없는 첫 대상, 없으면 첫 대상의 기록 화면을 연다. 필터로 보이는 대상이 없으면 숨은 대상으로 넘어가지 않고 안내한다 (리뷰 반영 PR #75). */
 function startObservingFromHome() {
   const visible = visibleAssets();
   const next = nextAsset(visible, null, state.events) ?? visible[0];
   if (next) return startObservation(next);
   if (state.assets.length && effectiveFilter() === "watchlist") {
-    text($("asset-filter-note"), "관찰목록에 물건이 없어 관측을 시작하지 않습니다. '전체' 로 바꾼 뒤 시작합니다.", "warn");
+    openSheet();
+    text($("asset-filter-note"), "관찰목록에 대상이 없어 시작하지 않았습니다. '전체' 를 누른 뒤 시작합니다.", "warn");
     $("asset-filter").querySelector('button[data-filter="all"]').focus();
   }
 }
 
 function onViewShown(name, changed) {
-  if (name === "map") mapCall((m) => { m.resize(); if (changed) m.fit(); });
-  if (name === "export") { exportPlan({ quiet: true }).then(renderExportSteps).catch(() => {}); }
+  if (name === "map") { updateMapInset(); mapCall((m) => { m.resize(); if (changed) m.fit(); }); }
+  if (name === "records") { exportPlan({ quiet: true }).then(renderExportSteps).catch(() => {}); }
+}
+
+// ---- 현장 시트 (J5-054): 접힘(peek, 대상 수만) ↔ 펼침(open, 목록·카드). 넓은 화면에서는 CSS 가 늘 펼친다 ----
+function setSheet(open) {
+  const sheet = $("field-sheet");
+  sheet.dataset.state = open ? "open" : "peek";
+  $("sheet-toggle").setAttribute("aria-expanded", String(open));
+  $("sheet-toggle").querySelector(".sr-only").textContent = open ? "목록 접기" : "목록 펼치기";
+  updateMapInset();
+}
+function openSheet() { setSheet(true); }
+
+/** 지도에 덮인 영역(아래 시트, 위 찾기 칸)을 알려 전체 보기·필지 맞추기가 보이는 곳에 그려지게 한다. 넓은 화면에서는 시트가 지도 옆이라 아래 덮개가 없다 */
+function updateMapInset() {
+  const map = $("map-svg").getBoundingClientRect();
+  if (!map.height) return;
+  const sheet = $("field-sheet").getBoundingClientRect();
+  // 위 덮개는 찾기 칸·지도 버튼 줄까지. 용도지역 범례는 지도 위에 겹쳐 두고 덮개로 치지 않는다 (켜면 화면이 좁아지지 않게)
+  const tops = [$("parcel-search-form"), $("map-top").querySelector(".map-chips")].map((e) => e.getBoundingClientRect()).filter((r) => r.height > 0);
+  const top = tops.length ? Math.max(...tops.map((r) => r.bottom)) - map.top : 0;
+  const bottom = sheet.left <= map.left + 1 && sheet.top < map.bottom ? map.bottom - sheet.top : 0;
+  mapCall((m) => m.setInset({ top, bottom }));
+}
+
+/** 시작하기에서 자료를 넣은 뒤: 시트를 접어 지도가 보이게 하고 전체 보기 */
+function showFieldAfterLoad() {
+  if (!state.assets.length && !state.parcelsCount) return;
+  setSheet(false);
+  mapCall((m) => m.fit());
 }
 
 async function main() {
@@ -1357,7 +1436,10 @@ async function main() {
   } catch (e) {
     const f = $("fatal");
     f.hidden = false;
-    f.textContent = "이 브라우저에서는 기록을 저장할 수 없습니다 (브라우저 저장소를 열 수 없음: " + e + "). 다른 브라우저나 일반 창에서 여세요.";
+    f.textContent = "이 브라우저에서는 기록을 저장할 수 없습니다 (브라우저 저장소를 열 수 없음: " + e + "). Safari 일반 창이나 다른 브라우저로 엽니다.";
+    // 화면을 채우는 현장 지도(고정 위치)가 안내를 덮지 않게 화면과 탭을 모두 숨긴다 (리뷰 반영 PR #101)
+    for (const v of document.querySelectorAll("section.view")) v.hidden = true;
+    document.querySelector(".bottom-nav").hidden = true;
     return;
   }
   const sections = Object.fromEntries(Array.from(document.querySelectorAll("section.view")).map((s) => [s.dataset.view, s]));
@@ -1367,11 +1449,12 @@ async function main() {
   // 버튼·입력 리스너는 목록·기록을 그리기 전에 붙인다. 첫 화면 직후의 탭이 무시되지 않게 한다.
   $("save-settings").addEventListener("click", saveSettings);
   $("load-synthetic").addEventListener("click", loadSyntheticSeed);
-  $("home-load-synthetic").addEventListener("click", loadSyntheticSeed);
+  $("home-load-synthetic").addEventListener("click", loadSyntheticAll);
+  $("home-view-file").addEventListener("change", async (e) => { await loadViewFile(e.target, $("home-note")); if ($("home-note").className === "ok") showFieldAfterLoad(); });
   $("home-go-settings").addEventListener("click", () => state.nav.show("settings"));
-  $("home-go-export").addEventListener("click", () => state.nav.show("export"));
-  $("map-go-list").addEventListener("click", () => state.nav.show("home"));
   $("start-observing").addEventListener("click", startObservingFromHome);
+  $("sheet-toggle").addEventListener("click", () => setSheet($("field-sheet").dataset.state === "peek"));
+  $("map-selected-close").addEventListener("click", () => { clearMapSelection(); $("sheet-toggle").focus(); });
   for (const b of $("asset-filter").querySelectorAll("button[data-filter]")) b.addEventListener("click", () => setAssetFilter(b.dataset.filter));
   $("seed-file").addEventListener("change", (e) => loadSeedFile(e.target));
   $("load-synthetic-parcels").addEventListener("click", loadSyntheticParcels);
@@ -1400,7 +1483,7 @@ async function main() {
   $("save-observation").addEventListener("click", saveObservation);
   $("cancel-observation").addEventListener("click", () => closeObservation());
   $("cancel-observation-2").addEventListener("click", () => closeObservation());
-  $("done-list").addEventListener("click", () => closeObservation({ toView: "home" }));
+  $("done-list").addEventListener("click", () => closeObservation({ toView: "map" }));
   $("done-records").addEventListener("click", () => closeObservation({ toView: "records" }));
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
@@ -1424,12 +1507,16 @@ async function main() {
   try {
     const rec = await state.store.getParcels();
     state.seedLoadedAt = (await state.store.getMeta("seed_loaded_at")) ?? null;
-    if (rec) { state.parcelsRec = rec; state.parcels = rec.bundle; state.parcelsCount = rec.bundle.features.length; mapCall((m) => m.setParcels(rec.bundle)); }
+    if (rec) { state.parcelsRec = rec; state.parcels = rec.bundle; state.parcelsCount = rec.bundle.features.length; }
     state.zoneColors = (await state.store.getMeta("zone_colors")) === true;
     const savedFilter = await state.store.getMeta("asset_filter");
     state.assetFilter = ASSET_FILTERS.includes(savedFilter) ? savedFilter : "all";
-    applyZoneColors();
+    // 찾기 칸·지도 버튼을 먼저 보이게 한 뒤 덮인 영역을 재고 필지를 그린다 (첫 맞추기가 덮개를 알게)
     applySearchUi();
+    applyZoneColors();
+    updateMapInset();
+    if (rec) mapCall((m) => m.setParcels(rec.bundle));
+    applyZoneColors();
     parcelsNote(rec ?? null);
   } catch (e) {
     text($("parcels-note"), "저장된 필지를 읽지 못함: " + (e?.message || e), "bad");
@@ -1451,6 +1538,13 @@ async function main() {
   await renderRecords();
   await renderExportHistory();
   renderExportSteps();
+  // 처음 시트: 자료가 없거나 지도를 못 그리면 펼쳐 시작하기·목록을 보이고, 그 밖에는 접어 지도를 보인다
+  setSheet(!state.map || (state.assets.length === 0 && state.parcelsCount === 0));
+  // 시트·찾기 칸의 크기가 바뀌면(펼치기·글자 크기·회전) 지도에 다시 알린다
+  if (typeof ResizeObserver === "function") {
+    try { const ro = new ResizeObserver(() => updateMapInset()); ro.observe($("field-sheet")); ro.observe($("map-top")); } catch {}
+    try { new ResizeObserver(() => syncBannerSpace()).observe($("offline-banner")); } catch {}
+  }
   if (state.nav.current === "map") mapCall((m) => { m.resize(); m.fit(); });
   registerSw();
 }

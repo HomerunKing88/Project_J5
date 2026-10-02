@@ -13,7 +13,11 @@ test("viewFromHash: 아는 화면만, 나머지는 기본 화면", () => {
   assert.equal(viewFromHash("records"), "records");
   assert.equal(viewFromHash("#nope"), DEFAULT_VIEW);
   assert.equal(viewFromHash(""), DEFAULT_VIEW);
-  assert.deepEqual(VIEWS, ["home", "map", "records", "export", "settings"]);
+  assert.deepEqual(VIEWS, ["map", "records", "settings"]);
+  assert.equal(DEFAULT_VIEW, "map");
+  // 예전 해시(J5-020 의 5화면)로 저장한 북마크는 합쳐진 화면으로 연다.
+  assert.equal(viewFromHash("#home"), "map");
+  assert.equal(viewFromHash("#export"), "records");
   assert.equal(MODE_LABEL.private_real, "실제 자료 (비공개)");
 });
 

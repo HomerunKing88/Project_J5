@@ -29,29 +29,31 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
   try {
     // 브라우저 기동 실패도 finally 로 서버를 닫아야 한다. 안 닫으면 테스트 파일이 --test-timeout 까지 매달린다.
     cdp = await Cdp.launch(chrome, tmp);
+    // 휴대폰 화면 크기 (J5-054: 현장 화면은 지도 위에 시트가 덮여, 기본 창 800×600 에서는 지도에 보이는 높이가 실제 폰보다 훨씬 낮다)
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
     // 지도 모듈 로드 실패: map.js 요청을 막고 첫 접속 (서비스 워커가 아직 없을 때). 목록·설정은 그대로 동작하고 지도 절만 안내를 낸다.
     await cdp.send("Network.setBlockedURLs", { urls: ["*/app/map.js"] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.20')");
-    await cdp.waitFor("document.getElementById('map-note').textContent.includes('지도 표시 불가')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.21')");
+    await cdp.waitFor("document.getElementById('map-note').textContent.includes('지도를 그리지 못했습니다')");
     assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li').length"), 1, "지도 모듈 없이도 목록 절이 그려진다");
     const blockedLogs = cdp.errors.splice(0);
     assert.ok(blockedLogs.every((e) => e.includes("ERR_BLOCKED_BY_CLIENT") || e.includes("Failed to load resource") || e.includes("map.js")), blockedLogs.join("; "));
     await cdp.send("Network.setBlockedURLs", { urls: [] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.20')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.21')");
     await cdp.waitFor("document.getElementById('map-note').textContent === ''");
     // 설정
     await cdp.eval("document.getElementById('study-id').value = 'e2e-study'; document.getElementById('save-settings').click(); 'ok'");
-    await cdp.waitFor("document.getElementById('settings-note').textContent === '저장됨'");
+    await cdp.waitFor("document.getElementById('settings-note').textContent === '저장했습니다'");
     // 시드
     await cdp.eval("document.getElementById('load-synthetic').click(); 'ok'");
-    await cdp.waitFor("document.querySelectorAll('#asset-list li > button').length === 5");
+    await cdp.waitFor("document.querySelectorAll('#asset-list li .row-act').length === 5");
     // 지도 (J5-005): 위치점 4개, 주소만 있는 물건 1개는 목록에서만. 마커 탭 → 대상 요약 → 기록 시작, 확대 → 좌표 변화, 전체 보기 → 복귀 (J5-020: 지도 화면으로 전환)
     await cdp.waitFor("document.querySelectorAll('#map-svg g.pt').length === 4");
     await cdp.eval("document.getElementById('nav-map').click(); 'ok'");
     await cdp.waitFor("!document.getElementById('view-map').hidden");
-    assert.match(await cdp.eval("document.getElementById('map-note').textContent"), /위치점 4개 표시 \(가상 4 · 실제 0\) · 위치점 없는 물건 1개/);
+    assert.match(await cdp.eval("document.getElementById('map-note').textContent"), /^지도에 대상 4곳 \(연습용 4\)\. 위치 없는 대상 1곳은 목록에만 있습니다\./);
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.pt.synthetic').length"), 4, "가상자료 마커 표시");
     assert.match(await cdp.eval("document.querySelector('#map-svg .layer-scale text').textContent"), /^\d+ m$/, "축척 막대");
     const pos0 = await cdp.eval(MARKER_POS);
@@ -88,7 +90,7 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.eval("document.getElementById('load-synthetic-parcels').click(); 'ok'");
     await cdp.waitFor("document.querySelectorAll('#map-svg path.parcel').length === 6");
     assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /필지 6개 \(synthetic\) · 가상 연속지적도 \(synthetic\) · 도형 기준일 2026-09-01 · EPSG:5186/);
-    assert.match(await cdp.eval("document.getElementById('map-note').textContent"), /위치점 4개 표시 .* · 필지 6개$/);
+    assert.match(await cdp.eval("document.getElementById('map-note').textContent"), /^지도에 대상 4곳 .* 필지 6개\.$/);
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel.synthetic').length"), 6, "가상 필지는 점선");
     const VISIBLE_LABELS = "Array.from(document.querySelectorAll('#map-svg text.parcel-label')).filter(t => t.getAttribute('visibility') === 'visible').map(t => t.textContent)";
     const labels0 = await cdp.eval(VISIBLE_LABELS);
@@ -100,7 +102,7 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     assert.equal(await cdp.eval("document.getElementById('parcel-pnu').textContent"), "9999900100100010000");
     assert.equal(await cdp.eval("document.querySelectorAll('#parcel-ext a').length"), 4, "필지 패널에도 외부 지도 링크 (bbox 가운데)");
     assert.ok((await cdp.eval("document.querySelector('#parcel-ext a').href")).includes("maps.apple.com/?ll="));
-    assert.match(await cdp.eval("document.getElementById('parcel-meta').textContent"), /^도형면적 1764\.9 ㎡ \(공부면적 아님\) · 지목 대 · 가상 연속지적도 \(synthetic\) 2026-09-01$/);
+    assert.match(await cdp.eval("document.getElementById('parcel-meta').textContent"), /^지목 대, 지도상 면적 1764\.9 ㎡ \(대장 면적 아님\)\. 경계 가상 연속지적도 \(synthetic\) 2026-09-01$/);
     assert.deepEqual(await cdp.eval("Array.from(document.querySelectorAll('#parcel-assets li')).map(li => li.firstChild.textContent)"), ["가상 물건 1"], "필지 안의 물건");
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel.sel').length"), 1);
     await cdp.eval("document.querySelector('#parcel-assets li button').click(); 'ok'");
@@ -112,7 +114,7 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.waitFor("document.querySelectorAll('#map-svg .layer-base path').length === 11");
     assert.deepEqual(await cdp.eval("['bm-building','bm-road-area','bm-road'].map(c => document.querySelectorAll('#map-svg path.' + c).length)"), [6, 2, 3]);
     assert.match(await cdp.eval("document.getElementById('basemap-note').textContent"), /^배경 도형 11개 \(건물 6 · 실폭도로 2 · 도로 중심선 3\) · 연습용 · 도형 기준일 2026-09-01 · 이용허락 가상자료 \(이용허락 해당 없음\) · 가져오기 .+$/);
-    assert.match(await cdp.eval("document.getElementById('map-note').textContent"), /· 필지 6개 · 배경 11개$/);
+    assert.match(await cdp.eval("document.getElementById('map-note').textContent"), / 필지 6개, 건물·도로 11개\.$/);
     assert.equal(await cdp.eval("document.querySelector('#map-svg .layer-base').compareDocumentPosition(document.querySelector('#map-svg .layer-parcels')) & Node.DOCUMENT_POSITION_FOLLOWING"), 4, "배경 층은 필지 층보다 앞(아래)에 있다");
     await cdp.clickRect("#map-zoom-in");
     await cdp.clickRect("#map-zoom-in");
@@ -128,7 +130,7 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     // 물건 없는 필지 (구멍 있는 4-2): 안내만
     await cdp.clickRect('#map-svg path.parcel[data-pnu="9999900100100040002"]');
     await cdp.waitFor("document.getElementById('parcel-title').textContent === '가상동 4-2'");
-    assert.match(await cdp.eval("document.getElementById('parcel-assets').textContent"), /연결되거나 위치점이 들어 있는 물건이 없다/);
+    assert.match(await cdp.eval("document.getElementById('parcel-assets').textContent"), /이 필지에 든 대상이 없습니다/);
     assert.ok((await cdp.eval(VISIBLE_LABELS)).includes("4-2"), "선택한 필지의 지번은 항상 보인다");
     await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
     await cdp.waitFor("document.getElementById('parcel-panel').hidden && document.querySelectorAll('#map-svg path.parcel.sel').length === 0");
@@ -151,7 +153,7 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     const parcelsBad = join(tmp, "parcels-bad.json");
     writeFileSync(parcelsBad, JSON.stringify({ ...JSON.parse(parcelsFixture), count: 1 }));
     await cdp.setFiles("#parcels-file", [parcelsBad]);
-    await cdp.waitFor("document.getElementById('parcels-note').textContent.includes('필지 파일 오류')");
+    await cdp.waitFor("document.getElementById('parcels-note').textContent.includes('필지 파일을 넣지 못했습니다')");
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel').length"), 6);
     // 파생본(parcels.geojson) 형식: 정본에서 연결한 물건(asset_ids)이 있으면 위치점 없는 물건도 필지 패널에 뜬다 (J5-013B-2)
     const linked = JSON.parse(parcelsFixture);
@@ -162,7 +164,7 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     const parcelsOther = join(tmp, "parcels-other.geojson");
     writeFileSync(parcelsOther, JSON.stringify(linked));
     await cdp.setFiles("#parcels-file", [parcelsOther]);
-    await cdp.waitFor("document.getElementById('parcels-note').textContent.includes('study_id(other-study)가 설정(e2e-study)과 다르다')");
+    await cdp.waitFor("document.getElementById('parcels-note').textContent.includes('작업 공간(other-study)이 설정(e2e-study)과 다릅니다')");
     linked.study_id = "e2e-study";
     // 폰 범위 경고(J5-039)는 글 그대로, 다른 경고는 건수로
     linked.warnings = ["폰 범위: 정본 필지 12개 중 법정동 9999900100 과 물건이 연결된 필지 6개만 실었다", "원본 좌표계가 섞여 있다: 가상"];
@@ -199,7 +201,8 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     const s0 = await scaleOf();
     await search("1-1");
     await cdp.waitFor("!document.getElementById('parcel-panel').hidden && document.getElementById('parcel-title').textContent === '가상동 1-1'");
-    assert.match(await cdp.eval("document.getElementById('parcel-search-note').textContent"), /^가상동 1-1 필지로 이동$/);
+    assert.equal(await cdp.eval("document.getElementById('parcel-search-note').textContent"), "", "하나만 찾으면 안내 없이 필지 카드가 열린다");
+    assert.equal(await cdp.eval("document.getElementById('field-sheet').dataset.state"), "open");
     assert.ok((await scaleOf()) > s0, "필지 하나로 맞추면 확대된다");
     assert.equal(await cdp.eval("document.activeElement.id"), "parcel-history", "찾은 필지의 패널로 포커스");
     await search("9999900100100040002");
@@ -210,11 +213,11 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     assert.equal(await cdp.eval("document.getElementById('parcel-new-asset').hidden"), false, "물건이 없는 필지에는 만들기 버튼");
     await cdp.eval("document.getElementById('parcel-new-asset').click(); 'ok'");
     await cdp.waitFor("!document.getElementById('sec-observe').hidden && document.getElementById('target-label').textContent === '가상동 산1-2'");
-    assert.match(await cdp.eval("document.getElementById('parcel-search-note').textContent"), /가상동 산1-2 물건을 이 기기에 만들었습니다 \(PC 반영 전\)/);
+    assert.match(await cdp.eval("document.getElementById('parcel-search-note').textContent"), /가상동 산1-2 을 이 폰의 대상으로 만들었습니다/);
     await cdp.eval("document.getElementById('cancel-observation').click(); 'ok'");
-    await cdp.waitFor("document.querySelectorAll('#asset-list li > button').length === 6");
+    await cdp.waitFor("document.querySelectorAll('#asset-list li .row-act').length === 6");
     const deviceLi = "Array.from(document.querySelectorAll('#asset-list li')).find(li => li.querySelector('.title').textContent === '가상동 산1-2')";
-    assert.match(await cdp.eval(`${deviceLi}.textContent`), /이 기기에서 만듦 · PC 반영 전/);
+    assert.match(await cdp.eval(`${deviceLi}.textContent`), /이 폰에서 만듦/);
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.pt').length"), 5, "위치점이 필지 안에 생긴다");
     await search("산1-2");
     await cdp.waitFor("document.getElementById('parcel-title').textContent === '가상동 산1-2'");
@@ -223,31 +226,31 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
     // 안내 문구를 비운 뒤 다시 넣는다 (앞선 적재의 같은 문구를 보고 지나치지 않게). 문구는 목록을 다 그린 뒤 쓰인다
     await cdp.eval("document.getElementById('seed-note').textContent = ''; document.getElementById('load-synthetic').click(); 'ok'");
-    await cdp.waitFor("document.getElementById('seed-note').textContent.includes('물건 5개를 불러왔습니다')");
-    assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li > button').length"), 6, "시드를 다시 넣어도 기기 물건은 남는다");
-    await cdp.eval(`${deviceLi}.querySelector('.meta button:last-child').click(); 'ok'`);
-    await cdp.waitFor("document.querySelectorAll('#asset-list li > button').length === 5");
+    await cdp.waitFor("document.getElementById('seed-note').textContent.includes('대상 5곳을 가져왔습니다')");
+    assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li .row-act').length"), 6, "시드를 다시 넣어도 기기 물건은 남는다");
+    await cdp.eval(`${deviceLi}.querySelector('.row-extra button:last-child').click(); 'ok'`);
+    await cdp.waitFor("document.querySelectorAll('#asset-list li .row-act').length === 5");
     await cdp.waitFor("document.getElementById('seed-note').textContent.includes('을 지웠습니다')");
     await cdp.eval("document.getElementById('nav-map').click(); 'ok'");
     await search("999-9");
-    await cdp.waitFor("document.getElementById('parcel-search-note').textContent.includes('맞는 필지가 불러온 6개 안에 없습니다')");
+    await cdp.waitFor("document.getElementById('parcel-search-note').textContent.includes('필지가 가져온 6개 안에 없습니다')");
     await search("abc");
     await cdp.waitFor("document.getElementById('parcel-search-note').textContent.startsWith('지번(예:')");
     // 현재 위치: 권한 허용 + 위치 흉내(필지 4-2 안) → 점·정확도 원 표시, 그 필지 열림. 범위 밖 → 안내. 권한 거부 → 안내. 위치는 IndexedDB 에 남지 않는다
     await cdp.send("Browser.grantPermissions", { origin: base, permissions: ["geolocation"] });
     await cdp.send("Emulation.setGeolocationOverride", { latitude: 37.5705, longitude: 126.9996, accuracy: 12 });
     await cdp.clickRect("#map-locate");
-    await cdp.waitFor("document.getElementById('parcel-search-note').textContent.includes('현재 위치는 가상동 4-2 필지 안')");
+    await cdp.waitFor("document.getElementById('parcel-search-note').textContent.includes('지금 가상동 4-2 필지 안에 있습니다')");
     assert.match(await cdp.eval("document.getElementById('parcel-search-note').textContent"), /정확도 ±12 m\)\. 위치는 저장하지 않습니다\.$/);
     assert.equal(await cdp.eval("document.querySelector('#map-svg .layer-locate').getAttribute('visibility')"), "visible");
     assert.ok(Number(await cdp.eval("document.querySelector('#map-svg .locate-ring').getAttribute('r')")) > 0, "정확도 원");
     assert.equal(await cdp.eval("document.getElementById('parcel-title').textContent"), "가상동 4-2");
     await cdp.send("Emulation.setGeolocationOverride", { latitude: 37.6, longitude: 127.1, accuracy: 30 });
     await cdp.clickRect("#map-locate");
-    await cdp.waitFor("document.getElementById('parcel-search-note').textContent.includes('불러온 필지 범위 밖')");
+    await cdp.waitFor("document.getElementById('parcel-search-note').textContent.includes('가져온 필지 범위 밖')");
     await cdp.send("Browser.setPermission", { origin: base, permission: { name: "geolocation" }, setting: "denied" });
     await cdp.clickRect("#map-locate");
-    await cdp.waitFor("document.getElementById('parcel-search-note').textContent.includes('위치 권한이 거부')");
+    await cdp.waitFor("document.getElementById('parcel-search-note').textContent.includes('위치 권한이 꺼져 있습니다')");
     assert.equal(await cdp.eval("document.getElementById('map-locate').disabled"), false);
     await cdp.send("Browser.resetPermissions", {});
     await cdp.send("Emulation.clearGeolocationOverride", {});
@@ -283,7 +286,7 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     // 관측 (사진 1장, 태그 1개)
     const photo = join(tmp, "front.png");
     writeFileSync(photo, png1x1([0, 128, 255]));
-    await cdp.eval("document.querySelectorAll('#asset-list li > button')[0].click(); 'ok'");
+    await cdp.eval("document.querySelectorAll('#asset-list li .row-act')[0].click(); 'ok'");
     await cdp.waitFor("!document.getElementById('sec-observe').hidden");
     await cdp.eval("document.getElementById('status-change_observed').click(); document.getElementById('note').value = '1층 임대 광고 (e2e)'; 'ok'");
     await cdp.setFiles("#photos", [photo]);
@@ -291,31 +294,31 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.eval("document.querySelector('#photo-list .tags input').click(); 'ok'");
     // 빠른 두 번 탭: 한 건만 저장돼야 한다
     await cdp.eval("const b = document.getElementById('save-observation'); b.click(); b.click(); 'ok'");
-    await cdp.waitFor("document.getElementById('observe-note').textContent.startsWith('저장됨')");
+    await cdp.waitFor("document.getElementById('observe-note').textContent.startsWith('이 폰에 저장했습니다')");
     await cdp.waitFor("document.querySelectorAll('#record-list li').length === 1");
     // 저장 뒤 다음 행동 화면 (J5-020): 다음 대상 제안 → 목록으로 닫기
     await cdp.waitFor("!document.getElementById('observe-done').hidden && document.getElementById('observe-form').hidden");
-    assert.match(await cdp.eval("document.getElementById('done-next').textContent"), /다음 대상 기록: 가상 물건/);
+    assert.match(await cdp.eval("document.getElementById('done-next').textContent"), /^다음: 가상 물건/);
     await cdp.eval("document.getElementById('done-list').click(); 'ok'");
-    await cdp.waitFor("document.getElementById('sec-observe').hidden && !document.getElementById('view-home').hidden");
+    await cdp.waitFor("document.getElementById('sec-observe').hidden && !document.getElementById('view-map').hidden");
     assert.equal(await cdp.eval("document.querySelectorAll('#record-list li').length"), 1, "두 번 탭에 한 건만 저장");
     // 미지원 사진(HEIC 시그니처)은 오류로 표시되고 저장이 막힌다
     const heic = join(tmp, "x.heic");
     writeFileSync(heic, Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from("ftypheic"), Buffer.alloc(20)]));
-    await cdp.eval("document.querySelectorAll('#asset-list li > button')[1].click(); 'ok'");
+    await cdp.eval("document.querySelectorAll('#asset-list li .row-act')[1].click(); 'ok'");
     await cdp.setFiles("#photos", [heic]);
     await cdp.waitFor("document.querySelector('#photo-list .bad')?.textContent.includes('HEIC')");
     await cdp.eval("document.getElementById('status-no_change').click(); document.getElementById('save-observation').click(); 'ok'");
-    await cdp.waitFor("document.getElementById('observe-note').textContent.includes('오류가 있는 사진')");
+    await cdp.waitFor("document.getElementById('observe-note').textContent.includes('빨간 글이 붙은 사진을 뺍니다')");
     await cdp.eval("document.getElementById('cancel-observation').click(); 'ok'");
     // 시드 교체(기기 파일, 물건 2개): 이전 물건은 목록에서 빠지고 기록은 남는다
     const seedAll = JSON.parse(readFileSync(join(ROOT, "tests/fixtures/assets.seed.synthetic.json"), "utf8"));
     const seed2 = join(tmp, "seed2.json");
     writeFileSync(seed2, JSON.stringify(seedAll.slice(3)));
     await cdp.setFiles("#seed-file", [seed2]);
-    await cdp.waitFor("document.querySelectorAll('#asset-list li > button').length === 2");
+    await cdp.waitFor("document.querySelectorAll('#asset-list li .row-act').length === 2");
     await cdp.waitFor("document.querySelectorAll('#record-list li').length === 1");
-    assert.ok((await cdp.eval("document.getElementById('record-list').textContent")).includes("현재 목록에 없는 물건"));
+    assert.ok((await cdp.eval("document.getElementById('record-list').textContent")).includes("지금 목록에 없는 대상"));
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.pt').length"), 2, "시드 교체 후 지도도 2개");
     // 시드가 바뀌면 번들의 정본 연결은 확인되지 않은 것으로 본다: 필지 4-2 의 "가상 물건 3" 연결을 보여 주지 않는다 (J5-013B-2 리뷰 반영)
     assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /시드가 바뀐 뒤라 표시하지 않음/);
@@ -323,29 +326,29 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.clickRect('#map-svg path.parcel[data-pnu="9999900100100040002"]');
     await cdp.waitFor("!document.getElementById('parcel-panel').hidden && document.getElementById('parcel-title').textContent === '가상동 4-2'");
     assert.equal(await cdp.eval("document.querySelectorAll('#parcel-assets li button').length"), 0, "오래된 정본 연결로 관측을 시작하지 못한다");
-    assert.match(await cdp.eval("document.getElementById('parcel-assets').textContent"), /정본 연결 1건은 시드가 바뀐 뒤 확인되지 않아/);
+    assert.match(await cdp.eval("document.getElementById('parcel-assets').textContent"), /PC 에서 이 필지에 이은 대상 1곳은 대상 목록이 바뀐 뒤라 보이지 않습니다/);
     await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
     // 주소만 있는 시드: 지도에는 점이 없고 목록으로 선택한다
     const seedAddr = join(tmp, "seed-addr.json");
     writeFileSync(seedAddr, JSON.stringify([seedAll[2]]));
     await cdp.setFiles("#seed-file", [seedAddr]);
-    await cdp.waitFor("document.querySelectorAll('#asset-list li > button').length === 1");
+    await cdp.waitFor("document.querySelectorAll('#asset-list li .row-act').length === 1");
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.pt').length"), 0);
-    assert.match(await cdp.eval("document.getElementById('map-note').textContent"), /위치점 있는 물건이 없다\. 목록에서 선택한다/);
+    assert.match(await cdp.eval("document.getElementById('map-note').textContent"), /^지도에 위치가 있는 대상이 없습니다\. 목록에서 고릅니다\./);
     await cdp.setFiles("#seed-file", [seed2]);
-    await cdp.waitFor("document.querySelectorAll('#asset-list li > button').length === 2");
+    await cdp.waitFor("document.querySelectorAll('#asset-list li .row-act').length === 2");
     // 잘못된 시드 파일은 거절되고 목록이 바뀌지 않는다
     const seedBad = join(tmp, "seed-bad.json");
     writeFileSync(seedBad, JSON.stringify([{ ...seedAll[0], extra: 1 }]));
     await cdp.setFiles("#seed-file", [seedBad]);
-    await cdp.waitFor("document.getElementById('seed-note').textContent.includes('물건 목록 파일 오류')");
-    assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li > button').length"), 2);
+    await cdp.waitFor("document.getElementById('seed-note').textContent.includes('대상 목록 파일을 넣지 못했습니다')");
+    assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li .row-act').length"), 2);
     await cdp.eval("document.getElementById('load-synthetic').click(); 'ok'");
-    await cdp.waitFor("document.querySelectorAll('#asset-list li > button').length === 5");
+    await cdp.waitFor("document.querySelectorAll('#asset-list li .row-act').length === 5");
     // 재접속: 기록 유지
     await cdp.navigate(`${base}/index.html`);
     await cdp.waitFor("document.querySelectorAll('#record-list li').length === 1");
-    assert.ok((await cdp.eval("document.getElementById('status-line').textContent")).includes("관측 1"));
+    assert.ok((await cdp.eval("document.getElementById('status-line').textContent")).includes("기록 1"));
     await cdp.waitFor("document.querySelectorAll('#map-svg g.pt').length === 4");
     await cdp.waitFor("document.querySelectorAll('#map-svg path.parcel').length === 6");
     assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /필지 6개/, "재접속 후 필지 유지 (IndexedDB)");
@@ -353,7 +356,7 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg .layer-base path').length"), 11);
     await cdp.eval("document.getElementById('clear-basemap').click(); 'ok'");
     await cdp.waitFor("document.querySelectorAll('#map-svg .layer-base path').length === 0");
-    assert.match(await cdp.eval("document.getElementById('basemap-note').textContent"), /^배경 없음/);
+    assert.match(await cdp.eval("document.getElementById('basemap-note').textContent"), /^배경 자료 없음/);
     assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /필지 6개/, "배경을 지워도 필지는 남는다");
     // PC 자료 파일 (J5-023, ADR-17): 가상 정본에서 만든 .j5view.zip 을 넣어 물건·필지·정본 기록·거래를 한 번에 가져오고, 물건·필지 이력을 연도별로 본다
     const viewGen = spawnSync("python3", ["tests/fixtures/make_view.py", tmp], { cwd: ROOT, encoding: "utf8" });
@@ -363,20 +366,20 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       const viewZip = join(tmp, "synthetic.j5view.zip");
       await cdp.eval("document.getElementById('nav-settings').click(); 'ok'");
       await cdp.setFiles("#view-file", [viewZip]);
-      await cdp.waitFor("document.getElementById('view-note').textContent.includes('오류')");
+      await cdp.waitFor("document.getElementById('view-note').textContent.includes('넣지 못했습니다')");
       assert.match(await cdp.eval("document.getElementById('view-note').textContent"), /작업 공간\(j5-synthetic-study\)이 설정\(e2e-study\)과 다름/, "다른 정본의 파일은 거절");
-      assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li > button').length"), 5, "거절 시 목록 그대로");
+      assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li .row-act').length"), 5, "거절 시 목록 그대로");
       await cdp.eval("document.getElementById('study-id').value = 'j5-synthetic-study'; document.getElementById('save-settings').click(); 'ok'");
-      await cdp.waitFor("document.getElementById('settings-note').textContent === '저장됨'");
+      await cdp.waitFor("document.getElementById('settings-note').textContent === '저장했습니다'");
       await cdp.setFiles("#view-file", [viewZip]);
       await cdp.waitFor("document.getElementById('view-note').textContent.includes('가져왔습니다')");
-      assert.match(await cdp.eval("document.getElementById('view-note').textContent"), /^PC 자료를 가져왔습니다: 정본 v\d+ · 물건 5개 · 필지 6개 · 정본 기록 4건 · 거래 6건\. 이 기기의 기록은 그대로입니다\.$/);
-      assert.match(await cdp.eval("document.getElementById('view-status').textContent"), /^정본 v\d+ \(PC 생성 .+\) · 정본 기록 4건 · 거래 6건 · 가져오기 .+ · 더 새 정본이 있는지는 PC 에서 확인$/);
+      assert.match(await cdp.eval("document.getElementById('view-note').textContent"), /^PC 자료를 가져왔습니다\. 대상 5곳, 필지 6개, PC 기록 4건, 거래 6건 \(정본 v\d+\)\. 이 폰의 기록은 그대로입니다\.$/);
+      assert.match(await cdp.eval("document.getElementById('view-status').textContent"), /^PC 에서 .+ 에 만든 자료 \(정본 v\d+\)\. PC 기록 4건, 거래 6건\. .+ 에 가져왔습니다\. 더 새 자료가 있는지는 PC 에서 확인합니다\.$/);
       assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /필지 6개 .* · 정본 v\d+ · view:synthetic\.j5view\.zip .* · 정본 연결 포함$/, "파생본의 필지(정본 연결 포함)");
       assert.equal(await cdp.eval("document.querySelectorAll('#record-list li').length"), 1, "이 기기의 기록은 그대로");
       // 물건 이력: 오늘 화면 카드의 '이력' → 연도별 (2026: 정본 관측·목표 매수가, 2025: 확정 연결 거래)
-      await cdp.eval("document.getElementById('nav-home').click(); 'ok'");
-      await cdp.eval("Array.from(document.querySelectorAll('#asset-list li')).find(li => li.querySelector('.title').textContent === '가상 물건 1').querySelector('.meta button').click(); 'ok'");
+      await cdp.eval("document.getElementById('nav-map').click(); 'ok'");
+      await cdp.eval("Array.from(document.querySelectorAll('#asset-list li')).find(li => li.querySelector('.title').textContent === '가상 물건 1').querySelector('.row-extra button').click(); 'ok'");
       await cdp.waitFor("!document.getElementById('sec-history').hidden");
       assert.equal(await cdp.eval("document.getElementById('history-title').textContent"), "가상 물건 1");
       assert.equal(await cdp.eval("document.activeElement.id"), "history-title", "이력 화면 제목으로 포커스");
@@ -384,12 +387,12 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       const hist = await cdp.eval("Array.from(document.querySelectorAll('#history-list li')).map(li => [li.querySelector('.tl-date').textContent, li.querySelector('.tl-head').textContent, li.querySelector('.tl-text').textContent])");
       // 첫 항목은 이 e2e 가 앞서 이 기기에 저장한 오늘 관측(정본에는 없음), 그 뒤는 정본 기록·거래
       assert.equal(hist.length, 4, JSON.stringify(hist));
-      assert.ok(hist[0][1].includes("이 기기") && hist[0][2].startsWith("변화 확인"), JSON.stringify(hist[0]));
+      assert.ok(hist[0][1].includes("이 폰") && hist[0][2].startsWith("달라짐"), JSON.stringify(hist[0]));
       assert.deepEqual(hist.slice(1).map((h) => h[0]), ["2026-09-22", "2026-09-20", "2025-08-01"]);
-      assert.ok(hist[1][1].includes("관측") && hist[1][1].includes("정본") && hist[1][2] === "변화 확인 · 1층 임대 광고 부착 · 사진 1장", JSON.stringify(hist[1]));
+      assert.ok(hist[1][1].includes("현장 기록") && hist[1][1].includes("PC") && hist[1][2] === "달라짐 · 1층 임대 광고 부착 · 사진 1장", JSON.stringify(hist[1]));
       assert.ok(hist[2][1].includes("목표 매수가") && hist[2][2].startsWith("목표 매수가 15억"), JSON.stringify(hist[2]));
       assert.ok(hist[3][1].includes("실거래") && hist[3][1].includes("확정 연결") && hist[3][2].startsWith("10억"), JSON.stringify(hist[3]));
-      assert.match(await cdp.eval("document.getElementById('history-source').textContent"), /^PC 자료: 정본 v\d+ .* 더 새 정본이 있는지는 PC 에서 확인합니다\.$/);
+      assert.match(await cdp.eval("document.getElementById('history-source').textContent"), /^PC 에서 .* 에 만든 자료\(정본 v\d+\)와 이 폰의 기록입니다\.$/);
       assert.equal(await cdp.eval("document.getElementById('history-record').hidden"), false, "물건 이력에서 기록 시작 가능");
       assert.equal(await cdp.eval("document.getElementById('history-years').hidden"), true, "연도별 요약은 필지 이력에만 (J5-047)");
       await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
@@ -412,13 +415,13 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel.mark').length"), 1);
       assert.equal(await cdp.eval("document.querySelector('#parcel-filter-results li .title').textContent"), "가상동 1");
       // 물건 조건과 결과 줄의 물건 수 (J5-036): 가상 물건 1(관찰)이 필지 1, 가상 물건 2(상세 검토)가 필지 1-1 에 있다
-      assert.match(await cdp.eval("document.querySelector('#parcel-filter-results li .sub').textContent"), / · 물건 1개 \(관찰목록 1\)$/);
+      assert.match(await cdp.eval("document.querySelector('#parcel-filter-results li .sub').textContent"), / · 대상 1곳 \(관찰목록 1\)$/);
       await cdp.eval("document.getElementById('pf-zone').value = ''; document.getElementById('pf-assets').value = 'watch'; document.getElementById('parcel-filter-form').requestSubmit(); 'ok'");
       await cdp.waitFor("document.getElementById('parcel-filter-note').textContent.includes('2개 일치')");
       assert.deepEqual(await cdp.eval("Array.from(document.querySelectorAll('#parcel-filter-results li .title')).map(t => t.textContent).sort()"), ["가상동 1", "가상동 1-1"]);
       await cdp.eval("document.getElementById('pf-assets').value = 'none'; document.getElementById('parcel-filter-form').requestSubmit(); 'ok'");
       await cdp.waitFor("document.getElementById('parcel-filter-note').textContent.includes('일치') && document.querySelectorAll('#parcel-filter-results li').length > 0");
-      assert.equal(await cdp.eval("Array.from(document.querySelectorAll('#parcel-filter-results li .sub')).every(s => s.textContent.endsWith(' · 물건 없음'))"), true, "물건 없는 필지만");
+      assert.equal(await cdp.eval("Array.from(document.querySelectorAll('#parcel-filter-results li .sub')).every(s => s.textContent.endsWith(' · 대상 없음'))"), true, "물건 없는 필지만");
       // 결과의 필지를 물건으로 만들면 "물건 없음" 결과에서 빠지고, 지우면 돌아온다 (리뷰 반영 PR #83: 물건 목록이 바뀌면 마지막 조건으로 다시 그린다)
       const noneBefore = await cdp.eval("document.querySelectorAll('#parcel-filter-results li').length");
       const firstTitle = await cdp.eval("document.querySelector('#parcel-filter-results li .title').textContent");
@@ -432,7 +435,7 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       await cdp.waitFor("document.getElementById('sec-observe').hidden");
       await cdp.eval("Array.from(document.querySelectorAll('#asset-list button')).find(b => b.textContent === '삭제').click(); 'ok'");
       await cdp.waitFor(`document.querySelectorAll('#parcel-filter-results li').length === ${noneBefore}`);
-      await cdp.waitFor("document.querySelectorAll('#asset-list li > button').length === 5");
+      await cdp.waitFor("document.querySelectorAll('#asset-list li .row-act').length === 5");
       await cdp.eval("document.getElementById('nav-map').click(); 'ok'");
       await cdp.eval("document.getElementById('pf-assets').value = ''; document.getElementById('pf-zone').value = 'com'; document.getElementById('parcel-filter-form').requestSubmit(); 'ok'");
       await cdp.waitFor("document.getElementById('parcel-filter-note').textContent.includes('1개 일치')");
@@ -464,7 +467,7 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       assert.ok(pa.some((h) => h[0] === "2026-09-05" && h[1].includes("토지특성") && h[3].startsWith("지목 대 · 공부면적 1770.5 ㎡ · 공시지가 12,340,000원/㎡")), JSON.stringify(pa));
       const ph = phAll.filter((h) => !h[1].includes("토지 자료"));
       assert.deepEqual(ph.slice(1).map((h) => h[0]), ["2026-09-22", "2026-09-20", "2025-08-02", "2025-08-01"], JSON.stringify(ph));
-      assert.ok(ph[0][1].includes("이 기기") && ph[0][1].includes("가상 물건 1"), "안의 물건의 이 기기 관측도 물건 이름과 함께");
+      assert.ok(ph[0][1].includes("이 폰") && ph[0][1].includes("가상 물건 1"), "안의 물건의 이 기기 관측도 물건 이름과 함께");
       assert.ok(ph[3][1].includes("번지대") && ph[3][2] === "가상동 1-*", JSON.stringify(ph[3]));
       assert.ok(ph[4][1].includes("이 필지") && ph[4][2] === "가상동 1", JSON.stringify(ph[4]));
       assert.ok(ph.every((h) => !h[2].includes("가상동 *")), "동 전체 마스킹 거래는 필지에 붙지 않는다");
@@ -479,24 +482,24 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       await cdp.waitFor("document.getElementById('sec-history').hidden");
       // 재접속 뒤 유지
       await cdp.navigate(`${base}/index.html#settings`);
-      await cdp.waitFor("document.getElementById('view-status').textContent.startsWith('정본 v')");
+      await cdp.waitFor("document.getElementById('view-status').textContent.startsWith('PC 에서 ')");
       // 관심 단계·관찰목록 필터 (J5-029, ADR-22): 파생본 시드의 정본 출력값을 배지로 보이고 '관찰목록만' 이 목록·지도를 줄이며 선택이 재접속 뒤 남는다
-      await cdp.waitFor("document.querySelectorAll('#asset-list li > button').length === 5");
+      await cdp.waitFor("document.querySelectorAll('#asset-list li .row-act').length === 5");
       assert.equal(await cdp.eval("document.getElementById('asset-filter').hidden"), false, "관심 단계가 있는 시드에서 필터가 보인다");
-      assert.equal(await cdp.eval("document.getElementById('asset-filter-note').textContent"), "전체 5개 (관찰목록 2개)");
-      assert.match(await cdp.eval("document.getElementById('seed-status').textContent"), /물건 5개 \(연습용\) · 관찰목록 2개 · 마지막 가져오기/);
+      assert.equal(await cdp.eval("document.getElementById('asset-filter-note').textContent"), "관찰목록 2곳");
+      assert.match(await cdp.eval("document.getElementById('seed-status').textContent"), /^대상 5곳 \(연습용\), 관찰목록 2곳\. .* 가져옴$/);
       const badge = (i) => cdp.eval(`Array.from(document.querySelector('#asset-list li[data-asset-id="7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a5${i}"]').querySelectorAll('.badge[class*="track-"], .badge.src-pending')).map(b => b.textContent)`);
       assert.deepEqual([await badge(0), await badge(1), await badge(2), await badge(3), await badge(4)], [["관찰"], ["상세 검토"], [], ["보류"], ["제외"]], "미검토는 배지 없음");
       assert.equal(await cdp.eval("document.querySelectorAll('#asset-list .badge.track-watchlist').length"), 2);
       assert.equal(await cdp.eval("Array.from(document.querySelectorAll('#asset-list button')).some(b => /단계|관찰목록/.test(b.textContent))"), false, "관심 단계를 바꾸는 버튼은 폰에 없다");
       await cdp.eval("document.querySelector('#asset-filter button[data-filter=\"watchlist\"]').click(); 'ok'");
-      await cdp.waitFor("document.querySelectorAll('#asset-list li > button').length === 2");
-      assert.equal(await cdp.eval("document.getElementById('asset-filter-note').textContent"), "관찰목록 2개만 표시 (전체 5개)");
+      await cdp.waitFor("document.querySelectorAll('#asset-list li .row-act').length === 2");
+      assert.equal(await cdp.eval("document.getElementById('asset-filter-note').textContent"), "관찰목록 2곳만 보는 중 (전체 5곳)");
       assert.equal(await cdp.eval("document.querySelector('#asset-filter button[data-filter=\"watchlist\"]').getAttribute('aria-pressed')"), "true");
       assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.pt').length"), 2, "지도 점도 관찰목록만");
-      assert.match(await cdp.eval("document.getElementById('map-note').textContent"), /^위치점 2개 표시/);
+      assert.match(await cdp.eval("document.getElementById('map-note').textContent"), /^지도에 대상 2곳/);
       await cdp.navigate(`${base}/index.html#home`);
-      await cdp.waitFor("document.querySelectorAll('#asset-list li > button').length === 2");
+      await cdp.waitFor("document.querySelectorAll('#asset-list li .row-act').length === 2");
       assert.equal(await cdp.eval("document.querySelector('#asset-filter button[data-filter=\"watchlist\"]').getAttribute('aria-pressed')"), "true", "필터 선택이 재접속 뒤 남는다");
       await cdp.eval("document.getElementById('start-observing').click(); 'ok'");
       await cdp.waitFor("!document.getElementById('sec-observe').hidden");
@@ -504,30 +507,30 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       await cdp.eval("document.getElementById('cancel-observation').click(); 'ok'");
       await cdp.waitFor("document.getElementById('sec-observe').hidden");
       await cdp.eval("document.querySelector('#asset-filter button[data-filter=\"all\"]').click(); 'ok'");
-      await cdp.waitFor("document.querySelectorAll('#asset-list li > button').length === 5");
+      await cdp.waitFor("document.querySelectorAll('#asset-list li .row-act').length === 5");
       assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.pt').length"), 4);
       await cdp.navigate(`${base}/index.html#settings`);
-      await cdp.waitFor("document.getElementById('view-status').textContent.startsWith('정본 v')");
+      await cdp.waitFor("document.getElementById('view-status').textContent.startsWith('PC 에서 ')");
       // 필지가 없는 파생본으로 바꾸면 기존 필지도 지워진다 (리뷰 반영: 같은 정본 버전의 자료만 남긴다)
       const noParcels = spawnSync("python3", ["tests/fixtures/make_view.py", tmp, "--no-parcels"], { cwd: ROOT, encoding: "utf8" });
       assert.equal(noParcels.status, 0, noParcels.stderr);
       await cdp.setFiles("#view-file", [join(tmp, "synthetic-noparcels.j5view.zip")]);
       await cdp.waitFor("document.getElementById('view-note').textContent.includes('가져왔습니다')");
-      assert.match(await cdp.eval("document.getElementById('view-note').textContent"), /물건 5개 · 필지 0개 · 정본 기록 4건 · 거래 6건/);
-      assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /^필지 없음/, "파생본에 필지가 없으면 기존 필지를 지운다");
+      assert.match(await cdp.eval("document.getElementById('view-note').textContent"), /대상 5곳, 필지 0개, PC 기록 4건, 거래 6건/);
+      assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /^필지 자료 없음/, "파생본에 필지가 없으면 기존 필지를 지운다");
       assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel').length"), 0);
       await cdp.setFiles("#view-file", [viewZip]);
       await cdp.waitFor("document.getElementById('view-note').textContent.includes('필지 6개')");
       // 지우기 뒤 물건·필지·이 기기 기록은 그대로
       await cdp.eval("document.getElementById('clear-view').click(); 'ok'");
-      await cdp.waitFor("document.getElementById('view-status').textContent.startsWith('가져온 PC 자료가 없습니다')");
-      await cdp.waitFor("document.querySelectorAll('#asset-list li > button').length === 5");
+      await cdp.waitFor("document.getElementById('view-status').textContent.startsWith('아직 가져오지 않았습니다')");
+      await cdp.waitFor("document.querySelectorAll('#asset-list li .row-act').length === 5");
       assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /필지 6개/);
       assert.equal(await cdp.eval("document.querySelectorAll('#record-list li').length"), 1);
       await cdp.eval("document.getElementById('study-id').value = 'e2e-study'; document.getElementById('save-settings').click(); 'ok'");
-      await cdp.waitFor("document.getElementById('settings-note').textContent === '저장됨'");
+      await cdp.waitFor("document.getElementById('settings-note').textContent === '저장했습니다'");
       await cdp.navigate(`${base}/index.html`);
-      await cdp.waitFor("document.querySelectorAll('#asset-list li > button').length === 5");
+      await cdp.waitFor("document.querySelectorAll('#asset-list li .row-act').length === 5");
     }
     // 배경 타일 (J5-024, ADR-18): 설정에서 같은 출처 템플릿을 켜면 지도 맨 아래에 <image> 타일이 깔리고, 미리 받기로 서비스 워커 캐시에 저장되며, 끄면 사라진다
     await cdp.eval("document.getElementById('nav-settings').click(); 'ok'");
@@ -586,7 +589,11 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.navigate(`${base}/index.html#map`);
     await cdp.waitFor("document.querySelectorAll('#map-svg .layer-tiles image').length > 0");
     await new Promise((r) => setTimeout(r, 400));
-    assert.equal(tileReqs.length, reqAfterPrefetch, "저장된 타일은 서버에 다시 요청하지 않는다");
+    // 휴대폰 세로 화면(J5-054)의 전체 보기는 미리 받은 범위(대상·필지 + 300 m)보다 위아래로 넓을 수 있다. 그 바깥 타일은 처음 받는 것이라 요청이 생긴다.
+    // 확인할 것은 이미 받은(저장된) 타일을 다시 요청하지 않는다는 것이다
+    const fetchedBefore = new Set(tileReqs.slice(0, reqAfterPrefetch));
+    const refetched = tileReqs.slice(reqAfterPrefetch).filter((t) => fetchedBefore.has(t));
+    assert.deepEqual(refetched, [], "저장된 타일은 서버에 다시 요청하지 않는다");
     // 끄기 → 타일 없음, 다시 켜기 (오프라인 단계에서 저장된 타일로 보이는지 확인)
     await cdp.eval("document.getElementById('nav-settings').click(); 'ok'");
     await cdp.eval("document.getElementById('tiles-provider').value = ''; document.getElementById('tiles-provider').dispatchEvent(new Event('change')); document.getElementById('tiles-save').click(); 'ok'");
@@ -602,9 +609,9 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       const orig = document.createElementNS.bind(document);
       document.createElementNS = (ns, name) => { if (String(ns).endsWith('/svg')) throw new Error('e2e: SVG 생성 불가'); return orig(ns, name); };` });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('map-note').textContent.includes('지도 표시 불가')");
-    assert.match(await cdp.eval("document.getElementById('map-note').textContent"), /지도 표시 불가: e2e: SVG 생성 불가\. 목록에서 선택한다/);
-    await cdp.waitFor("document.querySelectorAll('#asset-list li > button').length === 5");
+    await cdp.waitFor("document.getElementById('map-note').textContent.includes('지도를 그리지 못했습니다')");
+    assert.match(await cdp.eval("document.getElementById('map-note').textContent"), /지도를 그리지 못했습니다 \(e2e: SVG 생성 불가\)\. 목록에서 고릅니다\./);
+    await cdp.waitFor("document.querySelectorAll('#asset-list li .row-act').length === 5");
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.pt').length"), 0);
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel').length"), 0);
     assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /필지 6개/, "지도 실패해도 필지 안내는 남는다");
@@ -616,7 +623,7 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.waitFor("!document.getElementById('parcel-panel').hidden && document.getElementById('parcel-title').textContent === '가상동 1-1'");
     assert.ok(!(await cdp.eval("location.href")).includes("?") && (await cdp.eval("location.pathname")).endsWith("/index.html"), "폼 제출이 페이지 이동(GET ?…)으로 이어지지 않는다");
     await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
-    await cdp.eval("document.querySelectorAll('#asset-list li > button')[2].click(); 'ok'");
+    await cdp.eval("document.querySelectorAll('#asset-list li .row-act')[2].click(); 'ok'");
     await cdp.waitFor("!document.getElementById('sec-observe').hidden");
     assert.equal(await cdp.eval("document.getElementById('target-label').textContent"), "가상 물건 3", "지도 없이 목록으로 선택");
     await cdp.eval("document.getElementById('cancel-observation').click(); 'ok'");
@@ -629,27 +636,27 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.waitFor("document.querySelectorAll('#map-svg path.parcel').length === 6");
     await cdp.eval("document.getElementById('clear-parcels').click(); 'ok'");
     await cdp.waitFor("document.querySelectorAll('#map-svg path.parcel').length === 0");
-    assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /필지 없음/);
+    assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /필지 자료 없음/);
     assert.doesNotMatch(await cdp.eval("document.getElementById('map-note').textContent"), /필지/);
     await cdp.eval("document.getElementById('load-synthetic-parcels').click(); 'ok'");
     await cdp.waitFor("document.querySelectorAll('#map-svg path.parcel').length === 6");
     // 이전 준비(J5-017D): 내보내지 않은 기록이 있으면 '내보내기 필요', origin·지속 저장 표시
-    assert.match(await cdp.eval("document.getElementById('migrate-note').textContent"), /내보내기 필요: 1건/);
+    assert.match(await cdp.eval("document.getElementById('migrate-note').textContent"), /보내야 할 기록 1건/);
     assert.equal(await cdp.eval("document.getElementById('migrate-origin').textContent"), await cdp.eval("location.origin"));
-    assert.match(await cdp.eval("document.getElementById('migrate-storage').textContent"), /지속 저장/);
+    assert.match(await cdp.eval("document.getElementById('migrate-storage').textContent"), /오래 보관/);
     // 설정을 다른 study 로 바꾸면 그 기록은 '다른 study/모드' 로, 되돌리면 '현재 설정' 으로 즉시 바뀐다 (리뷰 반영)
     await cdp.eval("document.getElementById('study-id').value = 'e2e-other'; document.getElementById('save-settings').click(); 'ok'");
-    await cdp.waitFor("document.getElementById('migrate-note').textContent.includes('다른 study/모드 1건(e2e-study/synthetic)')");
+    await cdp.waitFor("document.getElementById('migrate-note').textContent.includes('다른 작업 공간·자료 종류의 1건(e2e-study/synthetic)')");
     await cdp.eval("document.getElementById('study-id').value = 'e2e-study'; document.getElementById('save-settings').click(); 'ok'");
-    await cdp.waitFor("document.getElementById('migrate-note').textContent.includes('현재 설정 1건')");
+    await cdp.waitFor("document.getElementById('migrate-note').textContent.includes('지금 설정의 1건')");
     // 내보내기: 묶음 준비 → 파일 저장(다운로드) → j5 inspect ok → 저장 확인 → 내보냄 표시
     const dl = join(tmp, "dl"); mkdirSync(dl);
     await cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: dl, eventsEnabled: true });
-    await cdp.eval("document.getElementById('nav-export').click(); 'ok'");
-    await cdp.waitFor("!document.getElementById('view-export').hidden");
+    await cdp.eval("document.getElementById('nav-records').click(); 'ok'");
+    await cdp.waitFor("!document.getElementById('view-records').hidden");
     await cdp.eval("document.getElementById('export-prepare').click(); 'ok'");
     await cdp.waitFor("!document.getElementById('export-save').disabled");
-    assert.match(await cdp.eval("document.getElementById('export-summary').textContent"), /대상 1건 · 사진 1장/);
+    assert.match(await cdp.eval("document.getElementById('export-summary').textContent"), /^보낼 기록 1건, 사진 1장/);
     assert.equal(await cdp.eval("document.querySelector('#export-steps .current').dataset.step"), "3", "파일을 만들면 3단계(파일 저장)");
     await cdp.clickSelector("#export-save");
     const zip1 = await waitForDownloads(dl, 1);
@@ -663,14 +670,14 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       assert.equal(rep.counts.events, 1);
       assert.equal(rep.counts.photos_referenced, 1);
     }
-    // 저장 확인 전에는 아직 저장됨
-    assert.ok((await cdp.eval("document.getElementById('record-list').textContent")).includes("저장됨"));
+    // 저장 확인 전에는 아직 안 보냄
+    assert.ok((await cdp.eval("document.getElementById('record-list').textContent")).includes("안 보냄"));
     await cdp.waitFor("!document.getElementById('export-confirm').disabled");
     await cdp.eval("document.getElementById('export-confirm').click(); 'ok'");
-    await cdp.waitFor("document.getElementById('export-note').textContent.includes('모두 확인됨')");
-    assert.ok((await cdp.eval("document.getElementById('record-list').textContent")).includes("내보냄"));
+    await cdp.waitFor("document.getElementById('export-note').textContent.startsWith('보냈습니다')");
+    assert.equal(await cdp.eval("document.querySelector('#record-list .badge.state-exported').textContent"), "보냄");
     assert.match(await cdp.eval("document.getElementById('export-history').textContent"), /저장 확인/);
-    assert.match(await cdp.eval("document.getElementById('migrate-note').textContent"), /이전 준비 완료: 기록 1건/, "모두 내보내면 이전 준비 완료");
+    assert.match(await cdp.eval("document.getElementById('migrate-note').textContent"), /옮길 준비가 됐습니다: 기록 1건/, "모두 내보내면 이전 준비 완료");
     // 다시 내보내기(내보낸 기록 포함): observations.jsonl 바이트가 같다
     await cdp.eval("document.getElementById('include-exported').click(); document.getElementById('export-prepare').click(); 'ok'");
     await cdp.waitFor("!document.getElementById('export-save').disabled");
@@ -703,7 +710,7 @@ print(json.dumps({"same_obs": h(a) == h(b), "same_pkg": ma["package_id"] == mb["
     await new Promise((r) => setTimeout(r, 200));
     const probeLogs = cdp.errors.splice(errorsBefore);
     assert.ok(probeLogs.every((e) => e.includes("ERR_FAILED") || e.includes("Failed to load resource")), probeLogs.join("; "));
-    assert.ok((await cdp.eval("document.getElementById('status-line').textContent")).includes("관측 1"));
+    assert.ok((await cdp.eval("document.getElementById('status-line').textContent")).includes("기록 1"));
     // 오프라인에서도 미리 받아 둔 배경 타일은 서비스 워커 캐시에서 나온다 (J5-024)
     await cdp.eval("document.getElementById('nav-map').click(); 'ok'");
     await cdp.waitFor("document.querySelectorAll('#map-svg .layer-tiles image').length > 0");
@@ -750,7 +757,7 @@ print(json.dumps({"same_obs": h(a) == h(b), "same_pkg": ma["package_id"] == mb["
     const firstSha = createHash("sha256").update(readFileSync(photo)).digest("hex");
     const photo2 = join(tmp, "front-2026.png");
     writeFileSync(photo2, png1x1([255, 128, 0]));
-    await cdp.eval("document.querySelectorAll('#asset-list li > button')[0].click(); 'ok'");
+    await cdp.eval("document.querySelectorAll('#asset-list li .row-act')[0].click(); 'ok'");
     await cdp.waitFor("!document.getElementById('sec-observe').hidden");
     await cdp.setFiles("#photos", [photo2]);
     await cdp.waitFor("document.querySelectorAll('#photo-list .photo-item .series select.previous option').length === 2");
@@ -762,7 +769,7 @@ print(json.dumps({"same_obs": h(a) == h(b), "same_pkg": ma["package_id"] == mb["
       document.querySelector('#photo-list .tags input').click();
       document.getElementById('status-no_change').click(); return 'ok'; })()`);
     await cdp.eval("document.getElementById('save-observation').click(); 'ok'");
-    await cdp.waitFor("document.getElementById('observe-note').textContent.startsWith('저장됨')");
+    await cdp.waitFor("document.getElementById('observe-note').textContent.startsWith('이 폰에 저장했습니다')");
     await cdp.waitFor("document.querySelectorAll('#record-list li').length === 2");
     const dump2 = await dumpDb();
     assert.equal(dump2.events.length, 2);

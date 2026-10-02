@@ -395,8 +395,8 @@ test("조건으로 필지 찾기의 물건 조건 (J5-036): 없음·있음·관�
   assert.ok(parseFilter({ assets: "nope" }).errors.some((e) => e.includes("물건 조건")));
   assert.throws(() => filterParcels(feats, parseFilter({ assets: "any" }).criteria), /assetsOf/, "물건 조건에는 물건 목록이 필요하다");
   const by = byLabel(vwBundle());
-  assert.equal(filterRowText(by["1"].properties.attrs, assetsOf(by["1"])), "일반상업지역 · 1,771㎡ · 12,340,000원/㎡ · 개인 · 물건 1개 (관찰목록 1)");
-  assert.equal(filterRowText(by["4-2"].properties.attrs, []), "자연녹지지역 · 1,080㎡ · 1,200,000원/㎡ · 국유지 · 물건 없음");
+  assert.equal(filterRowText(by["1"].properties.attrs, assetsOf(by["1"])), "일반상업지역 · 1,771㎡ · 12,340,000원/㎡ · 개인 · 대상 1곳 (관찰목록 1)");
+  assert.equal(filterRowText(by["4-2"].properties.attrs, []), "자연녹지지역 · 1,080㎡ · 1,200,000원/㎡ · 국유지 · 대상 없음");
   assert.equal(filterRowText(by["1"].properties.attrs), "일반상업지역 · 1,771㎡ · 12,340,000원/㎡ · 개인", "물건 목록을 주지 않으면 이전과 같다");
 });
 
