@@ -1368,6 +1368,14 @@ async function refreshStatus() {
   const mode = (await state.store.getMeta("data_mode")) ?? "synthetic";
   text($("status-line"), `앱 ${APP_VERSION} · ${mode} · study ${studyId ?? "(미설정)"} · 대상 ${c.assets} · 기록 ${c.events} · 사진 ${c.photos} · ${navigator.onLine ? "온라인" : "오프라인"}`);
   $("offline-banner").hidden = navigator.onLine;
+  syncBannerSpace();
+}
+
+/** 오프라인 배너의 실제 높이만큼 상단 바 아래 화면을 내린다 (리뷰 반영 PR #101). 글자 크기·폭에 따라 배너가 여러 줄이 되므로 고정값을 쓰지 않는다.
+ *  CSSOM 으로 CSS 변수 하나만 바꾼다 (style 속성 문자열을 쓰지 않아 CSP style-src 'self' 와 맞다) */
+function syncBannerSpace() {
+  const h = $("offline-banner").hidden ? 0 : Math.ceil($("offline-banner").getBoundingClientRect().height);
+  document.documentElement.style.setProperty("--banner-h", `${h}px`);
 }
 
 function registerSw() {
@@ -1429,6 +1437,9 @@ async function main() {
     const f = $("fatal");
     f.hidden = false;
     f.textContent = "이 브라우저에서는 기록을 저장할 수 없습니다 (브라우저 저장소를 열 수 없음: " + e + "). Safari 일반 창이나 다른 브라우저로 엽니다.";
+    // 화면을 채우는 현장 지도(고정 위치)가 안내를 덮지 않게 화면과 탭을 모두 숨긴다 (리뷰 반영 PR #101)
+    for (const v of document.querySelectorAll("section.view")) v.hidden = true;
+    document.querySelector(".bottom-nav").hidden = true;
     return;
   }
   const sections = Object.fromEntries(Array.from(document.querySelectorAll("section.view")).map((s) => [s.dataset.view, s]));
@@ -1530,7 +1541,10 @@ async function main() {
   // 처음 시트: 자료가 없거나 지도를 못 그리면 펼쳐 시작하기·목록을 보이고, 그 밖에는 접어 지도를 보인다
   setSheet(!state.map || (state.assets.length === 0 && state.parcelsCount === 0));
   // 시트·찾기 칸의 크기가 바뀌면(펼치기·글자 크기·회전) 지도에 다시 알린다
-  if (typeof ResizeObserver === "function") { try { const ro = new ResizeObserver(() => updateMapInset()); ro.observe($("field-sheet")); ro.observe($("map-top")); } catch {} }
+  if (typeof ResizeObserver === "function") {
+    try { const ro = new ResizeObserver(() => updateMapInset()); ro.observe($("field-sheet")); ro.observe($("map-top")); } catch {}
+    try { new ResizeObserver(() => syncBannerSpace()).observe($("offline-banner")); } catch {}
+  }
   if (state.nav.current === "map") mapCall((m) => { m.resize(); m.fit(); });
   registerSw();
 }

@@ -170,6 +170,16 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     // 11. 오프라인 배너
     await cdp.send("Network.emulateNetworkConditions", { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
     await cdp.waitFor(visible("offline-banner"));
+    // 배너가 여러 줄이 돼도(좁은 화면·큰 글자) 상단 바 아래 화면이 배너에 덮이지 않는다 (리뷰 반영 PR #101): 기록 화면과 현장 화면 모두
+    const appbarBottom = () => // 상단 바의 아래 괘선 1px 은 화면과 겹친다
+      cdp.eval("document.querySelector('.appbar').getBoundingClientRect().bottom");
+    await cdp.eval("document.getElementById('offline-banner').textContent += ' 글자를 크게 키운 폰처럼 여러 줄이 되는 경우를 흉내 냅니다. 화면이 배너 아래로 내려가야 합니다.'; 'ok'");
+    await cdp.waitFor("document.getElementById('offline-banner').getBoundingClientRect().height > 60");
+    await cdp.waitFor(`document.getElementById('records-title').getBoundingClientRect().top >= document.querySelector('.appbar').getBoundingClientRect().bottom - 1.5`);
+    await go(cdp, "map");
+    await cdp.waitFor(visible("view-map"));
+    assert.ok(await cdp.eval("document.getElementById('view-map').getBoundingClientRect().top") >= (await appbarBottom()) - 1.5, "현장 지도가 여러 줄 배너 아래에서 시작한다");
+    await go(cdp, "records");
     await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
     await cdp.waitFor("document.getElementById('offline-banner').hidden");
 
@@ -235,6 +245,14 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     assert.equal(a11y.headingJump, false, "제목 단계 건너뜀 없음");
     assert.equal(a11y.navLabel, "주 메뉴");
     assert.deepEqual(cdp.errors, [], "콘솔 오류 없음");
+    // 15. 브라우저 저장소를 열 수 없으면(IndexedDB 차단 흉내) 오류 안내가 화면 맨 위에 보이고 현장 지도가 그 위를 덮지 않는다 (리뷰 반영 PR #101)
+    const { identifier: idbStub } = await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `IDBFactory.prototype.open = function () { throw new DOMException('e2e: 저장소 차단', 'SecurityError'); };` });
+    await cdp.navigate(`${base}/index.html?reload=6`);
+    await cdp.waitFor(visible("fatal"));
+    assert.match(await cdp.eval(txt("fatal")), /기록을 저장할 수 없습니다/);
+    assert.equal(await cdp.eval("(r => document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)?.closest('#fatal')?.id ?? null)(document.getElementById('fatal').getBoundingClientRect())"), "fatal", "오류 안내가 맨 위에 보인다");
+    assert.ok(await cdp.eval("document.getElementById('view-map').hidden && document.querySelector('.bottom-nav').hidden"));
+    await cdp.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: idbStub });
   } finally {
     cdp?.close();
     await new Promise((r) => srv.close(r));

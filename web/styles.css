@@ -40,6 +40,7 @@
   --r-btn: 10px; --r-card: 14px; --r-sheet: 18px; --r-pill: 999px;
   --touch: 44px;
   --appbar-h: 48px;
+  --banner-h: 0px;       /* 오프라인 배너의 실제 높이 (main.js syncBannerSpace) */
   --nav-h: 58px;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -99,7 +100,7 @@ code { font-family: inherit; font-weight: 600; overflow-wrap: anywhere; }
 .banner-offline { background: var(--warn-soft); color: var(--warn); border-top: 1px solid var(--rule); }
 .banner-error { background: var(--danger-soft); color: var(--danger); margin: var(--s-4); border-radius: var(--r-btn); }
 
-main { padding-top: calc(var(--appbar-h) + var(--safe-top)); padding-bottom: calc(var(--nav-h) + var(--safe-bottom) + var(--s-2)); }
+main { padding-top: calc(var(--appbar-h) + var(--safe-top) + var(--banner-h)); padding-bottom: calc(var(--nav-h) + var(--safe-bottom) + var(--s-2)); }
 
 /* ---- 버튼 ---- */
 button { font: inherit; font-size: var(--t-s); font-weight: 700; min-height: var(--touch); padding: 8px 16px; border-radius: var(--r-btn); border: 1.5px solid var(--rule-strong); background: var(--sheet); color: var(--ink); cursor: pointer; -webkit-tap-highlight-color: transparent; }
@@ -196,8 +197,7 @@ ul.plain li.empty { color: var(--pencil); }
 .inside-list > li.empty, .inside-list > li.warn { display: block; }
 
 /* ---- 현장 화면: 지도 + 시트 ---- */
-.view-field { position: fixed; left: 0; right: 0; top: calc(var(--appbar-h) + var(--safe-top)); bottom: calc(var(--nav-h) + var(--safe-bottom)); overflow: hidden; }
-body:has(.banner-offline:not([hidden])) .view-field { top: calc(var(--appbar-h) + var(--safe-top) + 37px); }
+.view-field { position: fixed; left: 0; right: 0; top: calc(var(--appbar-h) + var(--safe-top) + var(--banner-h)); bottom: calc(var(--nav-h) + var(--safe-bottom)); overflow: hidden; }
 .field-map { position: absolute; inset: 0; }
 #map-svg { display: block; width: 100%; height: 100%; background: var(--map-bg); touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; cursor: grab; }
 .map-empty { position: absolute; inset: 0 0 auto 0; height: 38%; display: grid; place-items: center; text-align: center; padding: var(--s-5); color: var(--pencil); font-size: var(--t-s); pointer-events: none; }
@@ -420,12 +420,12 @@ details.disclosure.quiet > summary { color: var(--pencil); font-weight: 600; }
 /* ---- 넓은 화면: 지도 옆에 시트를 붙인다 ---- */
 @media (min-width: 900px) {
   :root { --nav-h: 48px; }
-  .bottom-nav { top: calc(var(--appbar-h) + var(--safe-top)); bottom: auto; grid-template-columns: repeat(3, minmax(0, 140px)); justify-content: center; border-top: none; border-bottom: 1px solid var(--rule); padding-bottom: 0; }
+  .bottom-nav { top: calc(var(--appbar-h) + var(--safe-top) + var(--banner-h)); bottom: auto; grid-template-columns: repeat(3, minmax(0, 140px)); justify-content: center; border-top: none; border-bottom: 1px solid var(--rule); padding-bottom: 0; }
   .nav-btn { display: flex; flex-direction: row; justify-content: center; align-items: center; gap: 8px; font-size: var(--t-s); }
   .nav-btn[aria-current="page"]::after { content: ""; position: absolute; left: 20%; right: 20%; bottom: 0; height: 3px; background: var(--blue); }
   .nav-badge { position: static; }
-  main { padding-top: calc(var(--appbar-h) + var(--safe-top) + var(--nav-h)); padding-bottom: 0; }
-  .view-field { top: calc(var(--appbar-h) + var(--safe-top) + var(--nav-h)); bottom: 0; }
+  main { padding-top: calc(var(--appbar-h) + var(--safe-top) + var(--banner-h) + var(--nav-h)); padding-bottom: 0; }
+  .view-field { top: calc(var(--appbar-h) + var(--safe-top) + var(--banner-h) + var(--nav-h)); bottom: 0; }
   .field-map { right: 420px; }
   .field-sheet { left: auto; width: 420px; top: 0; max-height: none; border-radius: 0; box-shadow: -1px 0 0 var(--rule); }
   .field-sheet[data-state="peek"] .sheet-body { display: grid; }
