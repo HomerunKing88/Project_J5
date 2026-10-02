@@ -183,6 +183,16 @@ export function transactionItem(t, { match = null, subject = null } = {}) {
 }
 
 /**
+ * 필지 요약(연도별 표·최근 거래)에 쓰는 항목 (J5-057 리뷰 반영 PR #104). 대상에 확정 연결된 거래(linked)는 그 대상이 PC 에서 이 필지에 연결된 경우만 남긴다.
+ * 위치점만 이 필지 안에 있는 대상(근거 inside)은 필지 구성이 확정되지 않았으므로, 그 대상의 거래를 이 필지의 거래로 세지 않는다 (PC parcel_years 의 "연결 물건" 과 같다).
+ * 필지 이력의 시간순 목록은 그 대상 이름과 함께 모든 항목을 그대로 보인다.
+ */
+export function parcelSummaryItems(items, pcLinkedAssetIds = []) {
+  const ok = new Set(pcLinkedAssetIds);
+  return items.filter((it) => !(it.kind === "transaction" && it.match === "linked" && !ok.has(it.linkedAsset)));
+}
+
+/**
  * 필지 카드의 최근 거래 (J5-057): parcelHistory 의 거래 가운데 이 필지와 지번이 같은 거래(exact)와 사람이 확정 연결한 거래(linked)만, 최근 것부터 limit 건.
  * 지번 일부가 가려진 번지대 거래(prefix)는 이 필지의 거래로 확정하지 않으므로 목록에 넣지 않고 수만 센다 (AGENTS "마스킹된 거래를 특정 PNU 에 확정하지 않는다").
  * { rows: [{date, amount, details, match}], total(같은 필지·연결 수), prefix(번지대 수) }

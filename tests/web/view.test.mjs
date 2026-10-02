@@ -1,7 +1,7 @@
 // view.js (J5-023, ADR-17): manifest·기록·거래 검증, 금액 표기, 지번 대조, 물건·필지 이력 조립, 연도 묶음. DOM 없음.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, fmtKrw, parseJibun, jibunMatch, assetHistory, parcelHistory, attrHistoryItems, groupByYear, viewSummary, parcelYearSummary, parcelYearSummaryInfo, YEAR_SUMMARY_MAX, yearSummaryRow, yearSummaryCells, recentDeals } from "../../web/app/view.js";
+import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, fmtKrw, parseJibun, jibunMatch, assetHistory, parcelHistory, attrHistoryItems, groupByYear, viewSummary, parcelYearSummary, parcelYearSummaryInfo, YEAR_SUMMARY_MAX, yearSummaryRow, yearSummaryCells, recentDeals, parcelSummaryItems } from "../../web/app/view.js";
 
 const A0 = "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a50", A1 = "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a51";
 const R = (id, asset, type, at, payload, extra = {}) => ({ record_id: id, asset_id: asset, record_type: type, observed_at: at, payload, attachments: [], supersedes_id: null, ...extra });
@@ -226,4 +226,18 @@ test("recentDeals: 같은 필지·확정 연결 거래만 최근 것부터, 번�
   assert.equal(d.rows[1].amount, "10억");
   assert.deepEqual(recentDeals(items, 10).rows.map((r) => r.match).filter((m) => m === "linked").length, 1, "확정 연결 거래는 지번이 달라도 들어간다");
   assert.deepEqual(recentDeals([], 3), { rows: [], total: 0, prefix: 0 });
+});
+
+test("parcelSummaryItems: 위치로만 찾은 대상의 연결 거래는 필지 요약에서 뺀다 (J5-057 리뷰)", () => {
+  const feature = { id: "9999900100100010000", properties: { emd_name: "가상동", emd_code: "9999900100", label: "1", bon: 1, bu: 0, mountain: false } };
+  const tx = (id, ymd, jibun, extra = {}) => T(ID(id), ymd, jibun, { lawd_cd: "99999", ...extra });
+  const txs = [tx(1, "202508", "1"), tx(2, "202509", "77", { asset_id: ID(50), link_status: "confirmed" }), tx(3, "202510", "88", { asset_id: ID(60), link_status: "confirmed" })];
+  // 대상 50 은 PC 에서 이 필지에 연결, 대상 60 은 위치점만 이 필지 안
+  const items = parcelHistory(feature, [{ asset_id: ID(50), label: "연결 대상" }, { asset_id: ID(60), label: "위치 대상" }], { events: [], records: [], transactions: txs });
+  assert.equal(items.filter((i) => i.kind === "transaction").length, 3, "이력 목록에는 모두 남는다");
+  const summary = parcelSummaryItems(items, [ID(50)]);
+  assert.deepEqual(summary.filter((i) => i.kind === "transaction").map((i) => [i.id, i.match]), [[ID(2), "linked"], [ID(1), "exact"]]);
+  assert.deepEqual(recentDeals(summary).rows.map((r) => r.match), ["linked", "exact"], "최근 거래에 위치 대상의 거래가 들어가지 않는다");
+  assert.equal(parcelYearSummary(feature, summary, null, []).find((r) => r.year === 2025).linked, 1, "연도별 표의 연결 수도 PC 연결 대상만");
+  assert.equal(parcelSummaryItems(items, []).filter((i) => i.match === "linked").length, 0);
 });

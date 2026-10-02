@@ -541,9 +541,16 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel').length"), 0);
       await cdp.setFiles("#view-file", [viewZip]);
       await cdp.waitFor("document.getElementById('view-note').textContent.includes('필지 6개')");
+      // 필지 카드를 연 채로 PC 자료를 지우면 카드의 최근 거래도 사라진다 (J5-057 리뷰 반영 PR #104)
+      await cdp.eval("document.getElementById('nav-map').click(); 'ok'");
+      await cdp.clickRect('#map-svg path.parcel[data-pnu="9999900100100010000"]');
+      await cdp.waitFor("!document.getElementById('parcel-panel').hidden && !document.getElementById('parcel-deals').hidden && document.querySelectorAll('#parcel-deals-list li').length === 1");
+      await cdp.eval("document.getElementById('nav-settings').click(); 'ok'");
       // 지우기 뒤 물건·필지·이 기기 기록은 그대로
       await cdp.eval("document.getElementById('clear-view').click(); 'ok'");
       await cdp.waitFor("document.getElementById('view-status').textContent.startsWith('아직 가져오지 않았습니다')");
+      assert.ok(await cdp.eval("document.getElementById('parcel-deals').hidden"), "지운 거래가 열린 필지 카드에 남지 않는다");
+      assert.equal(await cdp.eval("document.getElementById('parcel-panel').hidden"), false, "카드는 열린 채 지운 자료로 다시 그린다");
       await cdp.waitFor("document.querySelectorAll('#asset-list li .row-act').length === 5");
       assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /필지 6개/);
       assert.equal(await cdp.eval("document.querySelectorAll('#record-list li').length"), 1);

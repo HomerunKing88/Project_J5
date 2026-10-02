@@ -15,14 +15,14 @@ import { externalMapLinks, bboxCenter, LINK_ATTRS } from "./extmap.js";
 import { validateBasemap, LAYERS as BASEMAP_LAYERS, LAYER_LABEL as BASEMAP_LAYER_LABEL } from "./basemap.js";
 import { PROVIDERS, resolveTileConfig, prefetchPlan, padBbox, tileUrl, TILE_CACHE, PREFETCH_ZOOMS, KEY_PLACEHOLDER } from "./tiles.js";
 import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
-import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummaryInfo, yearSummaryRow, yearSummaryCells, recentDeals } from "./view.js";
+import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummaryInfo, yearSummaryRow, yearSummaryCells, recentDeals, parcelSummaryItems } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
 export const APP_VERSION = "0.2.24";
 const PARCEL_CARD_YEARS = 5;   // 필지 카드의 연도별 표에 보이는 최근 연도 수 (J5-055)
 const PARCEL_CARD_DEALS = 3;   // 필지 카드의 최근 거래 수 (J5-057)
 const $ = (id) => document.getElementById(id);
-const state = { store: null, parcelFilter: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, zoneColors: false, seedLoadedAt: null, seedSource: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
+const state = { store: null, parcelFilter: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, zoneColors: false, seedLoadedAt: null, seedSource: null, openParcel: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
                 nav: null, returnFocus: null, mapSelected: null, assetFilter: "all" };
 
 // 대상 목록은 synthetic·private_real, 필지·배경 번들은 synthetic·real 을 쓴다 (리뷰 반영 PR #103)
@@ -689,6 +689,8 @@ async function clearView() {
   await state.store.clearView();
   state.view = null;
   renderViewStatus();
+  // 열려 있는 필지 카드의 연도별 표·최근 거래도 지운 자료로 다시 그린다 (리뷰 반영 PR #104: 지운 거래가 화면에 남지 않게)
+  if (state.openParcel && !$("parcel-panel").hidden) showParcel(state.openParcel);
   text($("view-note"), "PC 기록과 거래를 지웠습니다. 대상 목록, 필지, 이 폰의 기록은 그대로입니다.", "pencil");
 }
 
@@ -748,12 +750,14 @@ function viewYear() {
 }
 
 /** 필지의 이력 항목과 연도별 요약 (필지 카드의 표와 필지 이력이 같은 값을 쓴다) */
-function parcelYears(feature, assetsInside) {
+function parcelYears(feature, inside) {
   const p = feature.properties;
-  const items = parcelHistory(feature, assetsInside, historyData());
+  const items = parcelHistory(feature, inside.map((x) => x.asset), historyData());
+  // 연도별 표·최근 거래는 PC 에서 이 필지에 연결된 대상의 거래만 센다 (위치로만 찾은 대상의 거래는 빼고, 이력 목록에는 남긴다)
+  const summary = parcelSummaryItems(items, inside.filter((x) => x.basis !== "inside").map((x) => x.asset.asset_id));
   const prices = priceTrend(p.attrs, p.attrs_history).map((q) => ({ year: q.year, price: q.price }));
-  const { rows, omitted } = parcelYearSummaryInfo(feature, items, state.view?.transactions ?? null, prices, { ownership: ownershipChanges(p.attrs, p.attrs_history), thisYear: viewYear() });
-  return { items, rows, omitted };
+  const { rows, omitted } = parcelYearSummaryInfo(feature, summary, state.view?.transactions ?? null, prices, { ownership: ownershipChanges(p.attrs, p.attrs_history), thisYear: viewYear() });
+  return { items, summary, rows, omitted };
 }
 
 /** 연도별 요약 표 (J5-055). 줄마다 data-year·data-tx 와 이 폰의 요약 글 한 줄(title, yearSummaryRow). PC db parcels-years 와는 글이 아니라 칸의 값으로 대조한다(PC 글은 마지막 거래 금액·날짜 등을 더 적는다).
@@ -797,9 +801,10 @@ function renderRecentDeals(items) {
   $("parcel-deals-note").hidden = !notes.length;
 }
 
-function openParcelHistory(feature, assetsInside) {
+function openParcelHistory(feature, inside) {
   const p = feature.properties;
-  const { items, rows: years, omitted } = parcelYears(feature, assetsInside);
+  const assetsInside = inside.map((x) => x.asset);
+  const { items, rows: years, omitted } = parcelYears(feature, inside);
   openHistory({ title: `${parcelTitle(p)} 필지`, sub: `필지 번호 ${feature.id}. 대상 ${assetsInside.length}곳, 기록·거래 ${items.length}건`, items, asset: null, years, yearsOmitted: omitted });
 }
 
@@ -872,6 +877,7 @@ async function clearBasemap() {
 
 function showParcel(feature) {
   const p = feature.properties;
+  state.openParcel = feature;
   // 시트 위 카드는 하나만 (J5-054): 필지를 열면 고른 대상 카드는 닫는다
   if (state.mapSelected) clearMapSelection();
   mapCall((m) => m.selectParcel(feature.id));
@@ -903,15 +909,15 @@ function showParcel(feature) {
   if (!linksValid && (p.asset_ids ?? []).length) $("parcel-assets").append(el("li", { class: "warn", text: `PC 에서 이 필지에 이은 대상 ${p.asset_ids.length}곳은 대상 목록이 바뀐 뒤라 보이지 않습니다. PC 자료 파일을 다시 가져오면 보입니다.` }));
   if (!inside.length) $("parcel-assets").append(el("li", { class: "empty", text: "이 필지에 든 대상이 없습니다. 아래 버튼으로 이 필지를 대상으로 만들어 바로 기록할 수 있습니다." }));
   // 연도별 표 (J5-055): 최근 5개 연도. 전체와 기록·거래는 필지 이력에서
-  const { rows: years, items: parcelItems } = parcelYears(feature, inside.map((x) => x.asset));
+  const { rows: years, summary: parcelItems } = parcelYears(feature, inside);
   renderRecentDeals(parcelItems);
   renderYearsTable($("parcel-years-table"), years, { limit: PARCEL_CARD_YEARS });
   $("parcel-years").hidden = !years.length;
   $("parcel-years-all").textContent = years.length > PARCEL_CARD_YEARS ? `모든 연도(${years.length}개)와 기록 보기` : "기록·거래 보기";
-  $("parcel-years-all").onclick = () => openParcelHistory(feature, inside.map((x) => x.asset));
+  $("parcel-years-all").onclick = () => openParcelHistory(feature, inside);
   $("parcel-new-asset").hidden = inside.length > 0;
   $("parcel-new-asset").onclick = () => createAssetFromParcel(feature);
-  $("parcel-history").onclick = () => openParcelHistory(feature, inside.map((x) => x.asset));
+  $("parcel-history").onclick = () => openParcelHistory(feature, inside);
   $("parcel-panel").hidden = false;
   openSheet();
   $("field-sheet").querySelector(".sheet-body").scrollTop = 0;
@@ -946,6 +952,7 @@ async function deleteDeviceAsset(asset) {
 }
 
 function closeParcelPanel() {
+  state.openParcel = null;
   $("parcel-panel").hidden = true;
   renderExtLinks($("parcel-ext"), null);
   mapCall((m) => m.selectParcel(null));
