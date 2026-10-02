@@ -4,7 +4,8 @@ import { isUuid } from "./uuid.js";
 import { EXT_MIME, SUPPORTED } from "./sniff.js";
 
 export const CHANGE_STATUS = ["change_observed", "no_change", "hard_to_confirm"];
-export const CHANGE_STATUS_LABEL = { change_observed: "변화 확인", no_change: "변화 없음", hard_to_confirm: "확인 어려움" };
+// 화면 이름 (J5-054): 현장에서 바로 고를 수 있는 말. 저장 값(change_observed 등)은 그대로다
+export const CHANGE_STATUS_LABEL = { change_observed: "달라짐", no_change: "그대로", hard_to_confirm: "확인 어려움" };
 export const PHOTO_TAGS = ["front", "ground_floor", "lease_ad", "construction", "road", "parking", "adjacency"];
 export const PHOTO_TAG_LABEL = { front: "전면", ground_floor: "1층", lease_ad: "임대 광고", construction: "공사", road: "도로", parking: "주차", adjacency: "인접 관계" };
 export const PHOTO_LIMIT = 20_000_000;
@@ -89,7 +90,7 @@ export function validateEvent(ev) {
   }
   if (p.change_status === "change_observed") {
     const hasNote = typeof p.note === "string" && /\S/.test(p.note);
-    if (!(ev.attachment_refs?.length > 0) && !hasNote) errs.push("변화 확인에는 사진 또는 설명이 필요");
+    if (!(ev.attachment_refs?.length > 0) && !hasNote) errs.push("달라짐을 고르면 사진이나 메모가 필요합니다");
   }
   return errs;
 }

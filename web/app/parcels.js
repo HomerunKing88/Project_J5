@@ -348,7 +348,7 @@ export function filterRowText(a, inside = null) {
     Number.isFinite(a?.official_land_price_krw_m2) ? `${fmtInt(a.official_land_price_krw_m2)}원/㎡` : `공시지가 ${miss}`, a?.ownership_kind ?? `소유 ${miss}`];
   if (Array.isArray(inside)) {
     const watch = inside.filter((x) => WATCH_STATUSES.has(x?.tracking_status)).length;
-    parts.push(inside.length ? `물건 ${inside.length}개` + (watch ? ` (관찰목록 ${watch})` : "") : "물건 없음");
+    parts.push(inside.length ? `대상 ${inside.length}곳` + (watch ? ` (관찰목록 ${watch})` : "") : "대상 없음");
   }
   return parts.join(" · ");
 }

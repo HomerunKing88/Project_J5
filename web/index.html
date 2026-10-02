@@ -4,385 +4,408 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob: https://api.vworld.kr; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="theme-color" content="#f5f7f8">
 <title>종로5가 투자지도</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<header class="topbar">
-  <div class="topbar-inner">
-    <div class="brand">
-      <div class="brand-mark" aria-hidden="true">J5</div>
-      <div><h1>종로5가 투자지도</h1><div class="brand-sub">현장 기록</div></div>
-    </div>
-    <span id="mode-badge" class="mode-badge" title="현재 자료 종류">연습용</span>
+<header class="appbar">
+  <div class="appbar-inner">
+    <h1 class="wordmark">종로5가 투자지도</h1>
+    <span id="mode-badge" class="mode-badge" title="지금 쓰는 자료 종류">연습용 자료</span>
   </div>
-  <div id="offline-banner" class="banner banner-offline" role="status" hidden>오프라인. 준비된 목록·지도·기록·내보내기는 그대로 쓸 수 있습니다.</div>
+  <div id="offline-banner" class="banner banner-offline" role="status" hidden>오프라인입니다. 지도·목록·기록·보내기는 그대로 쓸 수 있습니다.</div>
 </header>
 
 <main id="main">
 <p id="fatal" class="banner banner-error" role="alert" hidden></p>
 
-<!-- 오늘 -->
-<section id="view-home" class="view" data-view="home" aria-labelledby="home-title">
-  <h2 id="home-title">오늘</h2>
-  <div class="stats" aria-label="현재 상태">
-    <div class="stat"><span class="stat-n" id="stat-targets">0</span><span class="stat-l">대상</span></div>
-    <div class="stat"><span class="stat-n" id="stat-records">0</span><span class="stat-l">저장된 기록</span></div>
-    <div class="stat stat-warn"><span class="stat-n" id="stat-unexported">0</span><span class="stat-l">안 내보냄</span></div>
-  </div>
-  <p id="home-last" class="help"></p>
-  <div id="home-empty" class="empty" hidden>
-    <strong>아직 대상 목록이 없습니다</strong>
-    <p>PC 에서 만든 물건 목록 파일을 설정에서 가져오거나, 연습용 자료로 먼저 익혀 보세요.</p>
-    <div class="row">
-      <button id="home-load-synthetic" class="primary">연습용 자료로 해 보기</button>
-      <button id="home-go-settings" class="secondary">설정에서 자료 가져오기</button>
-    </div>
-  </div>
-  <div id="home-cta" class="row" hidden>
-    <button id="start-observing" class="primary big">관측 시작</button>
-    <button id="home-go-export" class="secondary">내보내기</button>
-  </div>
-  <h3 id="targets-title" class="list-title">대상 목록</h3>
-  <div id="asset-filter" class="row seg" role="group" aria-label="대상 목록 필터" hidden>
-    <button type="button" class="secondary" data-filter="all" aria-pressed="true">전체</button>
-    <button type="button" class="secondary" data-filter="watchlist" aria-pressed="false">관찰목록만</button>
-    <span id="asset-filter-note" class="muted" role="status"></span>
-  </div>
-  <ul id="asset-list" class="cards" aria-labelledby="targets-title"></ul>
-</section>
-
-<!-- 지도 -->
-<section id="view-map" class="view" data-view="map" aria-labelledby="map-title" hidden>
-  <h2 id="map-title">지도</h2>
-  <div class="map-wrap">
-    <svg id="map-svg" role="img" aria-label="물건 위치와 필지 경계 지도"></svg>
-    <div id="map-empty" class="map-empty"><div><strong>표시할 위치가 없습니다</strong>대상 목록을 가져오면 위치가 여기에 표시됩니다. 위치가 없는 대상은 오늘 화면의 목록에서 고릅니다.</div></div>
-  </div>
-  <div class="map-controls">
-    <button id="map-zoom-in" class="icon" aria-label="확대">+</button>
-    <button id="map-zoom-out" class="icon" aria-label="축소">−</button>
-    <button id="map-fit" class="secondary">전체 보기</button>
-    <button id="map-zones" class="secondary" aria-pressed="false" disabled>용도지역 색</button>
-    <button id="map-locate" class="secondary" disabled>현재 위치</button>
-    <button id="map-go-list" class="quiet">목록으로</button>
-  </div>
-  <form id="parcel-search-form" class="search-row" hidden>
-    <label for="parcel-search" class="sr-only">필지 찾기</label>
-    <input id="parcel-search" type="search" inputmode="search" autocomplete="off" placeholder="지번으로 필지 찾기 (예: 182-13, 산1-2, PNU 19자리)">
-    <button id="parcel-search-go" class="secondary" type="submit">찾기</button>
-  </form>
-  <ul id="parcel-search-results" class="plain search-results" hidden></ul>
-  <p id="parcel-search-note" class="muted" role="status"></p>
-  <details id="parcel-filter" class="filter-box" hidden>
-    <summary>조건으로 필지 찾기</summary>
-    <form id="parcel-filter-form">
-      <div class="filter-grid">
-        <label>용도지역 <select id="pf-zone"><option value="">전체</option></select></label>
-        <label>공부면적 최소(㎡) <input id="pf-area-min" type="number" inputmode="decimal" min="0" step="any"></label>
-        <label>공부면적 최대(㎡) <input id="pf-area-max" type="number" inputmode="decimal" min="0" step="any"></label>
-        <label>공시지가 최소(만원/㎡) <input id="pf-price-min" type="number" inputmode="decimal" min="0" step="any"></label>
-        <label>공시지가 최대(만원/㎡) <input id="pf-price-max" type="number" inputmode="decimal" min="0" step="any"></label>
-        <label>소유구분 <select id="pf-owner"><option value="">전체</option></select></label>
-        <label>물건 <select id="pf-assets"><option value="">상관없음</option><option value="none">물건 없는 필지</option><option value="any">물건 있는 필지</option><option value="watch">관찰목록 물건이 있는 필지</option></select></label>
-        <label class="check"><input id="pf-restricted" type="checkbox"> 저촉 규제 있음</label>
+<!-- 현장: 화면을 채우는 지도 + 아래 시트(대상 목록·선택한 대상·필지) -->
+<section id="view-map" class="view view-field" data-view="map" aria-labelledby="map-title">
+  <h2 id="map-title" class="sr-only">현장</h2>
+  <div class="field-map map-wrap">
+    <svg id="map-svg" role="img" aria-label="대상 위치와 필지 경계 지도"></svg>
+    <div id="map-empty" class="map-empty"><div><strong>지도에 표시할 위치가 없습니다</strong>자료를 가져오면 대상과 필지가 여기에 그려집니다.</div></div>
+    <div id="map-top" class="map-top">
+      <form id="parcel-search-form" class="map-search" role="search" hidden>
+        <label for="parcel-search" class="sr-only">지번으로 필지 찾기</label>
+        <input id="parcel-search" type="search" inputmode="search" autocomplete="off" enterkeyhint="search" placeholder="지번 (예: 182-13)">
+        <button id="parcel-search-go" class="search-go" type="submit">찾기</button>
+      </form>
+      <div class="map-chips" role="group" aria-label="지도 보기">
+        <button id="map-locate" class="chip" disabled>내 위치</button>
+        <button id="map-fit" class="chip">전체 보기</button>
+        <button id="map-zones" class="chip" aria-pressed="false" disabled>용도지역</button>
       </div>
-      <div class="row"><button type="submit" class="primary">찾기</button> <button type="button" id="pf-clear" class="secondary">지우기</button></div>
-    </form>
-    <p id="parcel-filter-note" class="muted" role="status"></p>
-    <ul id="parcel-filter-results" class="plain search-results" hidden></ul>
-    <p class="help">불러온 필지 파일의 토지 자료 값 그대로 거릅니다. 값이 없는 필지는 조건에 맞는 것으로 보지 않고 따로 셉니다. 물건은 필지 패널의 "안의 물건" 과 같은 기준(정본 연결 또는 위치점 포함)입니다. 공부면적은 토지대장 면적(도형면적 아님)입니다. 매입 가능성·규제 판단이 아닙니다.</p>
-  </details>
-  <div id="map-selected" class="selected-card" hidden>
-    <div class="selected-body">
-      <strong id="map-selected-label"></strong>
-      <span id="map-selected-badges" class="badges"></span>
-      <span id="map-selected-sub" class="help"></span>
-      <p id="map-selected-ext" class="ext-links" hidden></p>
+      <p id="zone-legend" class="map-legend zone-legend" hidden></p>
     </div>
-    <div class="selected-actions">
-      <button id="map-selected-start" class="primary">기록 시작</button>
-      <button id="map-selected-history" class="secondary">이력</button>
+    <div class="map-tools" role="group" aria-label="확대·축소">
+      <button id="map-zoom-in" class="tool" aria-label="확대">+</button>
+      <button id="map-zoom-out" class="tool" aria-label="축소">−</button>
     </div>
   </div>
-  <p id="map-note" class="muted" role="status"></p>
-  <p id="zone-legend" class="map-legend" hidden></p>
-  <div id="parcel-panel" class="parcel-panel" hidden>
-    <div><strong id="parcel-title"></strong> <span class="badge" id="parcel-mode"></span></div>
-    <div class="muted">필지 번호 <span id="parcel-pnu" class="mono"></span></div>
-    <div class="muted" id="parcel-meta"></div>
-    <ul id="parcel-attrs" class="attrs" hidden></ul>
-    <p id="parcel-attrs-note" class="help" hidden>필지 속성은 PC 에서 넣은 토지 자료(VWorld 토지특성·이용계획·소유구분)의 값 그대로입니다. 확인·법률 판단이 아니며 기준일은 목록의 "속성 기준일" 입니다(도형 기준일과 다를 수 있음). 소유는 구분·인수·변동일만 담습니다. 규제·지역지구의 이름은 자료에 적힌 순서 그대로이며 코드와 하나씩 짝지어진 것이 아닙니다(저촉·접함은 코드로 표시).</p>
-    <div id="parcel-price" hidden>
-      <h4 class="sub-title">공시지가 추이</h4>
-      <ul id="parcel-price-list" class="attrs price-trend"></ul>
-      <p class="help">PC 에 반영한 토지 자료 사이에서 공시지가가 바뀐 지점입니다. 값은 자료 그대로이고 기준연월은 공시 기준, 확인일은 그 값을 담은 자료의 기준일입니다. 시세나 가치 판단이 아닙니다.</p>
+
+  <div id="field-sheet" class="field-sheet" data-state="peek">
+    <button id="sheet-toggle" class="sheet-grip" type="button" aria-expanded="false" aria-controls="sheet-body"><span class="grip" aria-hidden="true"></span><span class="sr-only">목록 펼치기</span></button>
+    <div class="sheet-head">
+      <h3 id="targets-title" class="sheet-title">대상 <span id="stat-targets" class="num">0</span></h3>
+      <p class="sheet-counts"><span>기록 <span id="stat-records" class="num">0</span></span><span class="to-send">보낼 기록 <span id="stat-unexported" class="num">0</span></span></p>
+      <button id="start-observing" class="primary" hidden>기록 시작</button>
     </div>
-    <p id="parcel-ext" class="ext-links" hidden></p>
-    <ul id="parcel-assets" class="plain"></ul>
-    <div class="row"><button id="parcel-history" class="primary">이 필지 이력</button> <button id="parcel-new-asset" class="secondary" hidden>이 필지를 물건으로 기록</button> <button id="parcel-close" class="secondary">닫기</button></div>
-    <p class="help">"이 필지를 물건으로 기록" 은 이 기기에만 임시 물건을 만들고 바로 기록을 시작합니다. 위치는 필지 안의 점, 이름은 동·지번입니다. 기록을 내보내면 PC 반영 때 임시 매입 단위(확인 전)로 승계되고, 이후 PC 자료 파일에 그 물건이 들어오면 기기 사본은 정리됩니다.</p>
+    <div id="sheet-body" class="sheet-body">
+      <p id="parcel-search-note" class="note" role="status"></p>
+      <ul id="parcel-search-results" class="rows pick-list" hidden></ul>
+
+      <div id="map-selected" class="target-card" hidden>
+        <div class="card-head">
+          <div class="card-title"><strong id="map-selected-label"></strong><span id="map-selected-badges" class="badges"></span></div>
+          <button id="map-selected-close" class="tool close" aria-label="선택 해제">✕</button>
+        </div>
+        <p id="map-selected-sub" class="pencil"></p>
+        <div class="card-actions">
+          <button id="map-selected-start" class="primary big">기록하기</button>
+          <button id="map-selected-history" class="secondary">이력</button>
+        </div>
+        <p id="map-selected-ext" class="ext-links" hidden></p>
+      </div>
+
+      <div id="parcel-panel" class="parcel-card" hidden>
+        <div class="card-head">
+          <div class="card-title">
+            <span id="parcel-mode" class="badge"></span>
+            <strong id="parcel-title" class="jibun"></strong>
+          </div>
+          <button id="parcel-close" class="tool close" aria-label="필지 닫기">✕</button>
+        </div>
+        <p class="pencil small">필지 번호 <span id="parcel-pnu" class="num"></span></p>
+        <p id="parcel-meta" class="pencil small"></p>
+        <ul id="parcel-attrs" class="facts" hidden></ul>
+        <div id="parcel-price" hidden>
+          <h4 class="sub-title">공시지가 추이</h4>
+          <ul id="parcel-price-list" class="facts price-trend"></ul>
+        </div>
+        <h4 class="sub-title">이 필지의 대상</h4>
+        <ul id="parcel-assets" class="rows inside-list"></ul>
+        <div class="card-actions">
+          <button id="parcel-history" class="primary">필지 이력</button>
+          <button id="parcel-new-asset" class="secondary" hidden>이 필지를 대상으로 기록</button>
+        </div>
+        <p id="parcel-ext" class="ext-links" hidden></p>
+        <details class="disclosure quiet">
+          <summary>이 정보의 출처</summary>
+          <p id="parcel-attrs-note" class="help" hidden>PC 에서 넣은 토지 자료(VWorld 토지특성·이용계획·소유구분)의 값을 그대로 보입니다. 확인이나 법률 판단이 아니며, 기준일은 위 목록의 "속성 기준일" 입니다. 소유는 구분·공유인수·변동일만 담습니다. 규제 이름은 자료에 적힌 순서대로이고 코드와 하나씩 짝지은 것이 아닙니다.</p>
+          <p class="help">공시지가 추이는 PC 에 넣은 토지 자료 사이에서 값이 바뀐 지점입니다. 시세나 가치 판단이 아닙니다.</p>
+          <p class="help">"이 필지를 대상으로 기록" 은 이 폰에만 임시 대상을 만들고 바로 기록을 시작합니다. PC 로 보내면 확인 전 대상으로 넘어가고, 나중에 PC 자료에 그 대상이 들어오면 폰의 사본은 정리됩니다.</p>
+        </details>
+      </div>
+
+      <div id="home-empty" class="start-card" hidden>
+        <h3>시작하기</h3>
+        <p>PC 에서 만든 자료 파일(.j5view.zip)을 가져오면 대상·필지·거래가 한 번에 들어옵니다. 처음이라면 연습용 자료로 먼저 둘러봅니다.</p>
+        <div class="card-actions">
+          <label class="file-btn primary-file"><span>PC 자료 파일 가져오기</span><input id="home-view-file" type="file" accept="application/zip,.zip"></label>
+          <button id="home-load-synthetic" class="secondary">연습용 자료로 둘러보기</button>
+        </div>
+        <p id="home-note" class="note" role="status"></p>
+        <button id="home-go-settings" class="quiet">다른 파일은 설정에서 가져옵니다</button>
+      </div>
+
+      <div id="asset-filter" class="seg" role="group" aria-label="대상 목록 거르기" hidden>
+        <button type="button" data-filter="all" aria-pressed="true">전체</button>
+        <button type="button" data-filter="watchlist" aria-pressed="false">관찰목록</button>
+        <span id="asset-filter-note" class="pencil" role="status"></span>
+      </div>
+      <ul id="asset-list" class="rows target-list" aria-labelledby="targets-title"></ul>
+      <p id="home-last" class="pencil small"></p>
+      <p id="map-note" class="pencil small" role="status"></p>
+
+      <details id="parcel-filter" class="disclosure filter-box" hidden>
+        <summary>조건으로 필지 찾기</summary>
+        <form id="parcel-filter-form">
+          <div class="filter-grid">
+            <label>용도지역 <select id="pf-zone"><option value="">전체</option></select></label>
+            <label>소유구분 <select id="pf-owner"><option value="">전체</option></select></label>
+            <label>공부면적 최소 ㎡ <input id="pf-area-min" type="number" inputmode="decimal" min="0" step="any"></label>
+            <label>공부면적 최대 ㎡ <input id="pf-area-max" type="number" inputmode="decimal" min="0" step="any"></label>
+            <label>공시지가 최소 만원/㎡ <input id="pf-price-min" type="number" inputmode="decimal" min="0" step="any"></label>
+            <label>공시지가 최대 만원/㎡ <input id="pf-price-max" type="number" inputmode="decimal" min="0" step="any"></label>
+            <label class="wide">대상 <select id="pf-assets"><option value="">상관없음</option><option value="none">대상 없는 필지</option><option value="any">대상 있는 필지</option><option value="watch">관찰목록 대상이 있는 필지</option></select></label>
+            <label class="check wide"><input id="pf-restricted" type="checkbox"> 저촉 규제가 있는 필지만</label>
+          </div>
+          <div class="card-actions"><button type="submit" class="primary">찾기</button><button type="button" id="pf-clear" class="secondary">지우기</button></div>
+        </form>
+        <p id="parcel-filter-note" class="note" role="status"></p>
+        <ul id="parcel-filter-results" class="rows pick-list" hidden></ul>
+        <p class="help">불러온 필지의 토지 자료 값으로 거릅니다. 값이 없는 필지는 맞는 것으로 치지 않고 따로 셉니다. 공부면적은 토지대장 면적입니다. 매입 가능성이나 규제 판단이 아닙니다.</p>
+      </details>
+
+      <details class="disclosure quiet">
+        <summary>지도 보는 법</summary>
+        <p id="map-legend" class="map-legend"><span><span class="lg lg-syn"></span>연습용 대상</span> <span><span class="lg lg-real"></span>실제 대상</span> <span><span class="lg lg-sel"></span>고른 대상</span> <span><span class="lg lg-parcel"></span>필지 경계</span> <span><span class="lg lg-bm"></span>건물·도로</span></p>
+        <p class="help">점을 누르면 대상이, 필지를 누르면 그 필지의 정보가 아래에 열립니다. 북쪽이 위입니다.</p>
+        <p class="help">"내 위치" 는 누를 때만 위치를 한 번 읽어 지도에 표시하고 그 자리의 필지를 엽니다. 위치는 저장하거나 보내지 않습니다. 배경 타일을 켜 두었다면 화면을 자동으로 옮기지 않습니다(옮기면 그 주변 타일을 제공자에게 요청하게 됩니다).</p>
+        <p class="help">"용도지역" 은 토지 자료가 든 필지 파일을 넣었을 때 켤 수 있습니다. 색은 구분용이며 규제 판단이 아닙니다.</p>
+        <p class="help">"다른 지도에서 보기" 를 누르면 좌표만 그 지도 서비스로 넘어갑니다. 대상 이름·지번·기록은 넘기지 않습니다.</p>
+      </details>
+    </div>
   </div>
-  <details class="disclosure">
-    <summary>범례와 설명</summary>
-    <p id="map-legend" class="map-legend"><span><span class="lg lg-syn"></span>연습용 물건</span> <span><span class="lg lg-real"></span>실제 물건</span> <span><span class="lg lg-sel"></span>선택됨</span> <span><span class="lg lg-parcel"></span>필지 경계</span> <span><span class="lg lg-bm"></span>건물·도로 배경</span></p>
-    <p class="help">"현재 위치" 는 누를 때만 이 기기의 위치를 한 번 읽어 지도에 점과 정확도 원으로 표시하고, 그 자리의 필지가 있으면 엽니다. 위치는 저장하거나 전송하지 않습니다. 배경 타일이 켜져 있으면 화면을 자동으로 옮기지 않습니다(옮기면 그 주변 타일을 제공자에게 요청하게 되므로). 위치 권한은 브라우저가 묻습니다. 지번 찾기는 불러온 필지 안에서만 찾습니다.</p>
-    <p class="help">필지 이력에는 토지 자료의 처음 확인과 값이 바뀐 지점(공시지가·소유구분·용도지역 등)이 기준일의 연도에 들어갑니다. 값은 자료 표기 그대로이며 판단이 아닙니다.</p>
-    <p class="help">"용도지역 색" 은 필지 속성이 있는 파일을 넣었을 때 켤 수 있고, 용도지역 이름을 주거·상업·공업·녹지 등으로 나눠 채웁니다. 색 분류는 표시용이며 규제 판단이 아닙니다.</p>
-    <p class="help">배경 타일은 설정에서 켜면 보입니다(켜기 전에는 배경 없음). 북쪽이 위입니다. 점을 누르면 대상 요약이 뜨고, 필지를 누르면 그 안의 물건이 보입니다. 필지 경계와 도로·건물 배경은 설정의 자료 관리에서 넣습니다. 배경은 참고용이며 누를 수 없습니다.</p>
-    <p class="help">"다른 지도에서 보기" 링크를 누르면 그 좌표만 해당 지도 서비스로 전달됩니다. 물건 이름·지번·기록은 전달하지 않습니다. 누르기 전에는 아무것도 전송되지 않습니다.</p>
-  </details>
 </section>
 
-<!-- 기록 -->
-<section id="view-records" class="view" data-view="records" aria-labelledby="records-title" hidden>
-  <h2 id="records-title">기록 <span id="record-count" class="count"></span></h2>
-  <p class="help"><span class="badge state-saved">저장됨</span> 이 기기에만 있음 · <span class="badge state-exported">내보냄</span> 파일로 내보내 저장 확인함. PC 에 반영됐는지는 이 화면에서 알 수 없습니다.</p>
-  <ul id="record-list" class="cards"></ul>
-</section>
-
-<!-- 내보내기 -->
-<section id="view-export" class="view" data-view="export" aria-labelledby="export-title" hidden>
-  <h2 id="export-title">내보내기</h2>
-  <p class="help">임장을 마치면 기록을 파일 하나로 묶어 저장하고 PC 로 옮깁니다. 파일이 실제로 저장된 것을 확인하기 전에는 기록이 <strong>내보냄</strong>으로 바뀌지 않습니다.</p>
-  <ol id="export-steps" class="steps" aria-label="내보내기 단계">
-    <li class="step-item" data-step="1"><span class="step-n">1</span><span class="step-t">기록 확인</span></li>
-    <li class="step-item" data-step="2"><span class="step-n">2</span><span class="step-t">파일 만들기</span></li>
-    <li class="step-item" data-step="3"><span class="step-n">3</span><span class="step-t">파일 저장</span></li>
-    <li class="step-item" data-step="4"><span class="step-n">4</span><span class="step-t">저장 확인</span></li>
-  </ol>
-  <div class="card">
+<!-- 기록: PC 로 보내기 + 이 폰의 기록 -->
+<section id="view-records" class="view view-page" data-view="records" aria-labelledby="records-title" hidden>
+  <div class="page-head">
+    <h2 id="records-title">기록 <span id="record-count" class="count"></span></h2>
+  </div>
+  <section class="send-card" aria-labelledby="export-title">
+    <h3 id="export-title">PC 로 보내기</h3>
     <p id="export-summary" class="summary" role="status"></p>
-    <label class="check"><input id="include-exported" type="checkbox"> 이미 내보낸 기록도 다시 포함</label>
+    <ol id="export-steps" class="steps" aria-label="보내기 단계">
+      <li class="step-item" data-step="1"><span class="step-n">1</span><span class="step-t">확인</span></li>
+      <li class="step-item" data-step="2"><span class="step-n">2</span><span class="step-t">파일 만들기</span></li>
+      <li class="step-item" data-step="3"><span class="step-n">3</span><span class="step-t">파일 저장</span></li>
+      <li class="step-item" data-step="4"><span class="step-n">4</span><span class="step-t">저장 확인</span></li>
+    </ol>
+    <div class="card-actions">
+      <button id="export-prepare" class="primary">파일 만들기</button>
+      <button id="export-save" class="primary" disabled>파일 저장</button>
+      <button id="export-confirm" class="secondary" disabled>저장 확인</button>
+    </div>
+    <p id="export-note" class="note" role="status" aria-live="polite"></p>
     <ul id="export-errors" class="plain"></ul>
-  </div>
-  <div class="row">
-    <button id="export-prepare" class="primary">파일 만들기</button>
-    <button id="export-save" class="primary" disabled>파일 저장</button>
-    <button id="export-confirm" class="secondary" disabled>저장 확인</button>
-  </div>
-  <p id="export-note" role="status" aria-live="polite"></p>
-  <p class="help">저장 확인 뒤에도 PC 반영과 백업은 별도입니다. PC 에서 반영·백업이 끝났는지는 PC 에서 확인합니다.</p>
-  <details class="disclosure"><summary>내보내기 이력</summary><ul id="export-history" class="plain"></ul></details>
+    <label class="check"><input id="include-exported" type="checkbox"> 이미 보낸 기록도 다시 넣기</label>
+    <details class="disclosure quiet">
+      <summary>보내기는 이렇게 됩니다</summary>
+      <p class="help">기록과 사진을 파일 하나로 묶어 폰에 저장하고, 그 파일을 PC 로 옮겨 반영합니다. 파일 앱에서 저장된 것을 확인하고 "저장 확인" 을 눌러야 보낸 기록이 됩니다.</p>
+      <p class="help">보낸 뒤 PC 에 반영됐는지, 백업됐는지는 PC 에서 확인합니다. 이 폰은 기록을 지우지 않습니다.</p>
+    </details>
+    <details class="disclosure quiet"><summary>만든 파일</summary><ul id="export-history" class="plain"></ul></details>
+  </section>
+  <h3 class="list-head">이 폰의 기록</h3>
+  <ul id="record-list" class="rows record-list"></ul>
 </section>
 
 <!-- 설정 -->
-<section id="view-settings" class="view" data-view="settings" aria-labelledby="settings-title" hidden>
-  <h2 id="settings-title">설정</h2>
+<section id="view-settings" class="view view-page" data-view="settings" aria-labelledby="settings-title" hidden>
+  <div class="page-head">
+    <h2 id="settings-title">설정</h2>
+  </div>
 
-  <section class="card" aria-labelledby="ws-title">
+  <section class="panel" aria-labelledby="data-title">
+    <h3 id="data-title">자료 가져오기</h3>
+    <p class="help">파일은 이 폰 안에서만 읽고 어디로도 보내지 않습니다. 자료를 바꿔도 저장한 기록은 지워지지 않습니다.</p>
+    <div class="stack">
+      <div class="data-item">
+        <div class="field-name">PC 자료 파일</div>
+        <p id="view-status" class="pencil small"></p>
+        <div class="card-actions">
+          <label class="file-btn"><span>파일 선택 (.j5view.zip)</span><input id="view-file" type="file" accept="application/zip,.zip"></label>
+          <button id="clear-view" class="danger">PC 기록·거래 지우기</button>
+        </div>
+        <p id="view-note" class="note" role="status"></p>
+        <p class="help">PC 의 <code>j5 db project-copy</code> 로 만든 파일입니다. 대상 목록·필지·PC 기록·거래가 함께 들어오고 사진은 들어오지 않습니다. 파일이 가장 새것인지는 PC 에서 확인합니다.</p>
+      </div>
+      <details class="disclosure">
+        <summary>파일 하나씩 가져오기</summary>
+        <div class="stack">
+          <div class="data-item">
+            <div class="field-name">대상 목록</div>
+            <p id="seed-status" class="pencil small"></p>
+            <div class="card-actions">
+              <button id="load-synthetic" class="secondary">연습용 대상 5곳</button>
+              <label class="file-btn"><span>목록 파일 선택</span><input id="seed-file" type="file" accept="application/json,.json"></label>
+            </div>
+            <p id="seed-note" class="note" role="status"></p>
+          </div>
+          <div class="data-item">
+            <div class="field-name">필지 경계</div>
+            <div class="card-actions">
+              <button id="load-synthetic-parcels" class="secondary">연습용 필지 6개</button>
+              <label class="file-btn"><span>필지 파일 선택</span><input id="parcels-file" type="file" accept="application/json,application/geo+json,.json,.geojson"></label>
+              <button id="clear-parcels" class="danger">필지 지우기</button>
+            </div>
+            <p id="parcels-note" class="note" role="status"></p>
+          </div>
+          <div class="data-item">
+            <div class="field-name">건물·도로 윤곽</div>
+            <div class="card-actions">
+              <button id="load-synthetic-basemap" class="secondary">연습용 배경</button>
+              <label class="file-btn"><span>배경 파일 선택</span><input id="basemap-file" type="file" accept="application/json,application/geo+json,.json,.geojson"></label>
+              <button id="clear-basemap" class="danger">배경 지우기</button>
+            </div>
+            <p id="basemap-note" class="note" role="status"></p>
+            <p class="help">PC 에서 공공 도형 자료로 만든 파일입니다. 건물·도로 윤곽과 도로명만 있고 상호·주소는 없습니다.</p>
+          </div>
+        </div>
+      </details>
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="ws-title">
     <h3 id="ws-title">작업 공간</h3>
     <div class="stack">
       <label class="field"><span>작업 공간 이름</span>
-        <input id="study-id" type="text" autocomplete="off" placeholder="예: jongno5ga-2026">
-        <span class="field-hint">PC 의 정본과 같은 이름이어야 기록이 반영됩니다. 영문·숫자·하이픈. (내부 이름: study_id)</span>
+        <input id="study-id" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="예: jongno5ga-2026">
+        <span class="field-hint">PC 와 같은 이름이어야 기록이 반영됩니다. 영문·숫자·하이픈만 씁니다. PC 자료 파일을 가져오면 자동으로 채워집니다.</span>
       </label>
       <label class="field"><span>자료 종류</span>
-        <select id="data-mode"><option value="synthetic">연습용 자료 (가상)</option><option value="private_real">실제 자료 (비공개)</option></select>
-        <span class="field-hint">연습용은 앱을 익히는 용도입니다. 실제 임장은 실제 자료로 두고 실제 물건 목록을 넣습니다. (내부 이름: data_mode)</span>
+        <select id="data-mode"><option value="synthetic">연습용 자료</option><option value="private_real">실제 자료 (비공개)</option></select>
+        <span class="field-hint">실제 임장은 실제 자료로 두고 실제 대상 목록을 씁니다.</span>
       </label>
       <details class="disclosure">
         <summary>조사 경로 (선택)</summary>
         <label class="field"><span>조사 경로 ID</span>
-          <input id="route-version" type="text" autocomplete="off" placeholder="PC 에서 정한 경로 버전의 ID">
-          <span class="field-hint">비우면 경로 없는 자유 임장으로 기록됩니다. (내부 이름: route_version_id)</span>
+          <input id="route-version" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="PC 에서 정한 경로 버전 ID">
+          <span class="field-hint">비우면 경로 없는 자유 임장으로 기록됩니다.</span>
         </label>
       </details>
-      <div class="row"><button id="save-settings" class="primary">설정 저장</button> <span id="settings-note" class="muted" role="status"></span></div>
+      <div class="card-actions"><button id="save-settings" class="primary">저장</button> <span id="settings-note" class="note" role="status"></span></div>
     </div>
   </section>
 
-  <section class="card" aria-labelledby="tiles-title">
-    <h3 id="tiles-title">배경 지도 (온라인 타일)</h3>
-    <p class="help">공식 타일 API 의 지도를 앱 안에 배경으로 그립니다. 켜면 지도 화면을 움직일 때 타일을 받아 오고, 받은 타일은 이 기기에 저장돼 오프라인에서도 보입니다. 인증키는 이 기기에만 저장되며 어디에도 기록되지 않습니다.</p>
+  <section class="panel" aria-labelledby="tiles-title">
+    <h3 id="tiles-title">배경 지도</h3>
+    <p class="help">공식 타일 API 의 지도를 배경으로 깝니다. 켜면 지도를 움직일 때 타일을 받아 오고, 받은 타일은 이 폰에 남아 오프라인에서도 보입니다. 인증키는 이 폰에만 저장됩니다.</p>
     <div class="stack">
       <label class="field"><span>제공자</span>
         <select id="tiles-provider">
-          <option value="">사용 안 함 (위치점·필지·도로 배경만)</option>
-          <option value="custom">직접 입력 (제공자 문서의 타일 주소, 또는 같은 출처 타일 폴더)</option>
-          <option value="vworld_base" disabled>VWorld 기본 지도 (국토교통부) · 공식 문서 확인 전이라 선택 불가</option>
+          <option value="">쓰지 않음 (대상·필지·윤곽만)</option>
+          <option value="custom">직접 입력 (타일 주소 또는 같은 출처의 타일 폴더)</option>
+          <option value="vworld_base" disabled>VWorld 기본 지도 · 공식 문서 확인 전</option>
           <option value="vworld_satellite" disabled>VWorld 항공사진 · 확인 전</option>
           <option value="vworld_hybrid" disabled>VWorld 항공사진 + 라벨 · 확인 전</option>
         </select>
       </label>
-      <label class="field" id="tiles-template-field" hidden><span>타일 주소 템플릿</span><input id="tiles-template" type="text" autocomplete="off" spellcheck="false" placeholder="api.vworld.kr 의 https 주소(…/{key}/…/{z}/{y}/{x}.png) 또는 ./tiles/{z}/{x}/{y}.png">
-        <span class="field-hint">{z} {x} {y} 를 포함한 허용 호스트(api.vworld.kr)의 https 주소 또는 같은 출처 경로(./ 로 시작)만 됩니다. 인증키가 들어갈 자리는 {key} 로 씁니다. 형식은 제공자 문서에서 확인합니다.</span></label>
-      <label class="field" id="tiles-key-field" hidden><span>인증키</span><input id="tiles-key" type="password" autocomplete="off" spellcheck="false" placeholder="제공자 사이트에서 발급한 키">
-        <span class="field-hint">이 기기에만 저장되며 주소·저장된 타일·화면 어디에도 남지 않습니다. VWorld 는 vworld.kr 에서 무료로 발급하고, 이 앱을 여는 주소(폰 브라우저 주소창의 주소)를 서비스 URL 로 등록해야 합니다.</span></label>
-      <div class="row"><button id="tiles-save" class="primary">배경 지도 저장</button> <span id="tiles-note" class="muted" role="status"></span></div>
-      <div class="field-name">이 기기에 저장된 타일</div>
-      <p id="tiles-cache-status" class="muted"></p>
-      <div class="row">
+      <label class="field" id="tiles-template-field" hidden><span>타일 주소</span><input id="tiles-template" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="api.vworld.kr 의 https 주소 또는 ./tiles/{z}/{x}/{y}.png">
+        <span class="field-hint">{z} {x} {y} 가 든 api.vworld.kr 의 https 주소나 ./ 로 시작하는 같은 출처 경로만 됩니다. 인증키 자리는 {key} 로 씁니다.</span></label>
+      <label class="field" id="tiles-key-field" hidden><span>인증키</span><input id="tiles-key" type="password" autocomplete="off" spellcheck="false" placeholder="제공자에서 발급한 키">
+        <span class="field-hint">이 폰에만 저장되며 주소·저장된 타일·화면 어디에도 남지 않습니다. VWorld 는 vworld.kr 에서 무료로 발급하고, 이 앱을 여는 주소를 서비스 URL 로 등록해야 합니다.</span></label>
+      <div class="card-actions"><button id="tiles-save" class="primary">배경 지도 저장</button> <span id="tiles-note" class="note" role="status"></span></div>
+      <div class="field-name">이 폰에 저장된 타일</div>
+      <p id="tiles-cache-status" class="pencil small"></p>
+      <div class="card-actions">
         <button id="tiles-prefetch" class="secondary">이 범위 미리 받기</button>
         <button id="tiles-clear" class="danger">저장된 타일 지우기</button>
       </div>
-      <p id="tiles-prefetch-note" class="muted" role="status"></p>
-      <p class="help">"이 범위 미리 받기" 는 대상·필지가 있는 범위(여유 300 m)를 확대 14~18 단계로 받아 둡니다. 임장 전에 Wi-Fi 에서 한 번 눌러 두면 현장에서 통신 없이도 배경이 보입니다. 타일 자료의 이용조건·출처 표시는 제공자 약관을 따릅니다.</p>
-    </div>
-  </section>
-
-  <section class="card" aria-labelledby="data-title">
-    <h3 id="data-title">자료 관리</h3>
-    <p class="help">자료를 바꿔도 이미 저장한 기록은 지워지지 않습니다. 파일은 이 기기에서만 읽고 어디로도 보내지 않습니다.</p>
-    <div class="stack">
-      <div>
-        <div class="field-name">PC 자료 파일 (한 번에 가져오기)</div>
-        <p id="view-status" class="muted"></p>
-        <div class="row">
-          <label class="file-btn"><span>PC 자료 파일 선택 (.j5view.zip)</span><input id="view-file" type="file" accept="application/zip,.zip"></label>
-          <button id="clear-view" class="danger">PC 기록·거래 지우기</button>
-        </div>
-        <p id="view-note" class="muted" role="status"></p>
-        <p class="help">PC 의 <code>j5 db project-copy</code> 로 만든 파일입니다. 물건 목록·필지 경계·정본 기록·거래를 한 번에 넣습니다. 사진은 넣지 않습니다. 이 기기의 기록은 지워지지 않으며, 파일이 최신인지는 PC 에서 확인합니다.</p>
-      </div>
-      <div>
-        <div class="field-name">물건 목록</div>
-        <p id="seed-status" class="muted"></p>
-        <div class="row">
-          <button id="load-synthetic" class="secondary">연습용 물건 5개 불러오기</button>
-          <label class="file-btn"><span>PC 에서 만든 목록 파일 선택</span><input id="seed-file" type="file" accept="application/json,.json"></label>
-        </div>
-        <p id="seed-note" class="muted" role="status"></p>
-      </div>
-      <div>
-        <div class="field-name">필지 경계</div>
-        <div class="row">
-          <button id="load-synthetic-parcels" class="secondary">연습용 필지 6개 불러오기</button>
-          <label class="file-btn"><span>필지 경계 파일 선택</span><input id="parcels-file" type="file" accept="application/json,application/geo+json,.json,.geojson"></label>
-          <button id="clear-parcels" class="danger">필지 지우기</button>
-        </div>
-        <p id="parcels-note" class="muted" role="status"></p>
-      </div>
-      <div>
-        <div class="field-name">배경 지도 (도로·건물 윤곽)</div>
-        <div class="row">
-          <button id="load-synthetic-basemap" class="secondary">연습용 배경 불러오기</button>
-          <label class="file-btn"><span>배경 지도 파일 선택</span><input id="basemap-file" type="file" accept="application/json,application/geo+json,.json,.geojson"></label>
-          <button id="clear-basemap" class="danger">배경 지우기</button>
-        </div>
-        <p id="basemap-note" class="muted" role="status"></p>
-        <p class="help">PC 에서 공공 도형 자료로 만든 파일입니다. 도로·건물 윤곽과 도로명만 있고 상호·주소는 없습니다. 지도 참고용이며 기록과는 연결되지 않습니다.</p>
-      </div>
+      <p id="tiles-prefetch-note" class="note" role="status"></p>
+      <p class="help">"이 범위 미리 받기" 는 대상·필지가 있는 곳(여유 300 m)을 확대 14~18 단계로 받아 둡니다. 임장 전에 Wi-Fi 에서 한 번 받아 두면 현장에서 통신 없이 배경이 보입니다. 이용조건·출처 표시는 제공자 약관을 따릅니다.</p>
     </div>
   </section>
 
   <details class="disclosure">
-    <summary>다른 기기나 주소로 옮길 때</summary>
-    <p class="help">기록은 이 주소(<span id="migrate-origin" class="mono"></span>)로 연 브라우저 안에만 있습니다. 주소나 기기를 바꾸면 보이지 않으므로 옮기기 전에 모두 내보냅니다. 앱은 기록을 지우지 않습니다.</p>
+    <summary>다른 폰이나 주소로 옮길 때</summary>
+    <p class="help">기록은 이 주소(<span id="migrate-origin" class="num"></span>)로 연 브라우저 안에만 있습니다. 주소나 폰을 바꾸면 보이지 않으므로 옮기기 전에 모두 PC 로 보냅니다. 앱은 기록을 지우지 않습니다.</p>
     <p id="migrate-note" role="status"></p>
-    <p id="migrate-storage" class="muted"></p>
-    <ol class="muted">
-      <li>남은 기록을 모두 내보내고 PC 에서 반영·백업을 확인합니다.</li>
-      <li>새 기기·새 주소에서 앱을 열고 같은 작업 공간 설정을 저장합니다.</li>
-      <li>PC 에서 만든 물건 목록 파일과 필지 경계 파일을 가져옵니다.</li>
-      <li>옛 기기의 사이트 데이터는 PC 반영을 확인한 뒤 브라우저 설정에서 지웁니다.</li>
-    </ol>
-  </details>
-
-  <details class="disclosure">
-    <summary>고급 정보</summary>
-    <p id="status-line" class="mono small"></p>
-    <p class="help">PC 명령과 파일 형식은 저장소의 <span class="mono">j5/README.md</span>·<span class="mono">web/README.md</span> 에 있습니다. <a href="devtest.html">기기 시험 페이지</a></p>
-  </details>
-
-  <details class="disclosure">
-    <summary>도움말</summary>
+    <p id="migrate-storage" class="pencil small"></p>
     <ol class="help">
-      <li>설정에서 작업 공간 이름과 자료 종류를 저장합니다.</li>
-      <li>자료 관리에서 물건 목록(필요하면 필지 경계)을 가져옵니다.</li>
-      <li>오늘 화면의 목록이나 지도에서 대상을 골라 상태·사진·메모를 저장합니다.</li>
-      <li>임장을 마치면 내보내기에서 파일을 만들고 저장한 뒤 저장 확인을 누릅니다.</li>
-      <li>파일을 PC 로 옮겨 반영합니다. 반영과 백업 여부는 PC 에서 확인합니다.</li>
+      <li>남은 기록을 모두 보내고 PC 에서 반영·백업을 확인합니다.</li>
+      <li>새 폰·새 주소에서 앱을 열고 같은 작업 공간 이름을 저장합니다.</li>
+      <li>PC 자료 파일을 가져옵니다.</li>
+      <li>옛 폰의 사이트 데이터는 PC 반영을 확인한 뒤 브라우저 설정에서 지웁니다.</li>
     </ol>
+  </details>
+
+  <details class="disclosure">
+    <summary>쓰는 순서</summary>
+    <ol class="help">
+      <li>PC 자료 파일을 가져옵니다. 작업 공간 이름이 함께 채워집니다.</li>
+      <li>현장에서 지도나 목록으로 건물을 고르고 기록하기를 누릅니다.</li>
+      <li>달라짐·그대로·확인 어려움 가운데 하나를 고르고 사진과 메모를 남깁니다.</li>
+      <li>임장을 마치면 기록 화면에서 PC 로 보내기를 합니다.</li>
+      <li>파일을 PC 로 옮겨 반영합니다. 반영과 백업은 PC 에서 확인합니다.</li>
+    </ol>
+  </details>
+
+  <details class="disclosure">
+    <summary>앱 정보</summary>
+    <p id="status-line" class="num small"></p>
+    <p class="help">PC 명령과 파일 형식은 저장소의 j5/README.md·web/README.md 에 있습니다. <a href="devtest.html">기기 시험 페이지</a></p>
   </details>
 </section>
 </main>
 
-<!-- 관측 작업 화면 -->
+<!-- 기록하기 화면 -->
 <div id="sec-observe" class="sheet" role="dialog" aria-modal="true" aria-labelledby="observe-title" hidden>
   <div class="sheet-inner">
-    <div class="sheet-head">
-      <button id="cancel-observation" class="icon" aria-label="닫기">✕</button>
-      <div class="sheet-title">
+    <div class="sheet-bar">
+      <button id="cancel-observation" class="tool close" aria-label="닫기">✕</button>
+      <div class="sheet-bar-title">
         <h2 id="observe-title"><span id="target-label"></span></h2>
-        <span id="target-sub" class="help"></span>
+        <span id="target-sub" class="pencil small"></span>
       </div>
     </div>
-    <div id="observe-form" class="stack">
+    <div id="observe-form" class="stack form-body">
       <fieldset class="choice" id="change-status-group">
-        <legend>지난번과 비교해 어떤가요?</legend>
-        <label class="choice-item"><input type="radio" name="change-status" id="status-change_observed" value="change_observed"><span class="choice-mark" aria-hidden="true">!</span><span><strong>달라진 점 있음</strong><small>사진이나 설명을 남깁니다</small></span></label>
-        <label class="choice-item"><input type="radio" name="change-status" id="status-no_change" value="no_change"><span class="choice-mark" aria-hidden="true">=</span><span><strong>달라진 점 없음</strong><small>지난번 그대로</small></span></label>
-        <label class="choice-item"><input type="radio" name="change-status" id="status-hard_to_confirm" value="hard_to_confirm"><span class="choice-mark" aria-hidden="true">?</span><span><strong>확인하기 어려움</strong><small>가려짐·접근 불가 등</small></span></label>
+        <legend>지난번과 비교하면</legend>
+        <label class="choice-item"><input type="radio" name="change-status" id="status-change_observed" value="change_observed"><span class="choice-mark" aria-hidden="true">!</span><span><strong>달라짐</strong><small>간판·임대 광고·공사처럼 바뀐 것이 있음</small></span></label>
+        <label class="choice-item"><input type="radio" name="change-status" id="status-no_change" value="no_change"><span class="choice-mark" aria-hidden="true">=</span><span><strong>그대로</strong><small>지난번과 같음</small></span></label>
+        <label class="choice-item"><input type="radio" name="change-status" id="status-hard_to_confirm" value="hard_to_confirm"><span class="choice-mark" aria-hidden="true">?</span><span><strong>확인 어려움</strong><small>가려짐·문 닫힘·들어갈 수 없음</small></span></label>
       </fieldset>
       <div class="field">
-        <span class="field-name">사진 (선택)</span>
-        <label class="file-btn wide"><span>사진 추가</span><input id="photos" type="file" accept="image/*" multiple></label>
-        <span class="field-hint">JPEG·PNG·WebP, 한 장 20MB 까지.</span>
+        <span class="field-name">사진</span>
+        <label class="file-btn wide camera"><span>사진 찍기·고르기</span><input id="photos" type="file" accept="image/*" multiple></label>
+        <span class="field-hint">JPEG·PNG·WebP, 한 장에 20MB 까지. 달라짐을 고르면 사진이나 메모 가운데 하나가 필요합니다.</span>
         <div id="photo-list" class="stack"></div>
       </div>
-      <label class="field"><span>메모 (선택)</span><textarea id="note" rows="2" maxlength="2000" placeholder="예: 1층 임대 광고 붙음, 간판 교체"></textarea></label>
+      <label class="field"><span>메모</span><textarea id="note" rows="2" maxlength="2000" placeholder="예: 1층 임대 광고, 간판 교체"></textarea></label>
       <details class="disclosure">
-        <summary>관측 시각 바꾸기 <span id="observed-summary" class="muted"></span></summary>
+        <summary>본 시각 <span id="observed-summary" class="pencil"></span></summary>
         <label class="field"><span>본 시각</span><input id="observed-at" type="datetime-local"></label>
-        <label class="check"><input id="date-only" type="checkbox"> 시각을 모르면 날짜만 기록</label>
+        <label class="check"><input id="date-only" type="checkbox"> 시각을 모르면 날짜만</label>
       </details>
       <p id="observe-note" role="status" aria-live="assertive"></p>
-      <div class="row sheet-actions">
+      <div class="sheet-actions">
         <button id="save-observation" class="primary big">저장</button>
         <button id="cancel-observation-2" class="secondary">취소</button>
       </div>
     </div>
     <div id="observe-done" class="done" hidden>
       <div class="done-mark" aria-hidden="true">✓</div>
-      <h3 id="done-title">저장됨</h3>
-      <p id="done-text" class="help"></p>
+      <h3 id="done-title">저장했습니다</h3>
+      <p id="done-text" class="pencil"></p>
       <div class="stack">
         <button id="done-next" class="primary big">다음 대상 기록</button>
-        <button id="done-list" class="secondary">목록으로</button>
+        <button id="done-list" class="secondary">지도로</button>
         <button id="done-records" class="secondary">기록 보기</button>
       </div>
     </div>
   </div>
 </div>
 
-<!-- 이력 화면 (J5-023): 물건·필지의 연도별 거래·기록 -->
+<!-- 이력 화면: 대상·필지의 연도별 기록·거래 -->
 <div id="sec-history" class="sheet" role="dialog" aria-modal="true" aria-labelledby="history-title" hidden>
   <div class="sheet-inner">
-    <div class="sheet-head">
-      <button id="history-close" class="icon" aria-label="닫기">✕</button>
-      <div class="sheet-title">
+    <div class="sheet-bar">
+      <button id="history-close" class="tool close" aria-label="닫기">✕</button>
+      <div class="sheet-bar-title">
         <h2 id="history-title"></h2>
-        <span id="history-sub" class="help"></span>
+        <span id="history-sub" class="pencil small"></span>
       </div>
     </div>
     <p id="history-source" class="help"></p>
-    <section id="history-years" hidden>
+    <section id="history-years" class="years" hidden>
       <h3>연도별 요약</h3>
-      <ul id="history-years-list" class="attrs year-summary"></ul>
+      <ul id="history-years-list" class="facts year-summary"></ul>
       <p id="history-years-more" class="help" hidden></p>
-      <p class="help">공시지가는 그 연도 기준의 값, 거래는 이 필지에 닿는 계약연도별 수입니다. 거래를 수집하지 않았거나 실패한 연도, 거래 범위 밖 동은 0 건이 아니라 모름으로 적습니다. 번지대 거래는 이 필지의 거래로 확정하지 않습니다. 시세·가치 판단이 아닙니다.</p>
+      <p class="help">공시지가는 그 연도 기준 값, 거래는 이 필지에 닿는 계약연도별 수입니다. 거래를 모으지 않았거나 실패한 해, 거래 범위 밖 동은 0 건이 아니라 모름으로 적습니다. 번지대 거래는 이 필지의 거래로 확정하지 않습니다. 시세·가치 판단이 아닙니다.</p>
     </section>
     <div id="history-list" class="timeline"></div>
-    <p id="history-empty" class="empty" hidden>아직 기록이 없습니다. 이 기기의 관측은 저장하면 바로 보이고, PC 의 정본 기록·거래는 설정의 자료 관리에서 PC 자료 파일을 가져오면 보입니다.</p>
-    <details class="disclosure">
+    <p id="history-empty" class="empty" hidden>아직 기록이 없습니다. 이 폰의 기록은 저장하면 바로 보이고, PC 의 기록·거래는 PC 자료 파일을 가져오면 보입니다.</p>
+    <details class="disclosure quiet">
       <summary>표시 기준</summary>
-      <p class="help"><span class="badge src-device">이 기기</span> 이 폰에 저장된 관측. <span class="badge src-pc">정본</span> PC 자료 파일에 든 기록·거래(가져온 시점 기준). <span class="badge match-exact">이 필지</span> 지번이 일치하는 거래. <span class="badge match-prefix">번지대</span> 지번 일부가 가려진 거래로 이 필지의 것인지 확정할 수 없습니다. 동 전체가 가려진 거래는 어느 필지에도 표시하지 않습니다.</p>
+      <p class="help"><span class="badge src-device">이 폰</span> 이 폰에 저장한 기록. <span class="badge src-pc">PC</span> PC 자료 파일에 든 기록·거래(가져온 때 기준). <span class="badge match-exact">이 필지</span> 지번이 맞는 거래. <span class="badge match-prefix">번지대</span> 지번 일부가 가려진 거래로 이 필지의 것인지 확정할 수 없습니다. 동 전체가 가려진 거래는 어느 필지에도 붙이지 않습니다.</p>
     </details>
-    <div class="row sheet-actions">
-      <button id="history-record" class="primary big" hidden>이 물건 기록 시작</button>
+    <div class="sheet-actions">
+      <button id="history-record" class="primary big" hidden>이 대상 기록하기</button>
       <button id="history-close-2" class="secondary">닫기</button>
     </div>
   </div>
 </div>
 
 <nav class="bottom-nav" aria-label="주 메뉴">
-  <button id="nav-home" data-view="home" class="nav-btn"><span class="nav-ic" aria-hidden="true">●</span>오늘</button>
-  <button id="nav-map" data-view="map" class="nav-btn"><span class="nav-ic" aria-hidden="true">◎</span>지도</button>
-  <button id="nav-records" data-view="records" class="nav-btn"><span class="nav-ic" aria-hidden="true">≡</span>기록<span id="nav-records-badge" class="nav-badge" hidden></span></button>
-  <button id="nav-export" data-view="export" class="nav-btn"><span class="nav-ic" aria-hidden="true">↥</span>내보내기<span id="nav-export-badge" class="nav-badge" hidden></span></button>
-  <button id="nav-settings" data-view="settings" class="nav-btn"><span class="nav-ic" aria-hidden="true">⚙</span>설정</button>
+  <button id="nav-map" data-view="map" class="nav-btn"><span class="nav-ic nav-ic-field" aria-hidden="true"></span>현장</button>
+  <button id="nav-records" data-view="records" class="nav-btn"><span class="nav-ic nav-ic-records" aria-hidden="true"></span>기록<span id="nav-records-badge" class="nav-badge" hidden></span></button>
+  <button id="nav-settings" data-view="settings" class="nav-btn"><span class="nav-ic nav-ic-settings" aria-hidden="true"></span>설정</button>
 </nav>
 <script type="module" src="app/main.js"></script>
 </body>

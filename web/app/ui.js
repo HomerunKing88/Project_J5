@@ -1,15 +1,18 @@
 // 화면 전환·표시 전용 모듈 (J5-020). 저장소·이벤트·내보내기 로직은 건드리지 않는다.
 // 화면(view)은 index.html 의 <section class="view" data-view="..."> 이고, 하단 내비게이션 버튼은 data-view 로 연결된다.
-// 화면 전환 시 hidden 을 바꾸고 URL 해시(#home 등)를 맞추며 그 화면의 제목으로 포커스를 옮긴다. 외부 통신 없음.
+// 화면 전환 시 hidden 을 바꾸고 URL 해시(#map 등)를 맞추며 그 화면의 제목으로 포커스를 옮긴다. 외부 통신 없음.
+// J5-054: 화면은 현장(map)·기록(records)·설정(settings) 셋. 예전 해시 #home 은 현장, #export 는 기록으로 연다.
 
-export const VIEWS = ["home", "map", "records", "export", "settings"];
-export const DEFAULT_VIEW = "home";
+export const VIEWS = ["map", "records", "settings"];
+export const DEFAULT_VIEW = "map";
+export const VIEW_ALIASES = { home: "map", export: "records" };
 export const MODE_LABEL = { synthetic: "연습용 자료", private_real: "실제 자료 (비공개)" };
 export const MODE_SHORT = { synthetic: "연습용", private_real: "실제" };
 
 /** 해시(#map 등)를 화면 이름으로. 모르는 값은 기본 화면. */
 export function viewFromHash(hash) {
-  const name = String(hash || "").replace(/^#/, "");
+  const raw = String(hash || "").replace(/^#/, "");
+  const name = VIEW_ALIASES[raw] ?? raw;
   return VIEWS.includes(name) ? name : DEFAULT_VIEW;
 }
 
@@ -68,6 +71,7 @@ export function exportStep({ hasPackage, attempted, done }) {
 export function createNavigator({ sections, navButtons, onShow, doc = document, win = window }) {
   let current = null;
   function show(name, { focus = true, updateHash = true } = {}) {
+    name = VIEW_ALIASES[name] ?? name;
     if (!sections[name]) name = DEFAULT_VIEW;
     for (const [k, el] of Object.entries(sections)) el.hidden = k !== name;
     for (const b of navButtons) {

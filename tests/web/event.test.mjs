@@ -48,8 +48,8 @@ test("validateEvent 거절 규칙", () => {
   });
   assert.deepEqual(validateEvent(base()), []);
   const cases = [
-    [(e) => { e.payload.change_status = "change_observed"; }, "변화 확인"],
-    [(e) => { e.payload.change_status = "change_observed"; e.payload.note = "   "; }, "변화 확인"],
+    [(e) => { e.payload.change_status = "change_observed"; }, "달라짐을 고르면"],
+    [(e) => { e.payload.change_status = "change_observed"; e.payload.note = "   "; }, "달라짐을 고르면"],
     [(e) => { e.observed_at = "2026-09-22T00:00:00+09:00"; }, "observed_at"],
     [(e) => { e.observed_at_precision = "datetime"; }, "observed_at"],
     [(e) => { e.device_created_at = "2026-09-22T10:00:00"; }, "device_created_at"],

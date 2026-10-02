@@ -83,7 +83,7 @@ test("assetHistory: 정본 기록·이 기기 관측(정본에 있으면 대체)
   assert.deepEqual(items.map((i) => [i.date, i.kind, i.source]), [["2026-09-26", "field_observation", "device"], ["2026-09-25", "target_price", "pc"], ["2026-09-22", "field_observation", "pc"], ["2026-09-20", "target_price", "pc"], ["2025-08-01", "transaction", "pc"]]);
   assert.equal(items.filter((i) => i.id === ID(1)).length, 1, "정본에 있는 관측은 한 번만");
   assert.equal(items.find((i) => i.id === ID(3)).superseded, true);
-  assert.equal(items.find((i) => i.id === ID(9)).text, "변화 없음 · 그대로 · 사진 2장");
+  assert.equal(items.find((i) => i.id === ID(9)).text, "그대로 · 그대로 · 사진 2장");
   assert.equal(items.find((i) => i.id === ID(5)).match, "linked");
   assert.ok(items.find((i) => i.id === ID(4)).text.startsWith("목표 매수가 16억"));
 });
