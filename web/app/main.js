@@ -21,10 +21,11 @@ import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, check
 export const APP_VERSION = "0.2.23";
 const PARCEL_CARD_YEARS = 5;   // 필지 카드의 연도별 표에 보이는 최근 연도 수 (J5-055)
 const $ = (id) => document.getElementById(id);
-const state = { store: null, parcelFilter: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, zoneColors: false, seedLoadedAt: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
+const state = { store: null, parcelFilter: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, zoneColors: false, seedLoadedAt: null, seedSource: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
                 nav: null, returnFocus: null, mapSelected: null, assetFilter: "all" };
 
-const DATA_MODE_TEXT = { synthetic: "연습용 자료", private_real: "실제 자료" };
+// 대상 목록은 synthetic·private_real, 필지·배경 번들은 synthetic·real 을 쓴다 (리뷰 반영 PR #103)
+const DATA_MODE_TEXT = { synthetic: "연습용 자료", private_real: "실제 자료", real: "실제 자료" };
 
 /** 가져온 자리 (IndexedDB 의 source 값) 를 화면 글로 (J5-056) */
 function sourceText(source) {
@@ -305,6 +306,7 @@ async function renderAssets() {
   state.assets = await state.store.listAssets();
   state.events = await state.store.listEvents();
   state.seedLoadedAt = (await state.store.getMeta("seed_loaded_at")) ?? null;
+  state.seedSource = (await state.store.getMeta("seed_source")) ?? null;
   if (state.parcelsRec) parcelsNote(state.parcelsRec);
   applyAssetFilterUi();
   const visible = visibleAssets();
@@ -358,7 +360,7 @@ function renderSeedStatus() {
   const n = state.assets.length;
   const when = shortWhen(state.seedLoadedAt);
   const watch = state.assets.filter(isWatchlist).length;
-  text($("seed-status"), n ? `대상 ${n}곳 (${MODE_SHORT[state.assets[0].data_mode] ?? ""})${hasTracking(state.assets) ? `, 관찰목록 ${watch}곳` : ""}. ${when ?? "시각 모름"} 가져옴.` : "가져온 대상 목록이 없습니다.");
+  text($("seed-status"), n ? `대상 ${n}곳 (${MODE_SHORT[state.assets[0].data_mode] ?? ""})${hasTracking(state.assets) ? `, 관찰목록 ${watch}곳` : ""}. ${state.seedSource ? `${sourceText(state.seedSource)}, ` : ""}${when ?? "시각 모름"} 가져옴.` : "가져온 대상 목록이 없습니다.");
 }
 
 // ---- 관찰목록 필터 (J5-029, ADR-22): 파생본 시드의 관심 단계로 '전체/관찰목록만' 을 고른다. 선택은 이 기기(meta asset_filter)에 남는다. 관심 단계 자체는 PC 에서만 바꾼다 ----
@@ -816,8 +818,9 @@ function basemapNote(rec) {
   const b = rec.bundle, s0 = b.sources[0];
   const parts = BASEMAP_LAYERS.filter((k) => b.counts[k] > 0).map((k) => `${BASEMAP_LAYER_LABEL[k]} ${b.counts[k]}`).join(", ");
   const when = shortWhen(rec.loaded_at);
-  text($("basemap-note"), `건물·도로 윤곽 ${b.count}개 (${parts}). ${b.data_mode === "synthetic" ? "연습용 자료" : s0.name}, 도형 기준일 ${s0.geometry_version}, 이용허락 ${s0.license ?? "미확인"}.` +
-    (when ? ` ${when} 가져옴.` : ""), "pencil");
+  // 필지 상태와 같은 형식: 개수와 자료 종류, 자료 이름·기준일·이용허락, 가져온 자리와 시각 (리뷰 반영 PR #103)
+  text($("basemap-note"), `건물·도로 윤곽 ${b.count}개 (${parts}), ${DATA_MODE_TEXT[b.data_mode] ?? b.data_mode}. ${s0.name}, 도형 기준일 ${s0.geometry_version}, 이용허락 ${s0.license ?? "미확인"}.` +
+    ` ${sourceText(rec.source)}` + (when ? `, ${when} 가져옴.` : "."), b.data_mode === "synthetic" ? "pencil" : "ok");
 }
 
 async function loadSyntheticBasemap() {

@@ -113,7 +113,7 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.eval("document.getElementById('load-synthetic-basemap').click(); 'ok'");
     await cdp.waitFor("document.querySelectorAll('#map-svg .layer-base path').length === 11");
     assert.deepEqual(await cdp.eval("['bm-building','bm-road-area','bm-road'].map(c => document.querySelectorAll('#map-svg path.' + c).length)"), [6, 2, 3]);
-    assert.match(await cdp.eval("document.getElementById('basemap-note').textContent"), /^건물·도로 윤곽 11개 \(건물 6, 실폭도로 2, 도로 중심선 3\)\. 연습용 자료, 도형 기준일 2026-09-01, 이용허락 가상자료 \(이용허락 해당 없음\)\. .+ 가져옴\.$/);
+    assert.match(await cdp.eval("document.getElementById('basemap-note').textContent"), /^건물·도로 윤곽 11개 \(건물 6, 실폭도로 2, 도로 중심선 3\), 연습용 자료\. .+, 도형 기준일 2026-09-01, 이용허락 가상자료 \(이용허락 해당 없음\)\. 앱에 든 연습용 파일, .+ 가져옴\.$/);
     assert.match(await cdp.eval("document.getElementById('map-note').textContent"), / 필지 6개, 건물·도로 11개\.$/);
     assert.equal(await cdp.eval("document.querySelector('#map-svg .layer-base').compareDocumentPosition(document.querySelector('#map-svg .layer-parcels')) & Node.DOCUMENT_POSITION_FOLLOWING"), 4, "배경 층은 필지 층보다 앞(아래)에 있다");
     await cdp.clickRect("#map-zoom-in");
@@ -166,6 +166,12 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.setFiles("#parcels-file", [parcelsOther]);
     await cdp.waitFor("document.getElementById('parcels-note').textContent.includes('작업 공간(other-study)이 설정(e2e-study)과 다릅니다')");
     linked.study_id = "e2e-study";
+    // 실제 자료 번들(data_mode "real")은 내부 값 대신 "실제 자료" 로 적는다 (J5-056 리뷰 반영). 다음 단계에서 가상 파일로 바꾼다
+    const parcelsReal = join(tmp, "parcels-real.geojson");
+    writeFileSync(parcelsReal, JSON.stringify({ ...linked, data_mode: "real" }));
+    await cdp.setFiles("#parcels-file", [parcelsReal]);
+    await cdp.waitFor("document.getElementById('parcels-note').textContent.includes('파일 parcels-real.geojson')");
+    assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /^필지 6개 \(실제 자료\)\. /);
     // 폰 범위 경고(J5-039)는 글 그대로, 다른 경고는 건수로
     linked.warnings = ["폰 범위: 정본 필지 12개 중 법정동 9999900100 과 물건이 연결된 필지 6개만 실었다", "원본 좌표계가 섞여 있다: 가상"];
     const parcelsFile = join(tmp, "parcels.geojson");
@@ -497,7 +503,7 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       await cdp.waitFor("document.querySelectorAll('#asset-list li .row-act').length === 5");
       assert.equal(await cdp.eval("document.getElementById('asset-filter').hidden"), false, "관심 단계가 있는 시드에서 필터가 보인다");
       assert.equal(await cdp.eval("document.getElementById('asset-filter-note').textContent"), "관찰목록 2곳");
-      assert.match(await cdp.eval("document.getElementById('seed-status').textContent"), /^대상 5곳 \(연습용\), 관찰목록 2곳\. .* 가져옴\.$/);
+      assert.match(await cdp.eval("document.getElementById('seed-status').textContent"), /^대상 5곳 \(연습용\), 관찰목록 2곳\. PC 자료 파일 synthetic\.j5view\.zip, .* 가져옴\.$/);
       const badge = (i) => cdp.eval(`Array.from(document.querySelector('#asset-list li[data-asset-id="7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a5${i}"]').querySelectorAll('.badge[class*="track-"], .badge.src-pending')).map(b => b.textContent)`);
       assert.deepEqual([await badge(0), await badge(1), await badge(2), await badge(3), await badge(4)], [["관찰"], ["상세 검토"], [], ["보류"], ["제외"]], "미검토는 배지 없음");
       assert.equal(await cdp.eval("document.querySelectorAll('#asset-list .badge.track-watchlist').length"), 2);
