@@ -301,6 +301,28 @@ export function yearSummaryRow(r) {
   return [String(r.year), `${price} · ${tx}${own}`];
 }
 
+const TX_STATE_SHORT = { not_collected: "미수집", incomplete: "일부만 수집", outside: "범위 밖", unknown: "모름" };
+
+/**
+ * 연도별 요약 한 줄을 표의 칸으로 (J5-055): 필지 카드·이력 화면의 표가 쓴다. 글 한 줄(yearSummaryRow, PC years_text 와 같은 글)과 값·판정은 같다.
+ * price 는 원/㎡ 글(자료가 없으면 null), delta 는 전년 대비, tx 는 같은 필지 거래 수(수집했을 때) 또는 모르는 사유,
+ * txNotes 는 번지대·연결 수와 수집 개월, owner 는 그 연도의 소유 변동일(월-일) 또는 "없음"·"자료 없음"(소유 칸이 없으면 null).
+ */
+export function yearSummaryCells(r) {
+  const counted = r.tx === "counted";
+  const txNotes = [];
+  if (counted && r.prefix) txNotes.push(`번지대 ${r.prefix}`);
+  if (counted && r.linked) txNotes.push(`연결 ${r.linked}`);
+  if (counted && r.monthsComplete != null) txNotes.push(`수집 ${r.monthsComplete}/12개월`);
+  const owner = !r.owner ? null : !r.owner.known ? "자료 없음" : r.owner.dates.length ? r.owner.dates.map((d) => d.slice(5)).join(", ") : "없음";
+  return {
+    year: String(r.year),
+    price: r.price == null ? null : Math.round(r.price).toLocaleString("ko-KR"),
+    delta: r.deltaPct == null ? "" : `${r.deltaPct > 0 ? "+" : ""}${r.deltaPct.toFixed(1)}%`,
+    tx: counted ? `${r.exact}건` : TX_STATE_SHORT[r.tx], txCounted: counted, txNotes, owner,
+  };
+}
+
 /** 연도별 묶음 [{year, items}] (최근 연도 먼저). 날짜 없는 항목은 "날짜 미상". */
 export function groupByYear(items) {
   const map = new Map();
