@@ -269,6 +269,13 @@ table.years-table { width: 100%; border-collapse: collapse; font-size: var(--t-s
 .years-table .none { color: var(--pencil); font-size: var(--t-xs); padding-top: 9px; }
 .years-table .delta { display: block; font-size: var(--t-xs); font-weight: 600; color: var(--pencil); }
 .years-table .cell-note { display: block; font-size: var(--t-xs); font-weight: 400; color: var(--pencil); white-space: nowrap; }
+/* 최근 거래 (J5-057) */
+.card-deals { display: grid; gap: var(--s-2); }
+.deal-list > li { display: grid; grid-template-columns: 6.6em 1fr; gap: 2px var(--s-2); padding: 8px 0; align-items: baseline; }
+.deal-date { color: var(--pencil); font-size: var(--t-xs); }
+.deal-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.deal-main strong { font-size: var(--t-m); }
+.deal-sub { flex-basis: 100%; color: var(--pencil); font-size: var(--t-xs); overflow-wrap: anywhere; }
 .seg { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); }
 .seg button { min-height: 36px; padding: 4px 14px; border-radius: var(--r-pill); font-size: var(--t-xs); border-width: 1px; }
 .seg button[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }

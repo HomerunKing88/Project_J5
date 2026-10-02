@@ -15,11 +15,12 @@ import { externalMapLinks, bboxCenter, LINK_ATTRS } from "./extmap.js";
 import { validateBasemap, LAYERS as BASEMAP_LAYERS, LAYER_LABEL as BASEMAP_LAYER_LABEL } from "./basemap.js";
 import { PROVIDERS, resolveTileConfig, prefetchPlan, padBbox, tileUrl, TILE_CACHE, PREFETCH_ZOOMS, KEY_PLACEHOLDER } from "./tiles.js";
 import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
-import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummaryInfo, yearSummaryRow, yearSummaryCells } from "./view.js";
+import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummaryInfo, yearSummaryRow, yearSummaryCells, recentDeals } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.23";
+export const APP_VERSION = "0.2.24";
 const PARCEL_CARD_YEARS = 5;   // 필지 카드의 연도별 표에 보이는 최근 연도 수 (J5-055)
+const PARCEL_CARD_DEALS = 3;   // 필지 카드의 최근 거래 수 (J5-057)
 const $ = (id) => document.getElementById(id);
 const state = { store: null, parcelFilter: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, zoneColors: false, seedLoadedAt: null, seedSource: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
                 nav: null, returnFocus: null, mapSelected: null, assetFilter: "all" };
@@ -776,6 +777,26 @@ function renderYearsTable(table, rows, { limit = Infinity } = {}) {
   }));
 }
 
+/** 필지 카드의 최근 거래 (J5-057). PC 자료(거래 파일)가 없으면 감춘다: 거래가 없는 것인지 모으지 않은 것인지 이 폰에서 알 수 없다 */
+function renderRecentDeals(items) {
+  const hasTx = !!state.view?.transactions;
+  $("parcel-deals").hidden = !hasTx;
+  if (!hasTx) return;
+  const d = recentDeals(items, PARCEL_CARD_DEALS);
+  $("parcel-deals-list").replaceChildren(...d.rows.map((r) => el("li", {},
+    el("span", { class: "deal-date num", text: r.date }),
+    el("span", { class: "deal-main" }, el("strong", { class: "num", text: r.amount }),
+      ...(r.match === "linked" ? [el("span", { class: "badge match-exact", text: "연결" })] : []),
+      ...(r.details.length ? [el("span", { class: "deal-sub", text: r.details.join(", ") })] : [])))));
+  $("parcel-deals-list").hidden = !d.rows.length;
+  const notes = [];
+  if (!d.rows.length) notes.push("PC 자료에 이 필지와 지번이 같은 거래가 없습니다. 거래를 모은 해는 위 연도별 표에서 봅니다.");
+  else if (d.total > d.rows.length) notes.push(`이 필지 거래 ${d.total}건 가운데 최근 ${d.rows.length}건입니다.`);
+  if (d.prefix) notes.push(`지번 일부가 가려진 번지대 거래 ${d.prefix}건은 이 필지의 거래로 확정하지 않아 넣지 않았습니다. 필지 이력에서 봅니다.`);
+  text($("parcel-deals-note"), notes.join(" "), "pencil small");
+  $("parcel-deals-note").hidden = !notes.length;
+}
+
 function openParcelHistory(feature, assetsInside) {
   const p = feature.properties;
   const { items, rows: years, omitted } = parcelYears(feature, assetsInside);
@@ -882,7 +903,8 @@ function showParcel(feature) {
   if (!linksValid && (p.asset_ids ?? []).length) $("parcel-assets").append(el("li", { class: "warn", text: `PC 에서 이 필지에 이은 대상 ${p.asset_ids.length}곳은 대상 목록이 바뀐 뒤라 보이지 않습니다. PC 자료 파일을 다시 가져오면 보입니다.` }));
   if (!inside.length) $("parcel-assets").append(el("li", { class: "empty", text: "이 필지에 든 대상이 없습니다. 아래 버튼으로 이 필지를 대상으로 만들어 바로 기록할 수 있습니다." }));
   // 연도별 표 (J5-055): 최근 5개 연도. 전체와 기록·거래는 필지 이력에서
-  const { rows: years } = parcelYears(feature, inside.map((x) => x.asset));
+  const { rows: years, items: parcelItems } = parcelYears(feature, inside.map((x) => x.asset));
+  renderRecentDeals(parcelItems);
   renderYearsTable($("parcel-years-table"), years, { limit: PARCEL_CARD_YEARS });
   $("parcel-years").hidden = !years.length;
   $("parcel-years-all").textContent = years.length > PARCEL_CARD_YEARS ? `모든 연도(${years.length}개)와 기록 보기` : "기록·거래 보기";

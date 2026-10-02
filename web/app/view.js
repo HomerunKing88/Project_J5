@@ -178,7 +178,20 @@ export function transactionItem(t, { match = null, subject = null } = {}) {
   if (t.share_deal) parts.push("지분 거래");
   const where = `${t.emd_name ?? "동 미상"} ${t.jibun ?? "지번 미공개"}`;
   return { id: t.transaction_id, date, year: date.slice(0, 4), kind: "transaction", kindLabel: "실거래", text: parts.join(" · "), where,
+           amount: fmtKrw(t.amount_krw), details: parts.slice(1),
            masked: !!t.jibun_masked, match, link: t.link_status, linkedAsset: t.asset_id, source: "pc", superseded: false, subject };
+}
+
+/**
+ * 필지 카드의 최근 거래 (J5-057): parcelHistory 의 거래 가운데 이 필지와 지번이 같은 거래(exact)와 사람이 확정 연결한 거래(linked)만, 최근 것부터 limit 건.
+ * 지번 일부가 가려진 번지대 거래(prefix)는 이 필지의 거래로 확정하지 않으므로 목록에 넣지 않고 수만 센다 (AGENTS "마스킹된 거래를 특정 PNU 에 확정하지 않는다").
+ * { rows: [{date, amount, details, match}], total(같은 필지·연결 수), prefix(번지대 수) }
+ */
+export function recentDeals(items, limit = 3) {
+  const tx = items.filter((it) => it.kind === "transaction" && !it.superseded);
+  const mine = tx.filter((it) => it.match === "exact" || it.match === "linked").sort(byDateDesc);
+  return { rows: mine.slice(0, limit).map((it) => ({ date: it.date, amount: it.amount, details: it.details ?? [], match: it.match })),
+           total: mine.length, prefix: tx.filter((it) => it.match === "prefix").length };
 }
 
 const byDateDesc = (a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.id < b.id ? 1 : -1);

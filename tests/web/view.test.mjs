@@ -1,7 +1,7 @@
 // view.js (J5-023, ADR-17): manifest·기록·거래 검증, 금액 표기, 지번 대조, 물건·필지 이력 조립, 연도 묶음. DOM 없음.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, fmtKrw, parseJibun, jibunMatch, assetHistory, parcelHistory, attrHistoryItems, groupByYear, viewSummary, parcelYearSummary, parcelYearSummaryInfo, YEAR_SUMMARY_MAX, yearSummaryRow, yearSummaryCells } from "../../web/app/view.js";
+import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, fmtKrw, parseJibun, jibunMatch, assetHistory, parcelHistory, attrHistoryItems, groupByYear, viewSummary, parcelYearSummary, parcelYearSummaryInfo, YEAR_SUMMARY_MAX, yearSummaryRow, yearSummaryCells, recentDeals } from "../../web/app/view.js";
 
 const A0 = "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a50", A1 = "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a51";
 const R = (id, asset, type, at, payload, extra = {}) => ({ record_id: id, asset_id: asset, record_type: type, observed_at: at, payload, attachments: [], supersedes_id: null, ...extra });
@@ -210,4 +210,20 @@ test("yearSummaryCells: 연도별 표의 칸, 글 한 줄과 같은 값·판정 
   assert.equal(yearSummaryCells({ ...zero, tx: "outside" }).tx, "범위 밖");
   assert.equal(yearSummaryCells({ ...zero, tx: "unknown" }).tx, "모름");
   assert.equal(yearSummaryCells({ ...zero, owner: { known: false, dates: [] } }).owner, "자료 없음", "토지소유 자료가 없으면 변동 없음이 아니다");
+});
+
+test("recentDeals: 같은 필지·확정 연결 거래만 최근 것부터, 번지대는 수만 (J5-057)", () => {
+  const feature = { id: "9999900100100010000", properties: { emd_name: "가상동", emd_code: "9999900100", label: "1", bon: 1, bu: 0, mountain: false } };
+  const tx = (id, ymd, jibun, extra = {}) => T(ID(id), ymd, jibun, { lawd_cd: "99999", ...extra });
+  const txs = [tx(1, "202308", "1"), tx(2, "202508", "1", { building_use: "제1종근린생활", plottage_area_m2: 30 }), tx(3, "202601", "1-*"), tx(4, "202409", "1"), tx(5, "202602", "1"),
+    tx(6, "202407", "9", { asset_id: ID(50), link_status: "confirmed" }), tx(7, "202601", "2")];
+  const items = parcelHistory(feature, [{ asset_id: ID(50), label: "가상 물건" }], { events: [], records: [], transactions: txs });
+  const d = recentDeals(items, 3);
+  assert.deepEqual(d.rows.map((r) => [r.date.slice(0, 7), r.match]), [["2026-02", "exact"], ["2025-08", "exact"], ["2024-09", "exact"]], "최근 3건");
+  assert.equal(d.total, 5, "같은 필지 4건 + 확정 연결 1건");
+  assert.equal(d.prefix, 1, "번지대 거래는 목록에 넣지 않고 센다");
+  assert.deepEqual(d.rows[1].details, ["제1종근린생활", "건물 50.5㎡", "대지 30㎡"]);
+  assert.equal(d.rows[1].amount, "10억");
+  assert.deepEqual(recentDeals(items, 10).rows.map((r) => r.match).filter((m) => m === "linked").length, 1, "확정 연결 거래는 지번이 달라도 들어간다");
+  assert.deepEqual(recentDeals([], 3), { rows: [], total: 0, prefix: 0 });
 });
