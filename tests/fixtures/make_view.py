@@ -63,7 +63,9 @@ MONTHS = {
 FIXED_NOW = "2026-09-30T09:00:00Z"
 
 
-def build(out_dir: Path, *, parcels: bool = True) -> dict:
+def build(out_dir: Path, *, parcels: bool = True, inspect=None, extra=None) -> dict:
+    """inspect(db, home, proj) 를 주면 정본을 닫기 전에, extra(db, home) 를 주면 기본 자료를 모두 넣은 뒤·파생본 생성 전에 부른다
+    (폰·PC 대조 시험이 자기 자료를 더한다, J5-058). 둘 다 없으면 파생본 내용은 이전과 같다."""
     out_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="j5view-fixture-") as td:
         home = Path(td) / "home"
@@ -115,12 +117,15 @@ def build(out_dir: Path, *, parcels: bool = True) -> dict:
         set_status(db, A[1], "detailed_review", reason="가상 상세 검토", changed_on="2026-09-22")
         set_status(db, A[3], "hold", reason="가상 보류", changed_on="2026-09-23")
         set_status(db, A[4], "excluded", reason="가상 제외", changed_on="2026-09-24")
+        if extra:
+            extra(db, home)
         proj = build_projection(db, home, photos=False)
+        inspected = inspect(db, home, proj) if inspect else None
         db.close()
         src = home / proj.output_dir / proj.zip_name
         dst = out_dir / ("synthetic.j5view.zip" if parcels else "synthetic-noparcels.j5view.zip")
         shutil.copyfile(src, dst)
-        return {"zip": str(dst), "bytes": dst.stat().st_size, "counts": proj.counts, "source_dataset_version": proj.source_dataset_version}
+        return {"zip": str(dst), "bytes": dst.stat().st_size, "counts": proj.counts, "source_dataset_version": proj.source_dataset_version, **({"inspect": inspected} if inspect else {})}
 
 
 def main() -> None:
