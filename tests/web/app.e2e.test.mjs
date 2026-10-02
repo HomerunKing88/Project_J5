@@ -34,14 +34,14 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     // 지도 모듈 로드 실패: map.js 요청을 막고 첫 접속 (서비스 워커가 아직 없을 때). 목록·설정은 그대로 동작하고 지도 절만 안내를 낸다.
     await cdp.send("Network.setBlockedURLs", { urls: ["*/app/map.js"] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.23')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.24')");
     await cdp.waitFor("document.getElementById('map-note').textContent.includes('지도를 그리지 못했습니다')");
     assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li').length"), 1, "지도 모듈 없이도 목록 절이 그려진다");
     const blockedLogs = cdp.errors.splice(0);
     assert.ok(blockedLogs.every((e) => e.includes("ERR_BLOCKED_BY_CLIENT") || e.includes("Failed to load resource") || e.includes("map.js")), blockedLogs.join("; "));
     await cdp.send("Network.setBlockedURLs", { urls: [] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.23')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.24')");
     await cdp.waitFor("document.getElementById('map-note').textContent === ''");
     // 설정
     await cdp.eval("document.getElementById('study-id').value = 'e2e-study'; document.getElementById('save-settings').click(); 'ok'");
@@ -415,6 +415,10 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
         [["counted", "2026", "13,000,000", "0건수집 1/12개월", "09-24"], ["counted", "2025", "자료 없음", "1건번지대 1수집 1/12개월", "없음"]]);
       assert.equal(await cdp.eval("document.getElementById('parcel-years-all').textContent"), "기록·거래 보기", "연도가 5개 이하면 모든 연도 수를 적지 않는다");
       assert.ok(!(await cdp.eval("document.body.scrollWidth > window.innerWidth")), "연도별 표가 가로 스크롤을 만들지 않는다");
+      // 필지 카드의 최근 거래 (J5-057): 같은 필지 거래만, 번지대 거래는 확정하지 않고 수만 안내
+      assert.deepEqual(await cdp.eval("Array.from(document.querySelectorAll('#parcel-deals-list li')).map(li => [li.querySelector('.deal-date').textContent, li.querySelector('strong').textContent, li.querySelector('.deal-sub')?.textContent])"),
+        [["2025-08-01", "10억", "제1종근린생활, 건물 50.5㎡, 대지 30㎡"]]);
+      assert.match(await cdp.eval("document.getElementById('parcel-deals-note').textContent"), /번지대 거래 1건은 이 필지의 거래로 확정하지 않아 넣지 않았습니다/);
       // 공시지가 추이 (J5-030): 가상 파생본의 필지 1 은 같은 2026년 1월 기준에서 값이 바뀐 두 점
       assert.equal(await cdp.eval("document.getElementById('parcel-price').hidden"), false);
       assert.deepEqual(await cdp.eval("Array.from(document.querySelectorAll('#parcel-price-list li')).map(li => li.textContent)"),
@@ -537,9 +541,16 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel').length"), 0);
       await cdp.setFiles("#view-file", [viewZip]);
       await cdp.waitFor("document.getElementById('view-note').textContent.includes('필지 6개')");
+      // 필지 카드를 연 채로 PC 자료를 지우면 카드의 최근 거래도 사라진다 (J5-057 리뷰 반영 PR #104)
+      await cdp.eval("document.getElementById('nav-map').click(); 'ok'");
+      await cdp.clickRect('#map-svg path.parcel[data-pnu="9999900100100010000"]');
+      await cdp.waitFor("!document.getElementById('parcel-panel').hidden && !document.getElementById('parcel-deals').hidden && document.querySelectorAll('#parcel-deals-list li').length === 1");
+      await cdp.eval("document.getElementById('nav-settings').click(); 'ok'");
       // 지우기 뒤 물건·필지·이 기기 기록은 그대로
       await cdp.eval("document.getElementById('clear-view').click(); 'ok'");
       await cdp.waitFor("document.getElementById('view-status').textContent.startsWith('아직 가져오지 않았습니다')");
+      assert.ok(await cdp.eval("document.getElementById('parcel-deals').hidden"), "지운 거래가 열린 필지 카드에 남지 않는다");
+      assert.equal(await cdp.eval("document.getElementById('parcel-panel').hidden"), false, "카드는 열린 채 지운 자료로 다시 그린다");
       await cdp.waitFor("document.querySelectorAll('#asset-list li .row-act').length === 5");
       assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /필지 6개/);
       assert.equal(await cdp.eval("document.querySelectorAll('#record-list li').length"), 1);
