@@ -15,10 +15,11 @@ import { externalMapLinks, bboxCenter, LINK_ATTRS } from "./extmap.js";
 import { validateBasemap, LAYERS as BASEMAP_LAYERS, LAYER_LABEL as BASEMAP_LAYER_LABEL } from "./basemap.js";
 import { PROVIDERS, resolveTileConfig, prefetchPlan, padBbox, tileUrl, TILE_CACHE, PREFETCH_ZOOMS, KEY_PLACEHOLDER } from "./tiles.js";
 import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
-import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummaryInfo, yearSummaryRow } from "./view.js";
+import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummaryInfo, yearSummaryRow, yearSummaryCells } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.21";
+export const APP_VERSION = "0.2.22";
+const PARCEL_CARD_YEARS = 5;   // 필지 카드의 연도별 표에 보이는 최근 연도 수 (J5-055)
 const $ = (id) => document.getElementById(id);
 const state = { store: null, parcelFilter: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, zoneColors: false, seedLoadedAt: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
                 nav: null, returnFocus: null, mapSelected: null, assetFilter: "all" };
@@ -705,14 +706,8 @@ function openHistory({ title, sub, items, asset = null, years = [], yearsOmitted
   $("history-sub").textContent = sub;
   const sm = viewSummary(state.view);
   text($("history-source"), sm ? `PC 에서 ${shortWhen(sm.generatedAt) ?? sm.generatedAt} 에 만든 자료(정본 v${sm.version})와 이 폰의 기록입니다.` : "PC 자료를 아직 가져오지 않아 이 폰의 기록만 보입니다.", "help");
-  // 필지 연도별 요약 (J5-047): 필지 이력에서만. 모르는 연도는 0 이 아니라 사유로 적는다
-  $("history-years-list").replaceChildren(...years.map((r) => {
-    const [y, v] = yearSummaryRow(r);
-    const li = el("li", {}, el("span", { class: "k", text: y }), el("span", { class: "v", text: v }));
-    li.dataset.year = y;
-    li.dataset.tx = r.tx;
-    return li;
-  }));
+  // 필지 연도별 요약 (J5-047, 표는 J5-055): 필지 이력에서만. 모르는 연도는 0 이 아니라 사유로 적는다
+  renderYearsTable($("history-years-table"), years);
   $("history-years").hidden = !years.length;
   // 상한(40개 연도)보다 앞 연도는 폰에 보이지 않는다. 빠진 것을 알리고 PC 명령을 안내한다 (J5-051)
   const om = yearsOmitted;
@@ -738,11 +733,39 @@ function viewYear() {
   return typeof g === "string" && /^\d{4}-/.test(g) ? Number(g.slice(0, 4)) : null;
 }
 
-function openParcelHistory(feature, assetsInside) {
+/** 필지의 이력 항목과 연도별 요약 (필지 카드의 표와 필지 이력이 같은 값을 쓴다) */
+function parcelYears(feature, assetsInside) {
   const p = feature.properties;
   const items = parcelHistory(feature, assetsInside, historyData());
   const prices = priceTrend(p.attrs, p.attrs_history).map((q) => ({ year: q.year, price: q.price }));
-  const { rows: years, omitted } = parcelYearSummaryInfo(feature, items, state.view?.transactions ?? null, prices, { ownership: ownershipChanges(p.attrs, p.attrs_history), thisYear: viewYear() });
+  const { rows, omitted } = parcelYearSummaryInfo(feature, items, state.view?.transactions ?? null, prices, { ownership: ownershipChanges(p.attrs, p.attrs_history), thisYear: viewYear() });
+  return { items, rows, omitted };
+}
+
+/** 연도별 요약 표 (J5-055). 줄마다 data-year·data-tx 와 이 폰의 요약 글 한 줄(title, yearSummaryRow). PC db parcels-years 와는 글이 아니라 칸의 값으로 대조한다(PC 글은 마지막 거래 금액·날짜 등을 더 적는다).
+ *  limit 를 주면 최근 연도부터 그만큼만.
+ *  모든 줄에 소유 칸이 없으면(토지소유 정보를 주지 않음) 소유 열을 감춘다 */
+function renderYearsTable(table, rows, { limit = Infinity } = {}) {
+  const shown = rows.slice(0, limit);
+  const hasOwner = shown.some((r) => r.owner);
+  table.classList.toggle("no-owner", !hasOwner);
+  table.tBodies[0].replaceChildren(...shown.map((r) => {
+    const c = yearSummaryCells(r);
+    const priceTd = c.price == null ? el("td", { class: "none", text: "자료 없음" })
+      : el("td", { class: "num" }, document.createTextNode(c.price), ...(c.delta ? [el("span", { class: "delta", text: c.delta })] : []));
+    const txTd = el("td", { class: c.txCounted ? "num" : "none" }, document.createTextNode(c.tx), ...c.txNotes.map((n) => el("span", { class: "cell-note", text: n })));
+    const tr = el("tr", { title: yearSummaryRow(r).join(" ") },
+      el("th", { scope: "row", text: c.year }), priceTd, txTd,
+      el("td", { class: `col-owner${c.owner === "없음" || c.owner === "자료 없음" ? " none" : " num"}`, text: c.owner ?? "" }));
+    tr.dataset.year = c.year;
+    tr.dataset.tx = r.tx;
+    return tr;
+  }));
+}
+
+function openParcelHistory(feature, assetsInside) {
+  const p = feature.properties;
+  const { items, rows: years, omitted } = parcelYears(feature, assetsInside);
   openHistory({ title: `${parcelTitle(p)} 필지`, sub: `필지 번호 ${feature.id}. 대상 ${assetsInside.length}곳, 기록·거래 ${items.length}건`, items, asset: null, years, yearsOmitted: omitted });
 }
 
@@ -844,6 +867,12 @@ function showParcel(feature) {
   )));
   if (!linksValid && (p.asset_ids ?? []).length) $("parcel-assets").append(el("li", { class: "warn", text: `PC 에서 이 필지에 이은 대상 ${p.asset_ids.length}곳은 대상 목록이 바뀐 뒤라 보이지 않습니다. PC 자료 파일을 다시 가져오면 보입니다.` }));
   if (!inside.length) $("parcel-assets").append(el("li", { class: "empty", text: "이 필지에 든 대상이 없습니다. 아래 버튼으로 이 필지를 대상으로 만들어 바로 기록할 수 있습니다." }));
+  // 연도별 표 (J5-055): 최근 5개 연도. 전체와 기록·거래는 필지 이력에서
+  const { rows: years } = parcelYears(feature, inside.map((x) => x.asset));
+  renderYearsTable($("parcel-years-table"), years, { limit: PARCEL_CARD_YEARS });
+  $("parcel-years").hidden = !years.length;
+  $("parcel-years-all").textContent = years.length > PARCEL_CARD_YEARS ? `모든 연도(${years.length}개)와 기록 보기` : "기록·거래 보기";
+  $("parcel-years-all").onclick = () => openParcelHistory(feature, inside.map((x) => x.asset));
   $("parcel-new-asset").hidden = inside.length > 0;
   $("parcel-new-asset").onclick = () => createAssetFromParcel(feature);
   $("parcel-history").onclick = () => openParcelHistory(feature, inside.map((x) => x.asset));

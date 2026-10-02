@@ -26,7 +26,7 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
       const origAdd = IDBObjectStore.prototype.add;
       IDBObjectStore.prototype.add = function (v, k) { if (this.name === 'events' && window.__failSave) throw new DOMException('저장 공간 부족 (e2e)', 'QuotaExceededError'); return origAdd.call(this, v, k); };` });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor(`${txt("status-line")}.includes('앱 0.2.21')`);
+    await cdp.waitFor(`${txt("status-line")}.includes('앱 0.2.22')`);
 
     // 1. 처음 실행: 현장 화면, 시트가 펼쳐져 시작하기(PC 자료 파일·연습용 자료)가 보인다, 기술 용어 없음
     assert.ok(await cdp.eval(visible("view-map")) && await cdp.eval("document.getElementById('view-records').hidden"), "첫 화면은 현장");
@@ -191,6 +191,8 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     await cdp.waitFor(`${txt("map-note")}.includes('지도를 그리지 못했습니다')`);
     assert.match(await cdp.eval(txt("map-empty")), /지도를 그릴 수 없습니다/);
     await cdp.waitFor("document.getElementById('field-sheet').dataset.state === 'open'");   // 지도가 실패하면 목록을 펼친다
+    // 지도 실패 안내는 목록보다 먼저 뜬다 (initMap 이 목록 그리기 전). 목록이 다 그려질 때까지 기다린다 (부하가 크면 앞서 누르던 경합)
+    await cdp.waitFor("document.querySelectorAll('#asset-list li .row-act').length === 5");
     await cdp.eval("document.querySelectorAll('#asset-list li .row-act')[2].click(); 'ok'");
     await cdp.waitFor(`${visible("sec-observe")} && ${txt("target-label")} === '가상 물건 3'`);
     await cdp.eval("document.getElementById('cancel-observation').click(); 'ok'");

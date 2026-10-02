@@ -252,9 +252,23 @@ ul.facts li:first-child { border-top: none; }
 ul.facts .k { color: var(--pencil); font-size: var(--t-xs); padding-top: 2px; }
 ul.facts .v { overflow-wrap: anywhere; }
 ul.facts.price-trend li { grid-template-columns: 8.5em 1fr; }
-ul.facts.year-summary li { grid-template-columns: 3.6em 1fr; }
-ul.facts.year-summary .k { font-size: var(--t-s); font-weight: 700; color: var(--ink); padding-top: 0; }
 
+/* 연도별 표 (J5-055): 필지 카드·이력 화면. 괘선 줄, 숫자는 오른쪽 맞춤이 아니라 칸 왼쪽에 tabular-nums 로 둔다 (칸 안 보조 글과 줄 맞춤) */
+.card-years { display: grid; gap: var(--s-2); }
+.card-years > .quiet { justify-self: start; }
+table.years-table { width: 100%; border-collapse: collapse; font-size: var(--t-s); table-layout: fixed; }
+.years-table th, .years-table td { text-align: left; vertical-align: top; padding: 7px 6px 7px 0; border-top: 1px solid var(--rule); overflow-wrap: anywhere; }
+.years-table thead th { white-space: nowrap; border-top: none; padding-top: 0; color: var(--pencil); font-size: var(--t-xs); font-weight: 700; }
+.years-table thead .unit { display: block; font-weight: 400; }
+.years-table th:nth-child(1), .years-table td:nth-child(1) { width: 3.9em; white-space: nowrap; }
+.years-table th:nth-child(3), .years-table td:nth-child(3) { width: 7.2em; }
+.years-table .col-owner { width: 5.4em; }
+.years-table.no-owner .col-owner { display: none; }
+.years-table tbody th { font-weight: 700; font-variant-numeric: tabular-nums; }
+.years-table .num { font-variant-numeric: tabular-nums; font-weight: 600; }
+.years-table .none { color: var(--pencil); font-size: var(--t-xs); padding-top: 9px; }
+.years-table .delta { display: block; font-size: var(--t-xs); font-weight: 600; color: var(--pencil); }
+.years-table .cell-note { display: block; font-size: var(--t-xs); font-weight: 400; color: var(--pencil); white-space: nowrap; }
 .seg { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); }
 .seg button { min-height: 36px; padding: 4px 14px; border-radius: var(--r-pill); font-size: var(--t-xs); border-width: 1px; }
 .seg button[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }

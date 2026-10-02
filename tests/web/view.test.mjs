@@ -1,7 +1,7 @@
 // view.js (J5-023, ADR-17): manifest·기록·거래 검증, 금액 표기, 지번 대조, 물건·필지 이력 조립, 연도 묶음. DOM 없음.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, fmtKrw, parseJibun, jibunMatch, assetHistory, parcelHistory, attrHistoryItems, groupByYear, viewSummary, parcelYearSummary, parcelYearSummaryInfo, YEAR_SUMMARY_MAX, yearSummaryRow } from "../../web/app/view.js";
+import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, fmtKrw, parseJibun, jibunMatch, assetHistory, parcelHistory, attrHistoryItems, groupByYear, viewSummary, parcelYearSummary, parcelYearSummaryInfo, YEAR_SUMMARY_MAX, yearSummaryRow, yearSummaryCells } from "../../web/app/view.js";
 
 const A0 = "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a50", A1 = "7c1f4a0e-3b2d-4e5f-8a9b-0c1d2e3f4a51";
 const R = (id, asset, type, at, payload, extra = {}) => ({ record_id: id, asset_id: asset, record_type: type, observed_at: at, payload, attachments: [], supersedes_id: null, ...extra });
@@ -189,4 +189,25 @@ test("parcelYearSummaryInfo: 연도 상한은 PC 와 같은 40, 빠진 앞 연�
   const cut = parcelYearSummaryInfo(feature, [], null, [{ year: 2019, price: 1 }, { year: 2021, price: 2 }, { year: 2025, price: 3 }, { year: 2026, price: 4 }], { maxYears: 2 });
   assert.deepEqual([cut.rows.map((r) => r.year), cut.omitted], [[2026, 2025], { from: 2019, to: 2024, count: 2 }]);
   assert.deepEqual(parcelYearSummaryInfo(feature, [], null, []), { rows: [], omitted: null });
+});
+
+test("yearSummaryCells: 연도별 표의 칸, 글 한 줄과 같은 값·판정 (J5-055)", () => {
+  const feature = { id: "9999900100100010000", properties: { emd_name: "가상동", emd_code: "9999900100", label: "1", bon: 1, bu: 0, mountain: false } };
+  const tx = (id, ymd, jibun) => T(ID(id), ymd, jibun, { lawd_cd: "99999" });
+  const txDoc = { j5transactions: "1.0.0", count: 2, transactions: [tx(1, "202608", "1"), tx(2, "202608", "1-*")],
+    zone_rule: { version: 1, core: ["가상동"], comparison: [] },
+    coverage: [{ lawd_cd: "99999", year: 2026, months_complete: 8, months_any: 8 }, { lawd_cd: "99999", year: 2024, months_complete: 0, months_any: 2 }] };
+  const items = parcelHistory(feature, [], { events: [], records: [], transactions: txDoc.transactions });
+  const rows = parcelYearSummary(feature, items, txDoc, [{ year: 2025, price: 12e6 }, { year: 2026, price: 11.4e6 }], { ownership: { known: true, dates: ["2026-09-24"] } });
+  assert.deepEqual(yearSummaryCells(rows[0]), { year: "2026", price: "11,400,000", delta: "-5.0%", tx: "1건", txCounted: true, txNotes: ["번지대 1", "수집 8/12개월"], owner: "09-24" });
+  assert.deepEqual(yearSummaryCells(rows[1]), { year: "2025", price: "12,000,000", delta: "", tx: "미수집", txCounted: false, txNotes: [], owner: "없음" }, "수집 안 한 해는 0 건이 아니라 미수집");
+  assert.equal(yearSummaryCells(rows[2]).tx, "일부만 수집");
+  assert.deepEqual(yearSummaryCells(rows[2]).txNotes, ["2개월 시도"], "일부만 받은 해는 시도한 개월 수 (PC 와 같은 값)");
+  assert.equal(yearSummaryCells(rows[2]).price, null, "공시지가 자료 없음은 null");
+  // 수집했고 거래가 없는 해는 0건, 연결 거래는 따로
+  const zero = { year: 2027, price: null, deltaPct: null, exact: 0, prefix: 0, linked: 2, monthsComplete: 12, tx: "counted", owner: null };
+  assert.deepEqual(yearSummaryCells(zero), { year: "2027", price: null, delta: "", tx: "0건", txCounted: true, txNotes: ["연결 2", "수집 12/12개월"], owner: null });
+  assert.equal(yearSummaryCells({ ...zero, tx: "outside" }).tx, "범위 밖");
+  assert.equal(yearSummaryCells({ ...zero, tx: "unknown" }).tx, "모름");
+  assert.equal(yearSummaryCells({ ...zero, owner: { known: false, dates: [] } }).owner, "자료 없음", "토지소유 자료가 없으면 변동 없음이 아니다");
 });
