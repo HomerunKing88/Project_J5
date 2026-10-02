@@ -304,7 +304,8 @@ export function yearSummaryRow(r) {
 const TX_STATE_SHORT = { not_collected: "미수집", incomplete: "일부만 수집", outside: "범위 밖", unknown: "모름" };
 
 /**
- * 연도별 요약 한 줄을 표의 칸으로 (J5-055): 필지 카드·이력 화면의 표가 쓴다. 글 한 줄(yearSummaryRow, PC years_text 와 같은 글)과 값·판정은 같다.
+ * 연도별 요약 한 줄을 표의 칸으로 (J5-055): 필지 카드·이력 화면의 표가 쓴다. 값·판정은 이 폰의 글 한 줄(yearSummaryRow)과 같고, 규칙은 PC db parcels-years 와 같다.
+ * PC 글(years_text)은 같은 필지의 마지막 거래 금액·날짜와 같은 기준연도 값 바뀜을 더 적으므로 글끼리는 같지 않다. 대조는 칸의 값으로 한다.
  * price 는 원/㎡ 글(자료가 없으면 null), delta 는 전년 대비, tx 는 같은 필지 거래 수(수집했을 때) 또는 모르는 사유,
  * txNotes 는 번지대·연결 수와 수집 개월, owner 는 그 연도의 소유 변동일(월-일) 또는 "없음"·"자료 없음"(소유 칸이 없으면 null).
  */
@@ -314,6 +315,7 @@ export function yearSummaryCells(r) {
   if (counted && r.prefix) txNotes.push(`번지대 ${r.prefix}`);
   if (counted && r.linked) txNotes.push(`연결 ${r.linked}`);
   if (counted && r.monthsComplete != null) txNotes.push(`수집 ${r.monthsComplete}/12개월`);
+  if (r.tx === "incomplete" && r.monthsAny) txNotes.push(`${r.monthsAny}개월 시도`);   // PC 의 "거래 수집 실패·부분만 (n개월 시도)" 와 같은 값
   const owner = !r.owner ? null : !r.owner.known ? "자료 없음" : r.owner.dates.length ? r.owner.dates.map((d) => d.slice(5)).join(", ") : "없음";
   return {
     year: String(r.year),

@@ -202,6 +202,7 @@ test("yearSummaryCells: 연도별 표의 칸, 글 한 줄과 같은 값·판정 
   assert.deepEqual(yearSummaryCells(rows[0]), { year: "2026", price: "11,400,000", delta: "-5.0%", tx: "1건", txCounted: true, txNotes: ["번지대 1", "수집 8/12개월"], owner: "09-24" });
   assert.deepEqual(yearSummaryCells(rows[1]), { year: "2025", price: "12,000,000", delta: "", tx: "미수집", txCounted: false, txNotes: [], owner: "없음" }, "수집 안 한 해는 0 건이 아니라 미수집");
   assert.equal(yearSummaryCells(rows[2]).tx, "일부만 수집");
+  assert.deepEqual(yearSummaryCells(rows[2]).txNotes, ["2개월 시도"], "일부만 받은 해는 시도한 개월 수 (PC 와 같은 값)");
   assert.equal(yearSummaryCells(rows[2]).price, null, "공시지가 자료 없음은 null");
   // 수집했고 거래가 없는 해는 0건, 연결 거래는 따로
   const zero = { year: 2027, price: null, deltaPct: null, exact: 0, prefix: 0, linked: 2, monthsComplete: 12, tx: "counted", owner: null };

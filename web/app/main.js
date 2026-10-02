@@ -742,7 +742,8 @@ function parcelYears(feature, assetsInside) {
   return { items, rows, omitted };
 }
 
-/** 연도별 요약 표 (J5-055). 줄마다 data-year·data-tx 와 글 한 줄(title, PC years_text 와 같은 글). limit 를 주면 최근 연도부터 그만큼만.
+/** 연도별 요약 표 (J5-055). 줄마다 data-year·data-tx 와 이 폰의 요약 글 한 줄(title, yearSummaryRow). PC db parcels-years 와는 글이 아니라 칸의 값으로 대조한다(PC 글은 마지막 거래 금액·날짜 등을 더 적는다).
+ *  limit 를 주면 최근 연도부터 그만큼만.
  *  모든 줄에 소유 칸이 없으면(토지소유 정보를 주지 않음) 소유 열을 감춘다 */
 function renderYearsTable(table, rows, { limit = Infinity } = {}) {
   const shown = rows.slice(0, limit);

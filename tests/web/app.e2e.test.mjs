@@ -481,7 +481,7 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       assert.deepEqual(await cdp.eval("Array.from(document.querySelectorAll('#history-list h3')).map(h => h.textContent)"), ["2026", "2025"]);
       // 필지 연도별 요약 (J5-047): 가상 파생본의 수집 개월(2025-08·2026-08 완전 수집)과 범위 규칙(가상동 핵심). 2026 은 수집했고 이 필지 거래가 없어 0. 2026 의 소유 변동일은 파생본 속성 이력에서 (J5-053)
       assert.equal(await cdp.eval("document.getElementById('history-years').hidden"), false);
-      // 표 (J5-055): 칸마다 값, 줄의 title 은 PC years_text 와 같은 글 한 줄
+      // 표 (J5-055): 칸마다 값, 줄의 title 은 이 폰의 요약 글 한 줄 (PC 와는 칸의 값으로 대조)
       const yearCells = "Array.from(document.querySelectorAll('#ID tbody tr')).map(tr => [tr.dataset.tx, ...Array.from(tr.cells).map(c => c.textContent)])";
       const yearsExpected = [["counted", "2026", "13,000,000", "0건수집 1/12개월", "09-24"], ["counted", "2025", "자료 없음", "1건번지대 1수집 1/12개월", "없음"]];
       assert.deepEqual(await cdp.eval(yearCells.replace("ID", "history-years-table")), yearsExpected);
