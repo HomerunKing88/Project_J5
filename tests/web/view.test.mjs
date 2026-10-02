@@ -169,6 +169,13 @@ test("parcelYearSummary·yearSummaryRow: 연도마다 소유 변동일, 소유 �
   const none = parcelYearSummary(feature, [], null, prices, { ownership: { known: false, dates: [] } });
   assert.equal(yearSummaryRow(none[0])[1], "공시지가 2원/㎡ (+100.0%) · 거래 수집 현황 모름 · 소유 자료 없음", "PC years_text 와 같은 글");
   assert.equal(parcelYearSummary(feature, [], null, prices)[0].owner, null, "주지 않으면 소유 칸 없음");
+  // 끝 연도는 PC 처럼 올해(폰은 PC 자료 파일을 만든 해)까지: 공시지가가 2025 까지여도 2026 소유 변동이 보인다 (J5-053 리뷰)
+  const own26 = { known: true, dates: ["2017-01-01", "2026-09-01"] };
+  const upTo = parcelYearSummary(feature, [], null, [{ year: 2025, price: 1 }], { ownership: own26, thisYear: 2026 });
+  assert.deepEqual(upTo.map((r) => [r.year, r.price, r.owner.dates]), [[2026, null, ["2026-09-01"]], [2025, 1, []]]);
+  assert.deepEqual(parcelYearSummary(feature, [], null, [], { ownership: own26, thisYear: 2026 }).map((r) => r.year), [2026], "다른 자료가 없어도 그해 소유 변동은 보인다");
+  assert.deepEqual(parcelYearSummary(feature, [], null, [], { ownership: { known: true, dates: ["2017-01-01"] }, thisYear: 2026 }), [], "오래된 변동일만 있으면 빈 요약");
+  assert.equal(parcelYearSummary(feature, [], null, [{ year: 2025, price: 1 }], { thisYear: 2026 }).length, 2, "올해 줄은 소유 자료와 무관하게 생긴다 (PC 와 같다)");
 });
 
 test("parcelYearSummaryInfo: 연도 상한은 PC 와 같은 40, 빠진 앞 연도를 알린다 (J5-051)", () => {

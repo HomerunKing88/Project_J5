@@ -709,11 +709,17 @@ function openAssetHistory(asset) {
   openHistory({ title: asset.label, sub: `${assetSub(asset)} · 기록 ${items.length}건`, items, asset });
 }
 
+/** PC 자료 파일을 만든 해 (연도별 요약의 끝 연도, PC parcels-years 의 올해와 같은 뜻). 파일이 없으면 null */
+function viewYear() {
+  const g = state.view?.manifest?.generated_at;
+  return typeof g === "string" && /^\d{4}-/.test(g) ? Number(g.slice(0, 4)) : null;
+}
+
 function openParcelHistory(feature, assetsInside) {
   const p = feature.properties;
   const items = parcelHistory(feature, assetsInside, historyData());
   const prices = priceTrend(p.attrs, p.attrs_history).map((q) => ({ year: q.year, price: q.price }));
-  const { rows: years, omitted } = parcelYearSummaryInfo(feature, items, state.view?.transactions ?? null, prices, { ownership: ownershipChanges(p.attrs, p.attrs_history) });
+  const { rows: years, omitted } = parcelYearSummaryInfo(feature, items, state.view?.transactions ?? null, prices, { ownership: ownershipChanges(p.attrs, p.attrs_history), thisYear: viewYear() });
   openHistory({ title: `${parcelTitle(p)} 필지`, sub: `필지 번호 ${feature.id} · 안의 물건 ${assetsInside.length}개 · 기록·거래 ${items.length}건`, items, asset: null, years, yearsOmitted: omitted });
 }
 

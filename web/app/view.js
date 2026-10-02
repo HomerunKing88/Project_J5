@@ -235,8 +235,9 @@ export const YEAR_SUMMARY_MAX = 40;
 
 /** parcelYearSummary 와 같은 줄에 더해, 상한 때문에 보이지 않는 앞 연도 {from, to, count}(자료가 있는 연도 수) 또는 null (J5-051).
  * ownership 은 parcels.ownershipChanges 의 { known, dates } 이며, 주면 줄마다 owner = { known, dates(그 연도의 소유 변동일) } (J5-053, PC parcels-years 와 같다).
- * 소유 변동일은 오래된 날짜가 많아 연도 범위를 정하는 데 쓰지 않는다(범위 안이면 적는다, PC 와 같다). 주지 않으면 owner 는 null. */
-export function parcelYearSummaryInfo(feature, items, txDoc, prices = [], { maxYears = YEAR_SUMMARY_MAX, ownership = null } = {}) {
+ * 소유 변동일은 오래된 날짜가 많아 연도 범위를 정하는 데 쓰지 않는다(범위 안이면 적는다, PC 와 같다). 주지 않으면 owner 는 null.
+ * thisYear 를 주면 끝 연도를 그해까지 늘린다(PC 의 올해와 같은 뜻, 폰은 PC 자료 파일을 만든 해). */
+export function parcelYearSummaryInfo(feature, items, txDoc, prices = [], { maxYears = YEAR_SUMMARY_MAX, ownership = null, thisYear = null } = {}) {
   const props = feature?.properties ?? {};
   const sgg = typeof props.emd_code === "string" ? props.emd_code.slice(0, 5) : typeof feature?.id === "string" ? feature.id.slice(0, 5) : null;
   const cov = new Map();
@@ -256,8 +257,12 @@ export function parcelYearSummaryInfo(feature, items, txDoc, prices = [], { maxY
   const priceByYear = new Map();
   for (const q of prices) if (Number.isInteger(q.year) && Number.isFinite(q.price)) priceByYear.set(q.year, q.price);
   const years = [...priceByYear.keys(), ...txByYear.keys(), ...cov.keys()];
-  if (!years.length) return { rows: [], omitted: null };
-  const y1 = Math.max(...years), y0 = Math.max(Math.min(...years), y1 - maxYears + 1);
+  // 끝 연도는 PC parcels-years 처럼 "올해" 까지 늘린다. 폰의 올해는 PC 자료 파일을 만든 해(thisYear)이며 기기 시계를 쓰지 않는다.
+  // 그해의 소유 변동만 있는 경우에도 줄이 생긴다. 오래된 소유 변동일은 범위를 넓히지 않는다 (J5-053 리뷰)
+  const ownThisYear = Number.isInteger(thisYear) && (ownership?.dates ?? []).some((d) => d.startsWith(`${thisYear}-`));
+  if (!years.length && !ownThisYear) return { rows: [], omitted: null };
+  const ends = Number.isInteger(thisYear) ? [...years, thisYear] : years;
+  const y1 = Math.max(...ends), y0 = Math.max(years.length ? Math.min(...years) : y1, y1 - maxYears + 1);
   const before = [...new Set(years.filter((y) => y < y0))];
   const omitted = before.length ? { from: Math.min(...before), to: y0 - 1, count: before.length } : null;
   const rows = [];
