@@ -266,6 +266,8 @@ def test_asof_observation_vs_as_recorded(db, home, server, tmp_path):
 def test_cli_record_add_and_asof(db, tmp_path, capsys, monkeypatch):
     db.close()
     monkeypatch.setenv("J5_DATA_HOME", str(tmp_path / "home"))
+    # 정본 시각을 고정한다: 아래 `asof --at 2026-09-30 --as-recorded` 는 그날까지 기록된 것만 보므로 실제 시계로는 2026-10-01 부터 실패했다
+    monkeypatch.setattr("j5.db.store.now_utc", lambda: "2026-09-29T12:00:00Z")
     f = write(tmp_path, target())
     rc = cli.main(["db", "record-add", str(f)])
     out = capsys.readouterr()

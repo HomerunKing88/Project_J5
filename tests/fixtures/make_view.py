@@ -60,12 +60,16 @@ MONTHS = {
 }
 
 
+FIXED_NOW = "2026-09-30T09:00:00Z"
+
+
 def build(out_dir: Path, *, parcels: bool = True) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="j5view-fixture-") as td:
         home = Path(td) / "home"
         home.mkdir()
         db = Db.create(home / "db" / "j5.sqlite3", study_id=STUDY, data_mode="synthetic")
+        db.now = lambda: FIXED_NOW   # 파생본 생성 시각을 고정한다: 폰 연도별 요약의 끝 연도가 이 시각의 연도라 실제 시계를 따르면 해가 바뀔 때 시험이 바뀐다 (J5-053 리뷰)
         db.load_seed(json.loads(SEED.read_text(encoding="utf-8")))
         r = import_package(db, PACKAGE, home)
         assert r.outcome == "applied", r

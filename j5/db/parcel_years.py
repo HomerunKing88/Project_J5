@@ -8,7 +8,8 @@
   그 필지 시군구의 그 연도에 완전 수집(complete/empty)한 달이 없으면 거래 수는 null + 사유(`not_collected` 실행 없음, `collection_incomplete` 실패·부분만)
   로 둔다(0 건과 구분한다, 데이터 사전 §7.1 "API 실패·빈 결과·일부 페이지 누락 구분"). 그해 거래가 정본에 있으면 센 값을 적는다.
   수집한 달 수(`rt_months_complete`: complete/empty, `rt_months_any`: 결과와 무관)를 함께 적는다. 12개월이 아니면 일부 연도다.
-- 소유 변동일: 토지소유 스냅샷에 적힌 소유 변동일 중 그 연도의 날짜. 토지소유 스냅샷이 없는 필지는 `ownership_snapshot` 이 false 이고 빈 칸은 모름이다.
+- 소유 변동일: 토지소유 스냅샷에 적힌 소유 변동일 중 그 연도의 날짜. 값이 하나라도 든 토지소유 스냅샷이 없는 필지는 `ownership_snapshot` 이 false 이고 빈 칸은 모름이다
+  (원본에 소유 행이 없어 값이 모두 null 인 스냅샷은 자료 없음으로 본다, J5-053. 폰 parcels.ownershipChanges 와 같은 규칙).
 값은 자료 표기 그대로이며 시세·가치 판단이 아니다. 번지대 거래를 이 필지의 거래로 확정하지 않는다.
 """
 
@@ -47,6 +48,11 @@ def _ownership_dates(snapshots: list[dict]) -> list[str]:
             if isinstance(d, str) and re.match(r"^\d{4}-\d{2}-\d{2}$", d):
                 dates.add(d)
     return sorted(dates)
+
+
+def _ownership_known(snapshots: list[dict]) -> bool:
+    """값이 하나라도 든 토지소유 스냅샷이 있는가. 원본에 소유 행이 없으면 스냅샷 값이 모두 null 이며 그때는 모름이다 (J5-053)."""
+    return any(s["kind"] == "land_ownership" and any(v is not None for v in s["values"].values()) for s in snapshots)
 
 
 def _prices_by_year(series: list[dict]) -> dict[int, dict]:
@@ -88,7 +94,8 @@ def parcel_years(db: Db, pnus: list[str], *, year_from: int | None = None, year_
             cov_cache[sgg] = coverage_by_year(db, sgg)
         prices = _prices_by_year(h["price_series"])
         own = _ownership_dates(h["snapshots"])
-        per.append((pnu, h, tx, sgg, prices, own))
+        own_known = _ownership_known(h["snapshots"])
+        per.append((pnu, h, tx, sgg, prices, own, own_known))
         # 기본 범위는 공시지가·거래·수집이 있는 연도로 정한다. 소유 변동일은 오래된 날짜가 많아 범위를 정하는 데 쓰지 않는다(범위 안이면 적는다)
         data_years |= set(prices) | {int(t["year"]) for t in tx["transactions"]} | {int(y) for y in cov_cache[sgg]}
     y0 = year_from if year_from is not None else (min(data_years) if data_years else this_year)
@@ -98,7 +105,7 @@ def parcel_years(db: Db, pnus: list[str], *, year_from: int | None = None, year_
     if y1 - y0 + 1 > MAX_YEARS:
         raise DbError("too_many_years", f"한 번에 {MAX_YEARS}개 연도까지 ({y0}~{y1}). --from/--to 로 좁힌다")
     out_rows = []
-    for pnu, h, tx, sgg, prices, own in per:
+    for pnu, h, tx, sgg, prices, own, own_known in per:
         by_year: dict[str, list] = {}
         for t in tx["transactions"]:
             by_year.setdefault(t["year"], []).append(t)
@@ -122,7 +129,7 @@ def parcel_years(db: Db, pnus: list[str], *, year_from: int | None = None, year_
                 "tx_linked": sum(t["match"] == "linked" for t in txs) if collected or txs else None,
                 "tx_missing_reason": None if collected or txs else ("collection_incomplete" if cov["any"] else "not_collected"),
                 "tx_exact_last_date": (last["deal_date"] or last["deal_ymd"]) if last else None, "tx_exact_last_amount_krw": last["amount_krw"] if last else None,
-                "ownership_snapshot": any(s["kind"] == "land_ownership" for s in h["snapshots"]),
+                "ownership_snapshot": own_known,
                 "ownership_changed_on": [d for d in own if d.startswith(str(y))]})
             prev_price = price
     return {"parcels": len(pnus), "year_from": y0, "year_to": y1, "on_date": on_date, "rows": out_rows}
