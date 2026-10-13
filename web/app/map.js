@@ -126,7 +126,7 @@ export function parcelLabelVisible(wb, label, view, w, h) {
  * SVG 점 지도. svgEl 은 index.html 의 정적 <svg>. onSelect(asset) 는 점을 탭했을 때.
  * 실패(예외)는 호출자가 잡아 목록만으로 동작하게 한다.
  */
-export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus, home = null } = {}) {
+export function createMap(svgEl, { onSelect, onSelectParcel, onSelectDeal, onTileStatus, home = null } = {}) {
   if (!svgEl || svgEl.namespaceURI == null || svgEl.tagName?.toLowerCase() !== "svg") throw new Error("SVG 요소가 아님");
   const NS = svgEl.namespaceURI;
   const node = (tag, attrs = {}) => {
@@ -143,6 +143,7 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus, home 
   const layerRoadLabels = node("g", { class: "layer-road-labels" });
   const layerShapes = node("g", { class: "layer-parcels" });
   const layerLabels = node("g", { class: "layer-parcel-labels" });
+  const layerDeals = node("g", { class: "layer-deals" });       // 실거래 (J5-063): 필지·번지대 위의 종류+금액 꼬리표. 위치점 아래
   const layerPts = node("g", { class: "layer-pts" });
   const layerLocate = node("g", { class: "layer-locate" });   // 현재 위치 (J5-027): 정확도 원 + 점. 저장하지 않는다
   const locateRing = node("circle", { class: "locate-ring", r: 0 });
@@ -158,7 +159,7 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus, home 
   const scaleText = node("text", { x: 10, y: 0 });
   layerScale.append(scaleLine, scaleText);
   const attribText = node("text", { class: "map-attrib", "text-anchor": "end" });
-  svgEl.replaceChildren(layerTiles, layerBase, layerRoadLabels, layerShapes, layerLabels, layerPts, layerLocate, layerPick, layerScale, attribText);
+  svgEl.replaceChildren(layerTiles, layerBase, layerRoadLabels, layerShapes, layerLabels, layerDeals, layerPts, layerLocate, layerPick, layerScale, attribText);
 
   let view = fitView([], 320, 280);
   let size = { w: 320, h: 280 };
@@ -170,6 +171,7 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus, home 
   };
   const centerAt = (c, scale) => { const v = visibleRect(); return { scale, tx: v.x + v.w / 2 - c.x * scale, ty: v.y + v.h / 2 - c.y * scale }; };
   const markers = new Map(); // asset_id → { g, dot, world, asset }
+  let deals = [];            // [{ id, g, world, w, h, visible }] 실거래 꼬리표 (최근 거래 먼저: 겹치면 앞의 것만 보인다)
   const parcels = new Map(); // pnu → { path, text, wb, lp, feature, visible }
   let parcelOrigin = { x: 0, y: 0 };
   let parcelMode = "";
@@ -252,6 +254,16 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus, home 
     for (const m of markers.values()) {
       const p = toScreen(m.world, view);
       m.g.setAttribute("transform", `translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`);
+    }
+    // 실거래 꼬리표: 점 위쪽에 둔다. 앞(최근)의 것과 겹치거나 화면 밖이면 감춘다
+    const placed = [];
+    for (const d of deals) {
+      const p = toScreen(d.world, view);
+      const r = { x0: p.x - d.w / 2, y0: p.y - d.h - 6, x1: p.x + d.w / 2, y1: p.y - 6 };
+      const off = r.x1 < 0 || r.x0 > size.w || r.y1 < 0 || r.y0 > size.h;
+      const vis = !off && !placed.some((q) => r.x0 < q.x1 && r.x1 > q.x0 && r.y0 < q.y1 && r.y1 > q.y0);
+      if (vis) { placed.push(r); d.g.setAttribute("transform", `translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`); }
+      if (vis !== d.visible) { d.visible = vis; d.g.setAttribute("visibility", vis ? "visible" : "hidden"); }
     }
     if (location) {
       const p = toScreen(location.world, view);
@@ -488,6 +500,31 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus, home 
       render();
     },
     getView() { return { ...view }; },
+    /** 실거래 꼬리표 (J5-063). items: [{ id, lonlat, kind, value, more, masked }] (최근 거래 먼저). 빈 배열이면 지운다. */
+    setDeals(items) {
+      layerDeals.replaceChildren();
+      deals = [];
+      for (const it of items ?? []) {
+        if (!Array.isArray(it.lonlat) || !it.lonlat.every(Number.isFinite)) continue;
+        const g = node("g", { class: `deal${it.masked ? " masked" : ""}`, "data-deal-id": it.id, visibility: "hidden" });
+        const title = node("title"); title.textContent = it.title ?? `${it.kind} ${it.value}`;
+        const bg = node("rect", { class: "deal-bg", rx: 6, ry: 6, height: 24 });
+        const kindBg = node("rect", { class: "deal-kind-bg", rx: 6, ry: 6, height: 24 });
+        const kind = node("text", { class: "deal-kind", y: -18, "dominant-baseline": "central" }); kind.textContent = it.kind;
+        const val = node("text", { class: "deal-value", y: -18, "dominant-baseline": "central" }); val.textContent = it.value + (it.more ? ` +${it.more}` : "");
+        g.append(title, bg, kindBg, kind, val);
+        layerDeals.append(g);
+        // 글 폭을 재어 꼬리표 크기를 정한다 (재지 못하면 글자 수로 어림)
+        const len = (t) => { try { const v = t.getComputedTextLength(); if (v > 0) return v; } catch {} return t.textContent.length * 7.5; };
+        const kw = len(kind) + 12, vw = len(val) + 12, w = kw + vw;
+        bg.setAttribute("x", (-w / 2).toFixed(1)); bg.setAttribute("y", -30); bg.setAttribute("width", w.toFixed(1));
+        kindBg.setAttribute("x", (-w / 2).toFixed(1)); kindBg.setAttribute("y", -30); kindBg.setAttribute("width", kw.toFixed(1));
+        kind.setAttribute("x", (-w / 2 + 6).toFixed(1)); val.setAttribute("x", (-w / 2 + kw + 6).toFixed(1));
+        deals.push({ id: it.id, g, world: mercator(it.lonlat), w, h: 24, visible: false });
+      }
+      render();
+      return deals.length;
+    },
     /** 자리 고르기의 십자를 켜고 끈다 (J5-062). */
     setPick(on) {
       pickOn = !!on;
@@ -515,7 +552,7 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus, home 
   const onDown = (e) => {
     if (e.button != null && e.button !== 0 && e.pointerType === "mouse") return;
     const p = local(e);
-    if (pointers.size === 0) { downTarget = e.target.closest ? e.target.closest("g.pt, path.parcel") : null; moved = 0; }
+    if (pointers.size === 0) { downTarget = e.target.closest ? e.target.closest("g.pt, g.deal, path.parcel") : null; moved = 0; }
     else downTarget = null;
     pointers.set(e.pointerId, p);
     try { svgEl.setPointerCapture(e.pointerId); } catch {}
@@ -547,7 +584,9 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus, home 
     pointers.delete(e.pointerId);
     try { svgEl.releasePointerCapture(e.pointerId); } catch {}
     if (wasSingle && e.type === "pointerup" && moved < TAP_PX && downTarget) {
-      if (downTarget.hasAttribute("data-asset-id")) {
+      if (downTarget.hasAttribute("data-deal-id")) {
+        if (onSelectDeal) onSelectDeal(downTarget.getAttribute("data-deal-id"));
+      } else if (downTarget.hasAttribute("data-asset-id")) {
         const m = markers.get(downTarget.getAttribute("data-asset-id"));
         if (m && onSelect) onSelect(m.asset);
       } else {

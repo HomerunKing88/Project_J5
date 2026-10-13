@@ -367,3 +367,94 @@ export function viewSummary(rec) {
   return { version: m.source_dataset_version, generatedAt: m.generated_at, assets: c.assets ?? 0, records: rec.records?.length ?? c.records ?? 0,
            transactions: rec.transactions?.transactions?.length ?? 0, parcels: c.parcels ?? 0, photosSkipped: rec.photos_skipped ?? 0, source: rec.source, loadedAt: rec.loaded_at };
 }
+
+// ---- 지도의 실거래 표시 (J5-063) ----
+// 지번이 온전한 거래는 그 필지 위에, 지번 일부가 가려진 거래는 번지대(같은 법정동·같은 가린 지번)마다 묶어 후보 필지들 가운데에 둔다.
+// 번지대 묶음은 어느 필지인지 확정하지 않는다 (AGENTS "마스킹된 거래를 추정으로 특정 PNU 에 확정하지 않는다"). 불러온 필지에 닿지 않는 거래는 수만 센다.
+
+/** 1평 = 3.305785㎡ (단가 표시용). */
+export const PYEONG_M2 = 3.305785;
+export const DEAL_MODES = Object.freeze({ total: "총액", land: "대지 평당", floor: "연면적 평당" });
+export const DEAL_YEARS = Object.freeze([1, 3, 5, 0]);   // 0 = 전체
+const DEAL_KIND_RULES = [["근린", "근린"], ["업무", "업무"], ["숙박", "숙박"], ["판매", "판매"], ["의료", "의료"], ["교육", "교육"], ["공장", "공장"], ["창고", "창고"],
+  ["다가구", "다가구"], ["단독", "단독"], ["주택", "주택"]];
+
+/** 거래 종류의 짧은 이름 (지도 표시용). 건물 용도 → 근린·업무·숙박 등, 건물 정보 없이 대지만 있으면 토지, 모르면 건물. */
+export function dealKind(t) {
+  const s = [t?.building_use, t?.building_kind].filter((x) => typeof x === "string").join(" ");
+  for (const [k, label] of DEAL_KIND_RULES) if (s.includes(k)) return label;
+  if (!t?.building_use && !Number.isFinite(t?.building_area_m2) && Number.isFinite(t?.plottage_area_m2)) return "토지";
+  return "건물";
+}
+
+/** 총액 또는 평당 단가(원). 지분 거래는 단가를 내지 않는다(면적이 거래 지분과 맞지 않을 수 있다). 금액·면적이 없으면 null. */
+export function unitPrice(t, mode = "total") {
+  if (!Number.isFinite(t?.amount_krw)) return null;
+  if (mode === "total") return t.amount_krw;
+  if (t.share_deal) return null;
+  const a = mode === "land" ? t.plottage_area_m2 : mode === "floor" ? t.building_area_m2 : null;
+  if (!Number.isFinite(a) || a <= 0) return null;
+  return t.amount_krw / (a / PYEONG_M2);
+}
+
+/** 지도·목록의 값 글: 총액 "18.5억", 단가 "4,200만/평". 낼 수 없으면 사유. */
+export function dealValueText(t, mode = "total") {
+  const v = unitPrice(t, mode);
+  if (v !== null) return mode === "total" ? fmtKrw(v) : `${fmtKrw(Math.round(v))}/평`;
+  if (!Number.isFinite(t?.amount_krw)) return "금액 미확인";
+  return t.share_deal ? "지분 거래" : mode === "land" ? "대지 면적 미확인" : "연면적 미확인";
+}
+
+const dealDate = (t) => t.deal_date ?? `${t.deal_ymd.slice(0, 4)}-${t.deal_ymd.slice(4, 6)}`;
+const byDealDesc = (a, b) => (dealDate(a) < dealDate(b) ? 1 : dealDate(a) > dealDate(b) ? -1 : a.transaction_id < b.transaction_id ? 1 : -1);
+
+/** since(YYYY-MM-DD) 이후 거래만 (월만 아는 거래는 그달 1일로 본다). since 가 없으면 전부. */
+export function dealsSince(transactions, since = null) {
+  return (transactions ?? []).filter((t) => !since || `${dealDate(t)}-01`.slice(0, 10) >= since);
+}
+
+/** years(0=전체)와 기준일(YYYY-MM-DD)로 since 를 만든다. */
+export function dealSince(years, today) {
+  if (!years || !/^\d{4}-\d{2}-\d{2}$/.test(String(today ?? ""))) return null;
+  return `${Number(today.slice(0, 4)) - years}${today.slice(4)}`;
+}
+
+/**
+ * 거래를 지도에 놓는다. { parcels: [{pnu, feature, txs}], groups: [{key, emd, jibun, features, txs}], outside }.
+ * parcels: 지번이 온전히 같은 필지(jibunMatch exact). groups: 가린 지번이 닿는 필지가 하나 이상인 번지대(필지 미확정). outside: 불러온 필지에 닿지 않는 거래 수.
+ * 각 txs 는 최근 것부터.
+ */
+export function placeDeals(transactions, features) {
+  const byPnu = new Map(), groups = new Map();
+  let outside = 0;
+  for (const t of transactions ?? []) {
+    let exact = null; const prefix = [];
+    for (const f of features ?? []) {
+      const m = jibunMatch(t, f.properties);
+      if (m === "exact") { exact = f; break; }
+      if (m === "prefix") prefix.push(f);
+    }
+    if (exact) {
+      if (!byPnu.has(exact.id)) byPnu.set(exact.id, { pnu: exact.id, feature: exact, txs: [] });
+      byPnu.get(exact.id).txs.push(t);
+    } else if (prefix.length) {
+      const key = `${t.lawd_cd ?? ""}|${t.emd_name}|${t.jibun}`;
+      if (!groups.has(key)) groups.set(key, { key, emd: t.emd_name, jibun: t.jibun, features: prefix, txs: [] });
+      groups.get(key).txs.push(t);
+    } else {
+      outside += 1;
+    }
+  }
+  const out = (m) => [...m.values()].map((v) => ({ ...v, txs: v.txs.sort(byDealDesc) }));
+  return { parcels: out(byPnu), groups: out(groups), outside };
+}
+
+/** 번지대·주변 거래 목록의 둘째 줄: 대지·연면적과 평당 단가, 건축연도, 지분 거래. 값이 없으면 그 칸을 뺀다. */
+export function dealDetailText(t) {
+  const parts = [];
+  if (Number.isFinite(t?.plottage_area_m2)) parts.push(`대지 ${t.plottage_area_m2}㎡ (${dealValueText(t, "land")})`);
+  if (Number.isFinite(t?.building_area_m2)) parts.push(`연면적 ${t.building_area_m2}㎡ (${dealValueText(t, "floor")})`);
+  if (Number.isInteger(t?.build_year)) parts.push(`${t.build_year}년 건축`);
+  if (t?.share_deal) parts.push("지분 거래");
+  return parts.join(" · ");
+}

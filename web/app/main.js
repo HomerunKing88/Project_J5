@@ -7,7 +7,7 @@ import { uuid4, isUuid } from "./uuid.js";
 import { isoWithOffset, fromDatetimeLocal, toDatetimeLocal, localDate } from "./time.js";
 import { buildEvent, validateEvent, lineBytes, PHOTO_TAGS, PHOTO_TAG_LABEL, CHANGE_STATUS_LABEL, PHOTO_LIMIT, VIEWPOINT_MAX } from "./event.js";
 import { validateSeed, filterAssets, hasTracking, isWatchlist, TRACKING_LABEL, ASSET_FILTERS } from "./seed.js";
-import { validateParcels, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, attrLines, attrsSummary, ZONE_LABELS, findParcels, parcelAt, interiorPoint, priceTrend, priceTrendRow, ownershipKinds, ownershipChanges, parseFilter, hasCriteria, filterParcels, filterRowText, FILTER_LIMIT } from "./parcels.js";
+import { validateParcels, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, attrLines, attrsSummary, ZONE_LABELS, findParcels, parcelAt, interiorPoint, labelPoint, priceTrend, priceTrendRow, ownershipKinds, ownershipChanges, parseFilter, hasCriteria, filterParcels, filterRowText, FILTER_LIMIT } from "./parcels.js";
 import { selectRecords, planBatches, buildPackage, hasRemainingBatches, studyIdError } from "./export.js";
 import { migrationReadiness, migrationText, persistenceText } from "./migrate.js";
 import { createNavigator, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, pickLabel, pickPoint, MODE_LABEL, MODE_SHORT } from "./ui.js";
@@ -15,17 +15,18 @@ import { externalMapLinks, bboxCenter, LINK_ATTRS } from "./extmap.js";
 import { validateBasemap, LAYERS as BASEMAP_LAYERS, LAYER_LABEL as BASEMAP_LAYER_LABEL } from "./basemap.js";
 import { PROVIDERS, resolveTileConfig, prefetchPlan, padBbox, tileUrl, hasKeyLike, TILE_CACHE, PREFETCH_ZOOMS, KEY_PLACEHOLDER } from "./tiles.js";
 import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
-import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummaryInfo, yearSummaryRow, yearSummaryCells, recentDeals, parcelSummaryItems } from "./view.js";
+import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummaryInfo, yearSummaryRow, yearSummaryCells, recentDeals, parcelSummaryItems, fmtKrw, placeDeals, dealKind, dealValueText, dealDetailText, dealsSince, dealSince, DEAL_MODES, DEAL_YEARS } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.27";
+export const APP_VERSION = "0.2.28";
 /** 자료가 없을 때 지도가 처음 보이는 곳: 종로5가역 부근 [경도, 위도] (J5-062, 배경 지도만 켠 경우) */
 const FIELD_HOME = [127.0019, 37.5709];
 const PARCEL_CARD_YEARS = 5;   // 필지 카드의 연도별 표에 보이는 최근 연도 수 (J5-055)
 const PARCEL_CARD_DEALS = 3;   // 필지 카드의 최근 거래 수 (J5-057)
 const $ = (id) => document.getElementById(id);
 const state = { store: null, parcelFilter: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, zoneColors: false, seedLoadedAt: null, seedSource: null, openParcel: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
-                nav: null, returnFocus: null, mapSelected: null, assetFilter: "all", picking: false };
+                nav: null, returnFocus: null, mapSelected: null, assetFilter: "all", picking: false,
+                dealView: { on: false, mode: "total", years: 5 }, dealGroups: new Map() };
 
 // 대상 목록은 synthetic·private_real, 필지·배경 번들은 synthetic·real 을 쓴다 (리뷰 반영 PR #103)
 const DATA_MODE_TEXT = { synthetic: "연습용 자료", private_real: "실제 자료", real: "실제 자료" };
@@ -308,13 +309,14 @@ async function loadSyntheticAll() {
   await loadSyntheticSeed();
   if (!state.parcelsRec) await loadSyntheticParcels();
   if (!state.basemapRec) await loadSyntheticBasemap();
+  if (!state.view) await loadSyntheticDeals();
   text($("home-note"), $("seed-note").textContent, $("seed-note").className);
   showFieldAfterLoad();
 }
 
 // ---- 연습용 자료 지우기 (J5-061): 앱에 든 가상 대상·필지·윤곽만 지운다. 기록·사진·PC 자료 파일·이 폰이 만든 대상은 그대로 ----
 function renderSampleItem() {
-  $("sample-item").hidden = !(state.seedSource === SAMPLE_SOURCE || state.parcelsRec?.source === SAMPLE_SOURCE || state.basemapRec?.source === SAMPLE_SOURCE);
+  $("sample-item").hidden = !(state.seedSource === SAMPLE_SOURCE || state.parcelsRec?.source === SAMPLE_SOURCE || state.basemapRec?.source === SAMPLE_SOURCE || state.view?.source === SAMPLE_SOURCE);
 }
 
 async function clearSample() {
@@ -322,9 +324,10 @@ async function clearSample() {
     const c = await state.store.clearSample();
     if (c.parcels) applyParcels(null);
     if (c.basemap) applyBasemap(null);
+    if (c.deals) { state.view = null; renderViewStatus(); renderDeals(); }
     await renderAssets();
     await renderRecords();
-    const parts = [c.assets && "대상 목록", c.parcels && "필지", c.basemap && "건물·도로 윤곽"].filter(Boolean);
+    const parts = [c.assets && "대상 목록", c.parcels && "필지", c.basemap && "건물·도로 윤곽", c.deals && "거래"].filter(Boolean);
     if (!parts.length) return text($("sample-note"), "지울 연습용 자료가 없습니다.", "pencil");
     const mode = await state.store.getMeta("data_mode");
     text($("sample-note"), `연습용 자료(${parts.join("·")})를 지웠습니다. 저장한 기록은 그대로입니다.` +
@@ -460,6 +463,7 @@ function applyParcels(rec) {
   applySearchUi();
   parcelsNote(rec);
   renderSampleItem();
+  renderDeals();
   updateMapInset();
   mapCall((m) => mapNote(m.setAssets(visibleAssets())));
 }
@@ -714,7 +718,7 @@ async function loadViewFile(input, note = $("view-note")) {
     });
     if (!studyId) await loadSettings();
     state.view = await state.store.getView();
-    applyParcels(await state.store.getParcels());
+    applyParcels(await state.store.getParcels());   // 지도의 실거래도 새 자료로 다시 그린다 (applyParcels → renderDeals)
     await renderAssets();
     await renderRecords();
     renderViewStatus();
@@ -729,6 +733,7 @@ async function loadViewFile(input, note = $("view-note")) {
 function renderViewStatus() {
   const sm = viewSummary(state.view);
   if (!sm) return text($("view-status"), "아직 가져오지 않았습니다. PC 기록과 거래 이력은 이 파일을 가져오면 보입니다.");
+  if (sm.source === SAMPLE_SOURCE) return text($("view-status"), `연습용 거래 ${sm.transactions}건이 들어 있습니다 (앱에 든 가상 자료, 실제 거래가 아님). PC 자료 파일을 가져오면 바뀝니다.`);
   const gen = sm.generatedAt ? shortWhen(sm.generatedAt) ?? sm.generatedAt : "?";
   text($("view-status"), `PC 에서 ${gen} 에 만든 자료 (정본 v${sm.version}). PC 기록 ${sm.records}건, 거래 ${sm.transactions}건. ${shortWhen(sm.loadedAt) ?? "?"} 에 가져왔습니다. 더 새 자료가 있는지는 PC 에서 확인합니다.`);
 }
@@ -737,6 +742,8 @@ async function clearView() {
   await state.store.clearView();
   state.view = null;
   renderViewStatus();
+  renderDeals();
+  renderSampleItem();
   // 열려 있는 필지 카드의 연도별 표·최근 거래도 지운 자료로 다시 그린다 (리뷰 반영 PR #104: 지운 거래가 화면에 남지 않게)
   if (state.openParcel && !$("parcel-panel").hidden) showParcel(state.openParcel);
   text($("view-note"), "PC 기록과 거래를 지웠습니다. 대상 목록, 필지, 이 폰의 기록은 그대로입니다.", "pencil");
@@ -927,6 +934,7 @@ async function clearBasemap() {
 function showParcel(feature) {
   const p = feature.properties;
   state.openParcel = feature;
+  closeDealPanel();
   // 시트 위 카드는 하나만 (J5-054): 필지를 열면 고른 대상 카드는 닫는다
   if (state.mapSelected) clearMapSelection();
   mapCall((m) => m.selectParcel(feature.id));
@@ -989,6 +997,96 @@ async function createAssetFromParcel(feature) {
   startObservation(asset);
 }
 
+// ---- 지도의 실거래 (J5-063): 거래 파일(PC 자료 파일 또는 연습용)의 거래를 필지·번지대 위에 종류+금액으로 보인다 ----
+// 지번이 온전한 거래만 그 필지에 놓고, 지번 일부가 가려진 거래는 번지대로 묶어 후보 필지들 가운데에 점선으로 둔다(필지 미확정). 켬·값·기간은 이 폰에 저장한다.
+const dealTxs = () => state.view?.transactions?.transactions ?? [];
+
+async function loadDealView() {
+  const v = await state.store.getMeta("deal_view");
+  if (v && typeof v === "object") {
+    state.dealView = { on: v.on === true, mode: DEAL_MODES[v.mode] ? v.mode : "total", years: DEAL_YEARS.includes(v.years) ? v.years : 5 };
+  }
+}
+
+async function setDealView(next) {
+  state.dealView = { ...state.dealView, ...next };
+  renderDeals();
+  try { await state.store.setMeta("deal_view", state.dealView); } catch { /* 저장 실패는 화면을 막지 않는다 */ }
+}
+
+function renderDeals() {
+  const all = dealTxs();
+  const can = all.length > 0 && state.parcelsCount > 0;
+  $("map-deals").disabled = !can;
+  const on = can && state.dealView.on;
+  $("map-deals").setAttribute("aria-pressed", String(on));
+  $("deal-legend").hidden = !on;
+  for (const b of document.querySelectorAll("[data-deal-mode]")) b.setAttribute("aria-pressed", String(b.dataset.dealMode === state.dealView.mode));
+  $("deal-years").value = String(state.dealView.years);
+  state.dealGroups = new Map();
+  if (!on) { mapCall((m) => m.setDeals([])); text($("deal-count"), ""); return; }
+  const txs = dealsSince(all, dealSince(state.dealView.years, localDate()));
+  const placed = placeDeals(txs, state.parcels?.features ?? []);
+  const mode = state.dealView.mode;
+  const item = (id, lonlat, list, masked, where) => ({ id, lonlat, kind: masked ? "번지대" : dealKind(list[0]), value: dealValueText(list[0], mode), more: list.length - 1, masked,
+    date: list[0].deal_date ?? list[0].deal_ymd, title: `${where}: ${list.length}건, 최근 ${list[0].deal_date ?? list[0].deal_ymd} ${dealKind(list[0])} ${fmtKrw(list[0].amount_krw)}` + (masked ? " (필지 미확정)" : "") });
+  const items = placed.parcels.map((p) => item(`p:${p.pnu}`, labelPoint(p.feature), p.txs, false, parcelTitle(p.feature.properties)));
+  for (const g of placed.groups) {
+    state.dealGroups.set(g.key, g);
+    const pts = g.features.map(labelPoint).filter(Boolean);
+    const c = pts.length ? [pts.reduce((s, q) => s + q[0], 0) / pts.length, pts.reduce((s, q) => s + q[1], 0) / pts.length] : null;
+    items.push(item(`g:${g.key}`, c, g.txs, true, `${g.emd} ${g.jibun} 번지대`));
+  }
+  items.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));   // 최근 거래의 꼬리표가 겹침에서 이긴다
+  mapCall((m) => m.setDeals(items));
+  text($("deal-count"), `${DEAL_MODES[mode]}, 거래 ${txs.length}건` + (placed.groups.length ? `, 번지대 ${placed.groups.length}곳` : "") + (placed.outside ? `, 지도 밖 ${placed.outside}건` : ""));
+}
+
+function selectDeal(id) {
+  if (id.startsWith("p:")) {
+    const f = state.parcels?.features.find((x) => x.id === id.slice(2));
+    if (f) showParcel(f);
+    return;
+  }
+  const g = state.dealGroups.get(id.slice(2));
+  if (g) showDealGroup(g);
+}
+
+function showDealGroup(g) {
+  if (state.mapSelected) clearMapSelection();
+  closeParcelPanel();
+  $("deal-title").textContent = `${g.emd} ${g.jibun}`;
+  text($("deal-note"), `지번 일부가 가려진 거래 ${g.txs.length}건입니다. 이 지도의 필지 ${g.features.length}곳 가운데 어느 필지의 거래인지 확정하지 않습니다.`);
+  $("deal-list").replaceChildren(...g.txs.map((t) => el("li", {},
+    el("span", { class: "title", text: `${t.deal_date ?? t.deal_ymd} · ${dealKind(t)} · ${fmtKrw(t.amount_krw)}` }),
+    el("span", { class: "pencil small", text: dealDetailText(t) }))));
+  $("deal-panel").hidden = false;
+  openSheet();
+}
+
+function closeDealPanel() {
+  $("deal-panel").hidden = true;
+}
+
+/** 연습용 거래 (J5-063): 앱에 든 가상 거래 파일을 PC 자료와 같은 자리(view)에 넣는다. PC 자료 파일이 이미 있으면 넣지 않는다. */
+async function loadSyntheticDeals() {
+  try {
+    const res = await fetch("data/transactions.synthetic.json", { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const doc = await res.json();
+    const errs = validateTransactionsDoc(doc);
+    if (errs.length) throw new Error(errs.slice(0, 3).join("; "));
+    await state.store.replaceView({ manifest: { source_dataset_version: null, generated_at: doc.generated_at, data_mode: doc.data_mode, study_id: null, counts: { transactions: doc.count } },
+      records: [], transactions: doc, photos_skipped: 0, source: SAMPLE_SOURCE });
+    state.view = await state.store.getView();
+    renderViewStatus();
+    renderSampleItem();
+    await setDealView({ on: true });
+  } catch (e) {
+    text($("view-note"), "연습용 거래를 읽지 못했습니다: " + (e?.message || e), "bad");
+  }
+}
+
 // ---- 자리 고르기 (J5-062, ADR-21 의 확장): 필지 파일이 없어도 지도 가운데 십자로 한 자리를 골라 이 폰의 대상으로 만들고 바로 기록한다 ----
 // 필지가 있고 그 자리가 필지 안이면 필지 카드를 연다(필지에서 대상 만들기·기존 대상 기록). 밖이면 PNU 없이(null) 위치점만 있는 임시 대상을 만든다.
 // PC 는 assets.new.json 의 pnu 가 null 이면 '필지 미지정' pending 물건으로 받는다(데이터 사전 §2: 대상 미확인 기록에 실제 PNU 를 채우지 않는다).
@@ -996,6 +1094,7 @@ function startPick() {
   if (!state.map) return;
   if (state.mapSelected) clearMapSelection();
   closeParcelPanel();
+  closeDealPanel();
   setSheet(false);
   state.picking = true;
   $("pick-bar").hidden = false;
@@ -1061,12 +1160,17 @@ async function initMap() {
   try {
     const { createMap } = await import("./map.js");
     // 자리 고르기 중에는 점·필지 누르기로 카드를 열지 않는다 (고르기 상태가 남지 않게, 리뷰 반영 PR #109). 고르기는 지도를 끌어 맞춘다
-    state.map = createMap($("map-svg"), { onSelect: (a) => { if (!state.picking) selectOnMap(a); }, onSelectParcel: (f) => { if (!state.picking) showParcel(f); }, onTileStatus, home: FIELD_HOME });
+    state.map = createMap($("map-svg"), { onSelect: (a) => { if (!state.picking) selectOnMap(a); }, onSelectParcel: (f) => { if (!state.picking) showParcel(f); },
+      onSelectDeal: (id) => { if (!state.picking) selectDeal(id); }, onTileStatus, home: FIELD_HOME });
     $("map-zoom-in").addEventListener("click", () => mapCall((m) => m.zoomBy(2)));
     $("map-zoom-out").addEventListener("click", () => mapCall((m) => m.zoomBy(0.5)));
     $("map-fit").addEventListener("click", () => mapCall((m) => m.fit()));
     $("map-zones").addEventListener("click", toggleZoneColors);
     $("map-pick").addEventListener("click", () => (state.picking ? endPick() : startPick()));
+    $("map-deals").addEventListener("click", () => setDealView({ on: !state.dealView.on }));
+    for (const b of document.querySelectorAll("[data-deal-mode]")) b.addEventListener("click", () => setDealView({ mode: b.dataset.dealMode }));
+    $("deal-years").addEventListener("change", () => setDealView({ years: Number($("deal-years").value) }));
+    $("deal-close").addEventListener("click", closeDealPanel);
     $("pick-ok").addEventListener("click", pickHere);
     $("pick-cancel").addEventListener("click", endPick);
   } catch (e) {
@@ -1107,6 +1211,7 @@ function mapNote(c) {
 
 /** 지도의 점이나 목록 줄을 누르면 바로 기록 화면을 열지 않고 시트 위에 대상 카드와 '기록하기' 를 보여 준다. */
 function selectOnMap(asset, { focus = true } = {}) {
+  closeDealPanel();
   state.mapSelected = asset.asset_id;
   mapCall((m) => m.select(asset.asset_id));
   const s = assetSummary(asset.asset_id, state.events);
@@ -1697,6 +1802,7 @@ async function main() {
   }
   try {
     state.view = (await state.store.getView()) ?? null;
+    await loadDealView();
     renderViewStatus();
   } catch (e) {
     text($("view-note"), "저장된 PC 자료를 읽지 못함: " + (e?.message || e), "bad");
@@ -1712,6 +1818,7 @@ async function main() {
   await renderRecords();
   await renderExportHistory();
   renderExportSteps();
+  renderDeals();
   // 처음 시트: 자료가 없거나 지도를 못 그리면 펼쳐 시작하기·목록을 보이고, 그 밖에는 접어 지도를 보인다
   setSheet(!state.map || (state.assets.length === 0 && state.parcelsCount === 0));
   // 시트·찾기 칸의 크기가 바뀌면(펼치기·글자 크기·회전) 지도에 다시 알린다

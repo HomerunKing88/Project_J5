@@ -123,13 +123,14 @@ export class Store {
     await done(tx);
   }
 
-  /** 앱에 든 연습용 자료(가져온 자리가 bundled_synthetic 인 대상 목록·필지·윤곽)만 한 트랜잭션으로 지운다 (J5-061).
+  /** 앱에 든 연습용 자료(가져온 자리가 bundled_synthetic 인 대상 목록·필지·윤곽·거래)만 한 트랜잭션으로 지운다 (J5-061, 거래는 J5-063).
    *  기록·사진·이 폰이 만든 대상·PC 자료 파일(view)·다른 파일에서 가져온 자료는 건드리지 않는다. 지운 종류를 돌려준다. */
   async clearSample() {
-    const tx = this.db.transaction(["meta", "assets", "parcels", "basemap"], "readwrite");
+    const tx = this.db.transaction(["meta", "assets", "parcels", "basemap", "view"], "readwrite");
     const meta = tx.objectStore("meta");
-    const [seedSource, parcels, basemap] = await Promise.all([req(meta.get("seed_source")), req(tx.objectStore("parcels").get(PARCELS_KEY)), req(tx.objectStore("basemap").get(BASEMAP_KEY))]);
-    const cleared = { assets: false, parcels: false, basemap: false };
+    const [seedSource, parcels, basemap, view] = await Promise.all([req(meta.get("seed_source")), req(tx.objectStore("parcels").get(PARCELS_KEY)), req(tx.objectStore("basemap").get(BASEMAP_KEY)),
+      req(tx.objectStore("view").get(VIEW_KEY))]);
+    const cleared = { assets: false, parcels: false, basemap: false, deals: false };
     if (seedSource === SAMPLE_SOURCE) {
       tx.objectStore("assets").clear();
       meta.delete("seed_source");
@@ -138,6 +139,7 @@ export class Store {
     }
     if (parcels?.source === SAMPLE_SOURCE) { tx.objectStore("parcels").delete(PARCELS_KEY); cleared.parcels = true; }
     if (basemap?.source === SAMPLE_SOURCE) { tx.objectStore("basemap").delete(BASEMAP_KEY); cleared.basemap = true; }
+    if (view?.source === SAMPLE_SOURCE) { tx.objectStore("view").delete(VIEW_KEY); cleared.deals = true; }   // 연습용 거래 (J5-063)
     await done(tx);
     return cleared;
   }

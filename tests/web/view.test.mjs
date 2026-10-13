@@ -241,3 +241,53 @@ test("parcelSummaryItems: 위치로만 찾은 대상의 연결 거래는 필지 
   assert.equal(parcelYearSummary(feature, summary, null, []).find((r) => r.year === 2025).linked, 1, "연도별 표의 연결 수도 PC 연결 대상만");
   assert.equal(parcelSummaryItems(items, []).filter((i) => i.match === "linked").length, 0);
 });
+
+// ---- 지도의 실거래 (J5-063) ----
+import { readFileSync as readFileSyncDeals } from "node:fs";
+import { placeDeals, dealKind, unitPrice, dealValueText, dealDetailText, dealsSince, dealSince, validateTransactionsDoc as validateTxDeals, PYEONG_M2 } from "../../web/app/view.js";
+
+test("dealKind·unitPrice·dealValueText: 종류 짧은 이름, 총액·평당 단가, 낼 수 없는 사유", () => {
+  assert.equal(dealKind({ building_use: "제2종근린생활" }), "근린");
+  assert.equal(dealKind({ building_use: "업무" }), "업무");
+  assert.equal(dealKind({ building_use: null, building_area_m2: null, plottage_area_m2: 120 }), "토지");
+  assert.equal(dealKind({}), "건물");
+  const t = { amount_krw: 1_850_000_000, plottage_area_m2: 100 * PYEONG_M2, building_area_m2: 250 * PYEONG_M2 };
+  assert.equal(unitPrice(t, "total"), 1_850_000_000);
+  assert.equal(Math.round(unitPrice(t, "land")), 18_500_000);
+  assert.equal(dealValueText(t, "total"), "18.5억");
+  assert.equal(dealValueText(t, "land"), "1,850만/평");
+  assert.equal(dealValueText(t, "floor"), "740만/평");
+  assert.equal(dealValueText({ ...t, share_deal: true }, "land"), "지분 거래", "지분 거래는 단가를 내지 않는다");
+  assert.equal(unitPrice({ ...t, share_deal: true }, "total"), 1_850_000_000, "총액은 그대로");
+  assert.equal(dealValueText({ amount_krw: 5e8, plottage_area_m2: null }, "land"), "대지 면적 미확인");
+  assert.equal(dealValueText({ amount_krw: 5e8, building_area_m2: 0 }, "floor"), "연면적 미확인");
+  assert.equal(dealValueText({ amount_krw: null }, "total"), "금액 미확인");
+  assert.equal(dealDetailText({ ...t, plottage_area_m2: 330.6, building_area_m2: 1250, build_year: 1998 }), "대지 330.6㎡ (1,850만/평) · 연면적 1250㎡ (489만/평) · 1998년 건축");
+});
+
+test("dealsSince·dealSince: 기간 거르기 (월만 아는 거래는 그달 1일)", () => {
+  assert.equal(dealSince(5, "2026-10-13"), "2021-10-13");
+  assert.equal(dealSince(0, "2026-10-13"), null, "전체");
+  const txs = [{ deal_date: "2021-10-12", deal_ymd: "202110" }, { deal_date: "2021-10-13", deal_ymd: "202110" }, { deal_date: null, deal_ymd: "202111" }, { deal_date: null, deal_ymd: "202109" }];
+  assert.equal(dealsSince(txs, "2021-10-13").length, 2);
+  assert.equal(dealsSince(txs, null).length, 4);
+});
+
+test("placeDeals: 온전한 지번은 그 필지, 가린 지번은 번지대 묶음(필지 미확정), 닿지 않으면 수만 (연습용 거래·필지)", () => {
+  const doc = JSON.parse(readFileSyncDeals(new URL("../../web/data/transactions.synthetic.json", import.meta.url), "utf8"));
+  const parcels = JSON.parse(readFileSyncDeals(new URL("../../web/data/parcels.synthetic.j5parcels.json", import.meta.url), "utf8"));
+  assert.deepEqual(validateTxDeals(doc), [], "연습용 거래 파일은 폰 검사기를 통과한다");
+  assert.equal(doc.data_mode, "synthetic");
+  const r = placeDeals(doc.transactions, parcels.features);
+  const byPnu = Object.fromEntries(r.parcels.map((p) => [p.pnu, p.txs.map((t) => t.deal_date)]));
+  assert.deepEqual(byPnu["9999900100100010000"], ["2024-03-15", "2019-06-20"], "최근 것부터");
+  assert.deepEqual(byPnu["9999900100100040002"], ["2023-11-09"]);
+  assert.equal(r.groups.length, 1);
+  assert.equal(r.groups[0].jibun, "1-*");
+  assert.deepEqual(r.groups[0].features.map((f) => f.id).sort(), ["9999900100100010000", "9999900100100010001"], "1-* 는 부번 한 자리인 1·1-1 이 후보");
+  assert.equal(r.groups[0].txs.length, 2);
+  assert.equal(r.outside, 1, "3* 는 두 자리 본번이라 불러온 필지에 닿지 않는다");
+  // 다른 시군구의 같은 이름 법정동은 닿지 않는다 (J5-044 규칙 그대로)
+  const other = placeDeals([{ ...doc.transactions[0], lawd_cd: "11110" }], parcels.features);
+  assert.deepEqual([other.parcels.length, other.groups.length, other.outside], [0, 0, 1]);
+});

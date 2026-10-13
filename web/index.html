@@ -37,6 +37,7 @@
         <button id="map-locate" class="chip" disabled>내 위치</button>
         <button id="map-fit" class="chip">전체 보기</button>
         <button id="map-zones" class="chip" aria-pressed="false" disabled>용도지역</button>
+        <button id="map-deals" class="chip" aria-pressed="false" aria-controls="deal-legend" disabled>실거래</button>
       </div>
       <div id="pick-bar" class="pick-bar" role="group" aria-labelledby="pick-help" hidden>
         <p id="pick-help" class="pick-help">지도를 움직여 가운데 십자를 기록할 곳에 맞춥니다. 필지 안이면 그 필지 카드가 열립니다.</p>
@@ -46,6 +47,14 @@
         <p id="pick-note" class="note" role="status"></p>
       </div>
       <p id="zone-legend" class="map-legend zone-legend" hidden></p>
+      <div id="deal-legend" class="deal-legend" role="group" aria-label="실거래 보기" hidden>
+        <span class="seg" role="group" aria-label="값">
+          <button class="seg-btn" data-deal-mode="total" aria-pressed="true">총액</button><button class="seg-btn" data-deal-mode="land" aria-pressed="false">대지 평당</button><button class="seg-btn" data-deal-mode="floor" aria-pressed="false">연면적 평당</button>
+        </span>
+        <label for="deal-years" class="sr-only">기간</label>
+        <select id="deal-years" class="deal-years"><option value="1">1년</option><option value="3">3년</option><option value="5">5년</option><option value="0">전체</option></select>
+        <span id="deal-count" class="deal-count" role="status"></span>
+      </div>
     </div>
     <div class="map-tools" role="group" aria-label="확대·축소·자리 고르기">
       <button id="map-zoom-in" class="tool" aria-label="확대">+</button>
@@ -76,6 +85,15 @@
           <button id="map-selected-history" class="secondary">이력</button>
         </div>
         <p id="map-selected-ext" class="ext-links" hidden></p>
+      </div>
+
+      <div id="deal-panel" class="parcel-card" hidden>
+        <div class="card-head">
+          <div class="card-title"><span class="badge">번지대</span><strong id="deal-title" class="jibun"></strong></div>
+          <button id="deal-close" class="tool close" aria-label="번지대 거래 닫기">✕</button>
+        </div>
+        <p id="deal-note" class="pencil small"></p>
+        <ul id="deal-list" class="rows deal-list"></ul>
       </div>
 
       <div id="parcel-panel" class="parcel-card" hidden>
