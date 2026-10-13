@@ -68,7 +68,7 @@
 | J5-057 필지 카드의 최근 거래 | [J5-057](J5-057.md) | #104 | 완료 (가상자료, 브라우저 e2e) | `project-copy` 뒤 폰 필지 카드의 최근 거래를 PC `db parcels-history <PNU>` 의 같은 필지 거래와 대조 |
 | J5-058 폰·PC 연도별 표 대조 시험 | [J5-058](J5-058.md) | #105 | 완료 (가상자료) | 실제 정본에서 `project-copy` 뒤 폰 필지 카드의 연도별 표를 PC `db parcels-years` 와 몇 필지 대조 |
 | J5-059 정적 HTTPS 배포 준비 | [J5-059](J5-059.md) | #106 | 코드 완료 (가상 서버 e2e), 게시 전 | Cloudflare 계정·Pages 프로젝트·`j5.dooduk.com` 연결(web/README "배포"), 예전 주소의 기록을 PC 로 보낸 뒤 iPhone 에서 새 주소로 열어 오프라인·현재 위치 확인 |
-| J5-060 배포 설정 고정 | [J5-060](J5-060.md) | (이 PR) | 코드 완료 (wrangler dry-run), 게시 확인 전 | 머지 뒤 Cloudflare 빌드 기록에서 `web` 폴더를 읽었는지 확인, `workers.dev` 주소를 폰에서 열기, dooduk.com 을 Cloudflare DNS 로 옮긴 뒤(또는 Pages 로) `j5.dooduk.com` 연결 |
+| J5-060 배포 설정 고정 | [J5-060](J5-060.md) | (이 PR) | 코드 완료 (wrangler dry-run), 게시 확인 전 | 머지 뒤 Cloudflare 빌드 기록에서 `web` 폴더를 읽었는지 확인, `workers.dev` 주소를 폰에서 열기, `j5.dooduk.com` 연결은 보류(DNS 이전 또는 Pages 필요) |
 
 ## 운영 순서 요약
 
