@@ -1,7 +1,7 @@
 // tiles.js (J5-024, ADR-18): 타일 설정 해석·템플릿 검사·확대 단계·화면 타일 목록·미리 받기 계획. DOM·통신 없음.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { KEY_IN_TEMPLATE_ERROR, PROVIDERS, TILE_HOSTS, resolveTileConfig, validateTemplate, maskUrl, tileUrl, tileZoom, tilesFor, tileRect, prefetchPlan, padBbox, PREFETCH_MAX_TILES } from "../../web/app/tiles.js";
+import { KEY_IN_TEMPLATE_ERROR, hasKeyLike, PROVIDERS, TILE_HOSTS, resolveTileConfig, validateTemplate, maskUrl, tileUrl, tileZoom, tilesFor, tileRect, prefetchPlan, padBbox, PREFETCH_MAX_TILES } from "../../web/app/tiles.js";
 
 test("resolveTileConfig: 미검증 제공자는 선택 불가, 키는 자리표로만, 템플릿 규칙", () => {
   assert.deepEqual(TILE_HOSTS, ["api.vworld.kr"]);
@@ -32,10 +32,14 @@ test("validateTemplate: 자리표·경로 탈출·스킴", () => {
   // 인증키를 주소 칸에 넣은 경우 (J5-061, 실기기에서 있었던 실수): 키 자리에 키를 중괄호째 넣거나 그대로 넣으면 거절하고 인증키 칸을 안내한다
   const uuid = "0A1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D";   // 가상 값
   for (const t of [`https://api.vworld.kr/req/wmts/1.0.0/{${uuid}}/Base/{z}/{y}/{x}.png`, `https://api.vworld.kr/req/wmts/1.0.0/${uuid}/Base/{z}/{y}/{x}.png`,
-    `./t/${"a1".repeat(16)}/{z}/{x}/{y}.png`, "./t/{zoom}/{x}/{y}.png"]) {
+    `./t/${"a1".repeat(16)}/{z}/{x}/{y}.png`, "./t/{zoom}/{x}/{y}.png", "./tiles/{z}/{x}/{y}/{token.png", "./tiles/{z}/{x}/{y}/token}.png", "./t/{{z}}/{x}/{y}.png"]) {
     assert.deepEqual(validateTemplate(t), [KEY_IN_TEMPLATE_ERROR], t);
   }
   assert.ok(KEY_IN_TEMPLATE_ERROR.includes("인증키 칸") && !KEY_IN_TEMPLATE_ERROR.includes(uuid));
+  // 캐시 키(퍼센트 인코딩된 요청 주소)에서도 찾는다 (리뷰 반영 PR #108: 예전에 저장된 주소와 그 타일을 지운다). 자리표만 든 주소는 아니다
+  assert.equal(hasKeyLike(`https://api.vworld.kr/req/wmts/1.0.0/%7B${uuid}%7D/Base/15/1/2.png`), true);
+  assert.equal(hasKeyLike("https://api.vworld.kr/req/wmts/1.0.0/%7Bkey%7D/Base/15/12707/27943.png"), false);
+  assert.equal(hasKeyLike("%E0%A4%A"), false, "잘못된 인코딩도 오류 없이");
   assert.deepEqual(resolveTileConfig({ provider: "custom", template: `https://api.vworld.kr/req/wmts/1.0.0/{${uuid}}/Base/{z}/{y}/{x}.png` }).errors, [KEY_IN_TEMPLATE_ERROR], "자리표가 없어 인증키를 묻기 전에 주소부터 바로잡는다");
   assert.equal(maskUrl("https://api.vworld.kr/req/k%2Fey/{z}", "k/ey"), "https://api.vworld.kr/req/****/{z}");
   assert.equal(tileUrl("./t/{key}/{z}/{x}/{y}.png", 1, 2, 3), "./t/{key}/1/2/3.png", "자리표는 남는다");

@@ -42,17 +42,23 @@ export function resolveTileConfig({ provider, key = "", template = "", attributi
   return { url, minZoom: p.minZoom, maxZoom: p.maxZoom, attribution: provider === "custom" && attribution ? attribution : p.attribution, provider, needsKey };
 }
 
-/** 주소에 둘 수 있는 자리표. 그 밖의 { } 는 거절한다. */
-const TEMPLATE_MARKS = new Set(["{z}", "{x}", "{y}", KEY_PLACEHOLDER]);
+/** 주소에 둘 수 있는 자리표. 이것을 뺀 뒤 남은 { 나 } 는 하나라도 거절한다 (짝이 맞지 않는 괄호 포함, 리뷰 반영 PR #108). */
+const TEMPLATE_MARKS = /\{(?:z|x|y|key)\}/g;
 /** 인증키처럼 보이는 값: UUID 형식, 또는 32자 이상 이어진 영숫자 (J5-061: 키를 주소 칸에 넣으면 화면·캐시 키에 남는다). */
 const KEY_LIKE = /[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}|[A-Za-z0-9]{32,}/;
+/** 글(주소·캐시 키)에 인증키처럼 보이는 값이 있는가. 퍼센트 인코딩된 캐시 키도 풀어서 본다. */
+export function hasKeyLike(s) {
+  let t = String(s ?? "");
+  try { t = decodeURIComponent(t); } catch { /* 잘못된 인코딩은 그대로 본다 */ }
+  return KEY_LIKE.test(t);
+}
 export const KEY_IN_TEMPLATE_ERROR = "주소에는 인증키를 넣지 않습니다. 키 자리는 글자 그대로 {key} 로 두고, 키는 아래 인증키 칸에 넣습니다 ({ } 안에는 z·x·y·key 만 씁니다)";
 
 /** 템플릿 검사: {z}{x}{y} 필수, 같은 출처 상대 경로이거나 https 의 허용 호스트, 경로 탈출·제어문자 없음, 인증키·모르는 자리표 없음. */
 export function validateTemplate(url) {
   const errs = [];
   const s = String(url ?? "");
-  if ((s.match(/\{[^}]*\}/g) ?? []).some((m) => !TEMPLATE_MARKS.has(m)) || KEY_LIKE.test(s)) return [KEY_IN_TEMPLATE_ERROR];
+  if (/[{}]/.test(s.replace(TEMPLATE_MARKS, "")) || KEY_LIKE.test(s)) return [KEY_IN_TEMPLATE_ERROR];
   for (const t of ["{z}", "{x}", "{y}"]) if (!s.includes(t)) errs.push(`템플릿에 ${t} 가 없다`);
   if (/[\s\u0000-\u001f\u007f]/.test(s)) errs.push("템플릿에 공백·제어문자가 있다");
   if (s.split("/").includes("..")) errs.push("템플릿에 상위 경로(..)를 쓸 수 없다");

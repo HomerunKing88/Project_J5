@@ -13,7 +13,7 @@ import { migrationReadiness, migrationText, persistenceText } from "./migrate.js
 import { createNavigator, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, MODE_LABEL, MODE_SHORT } from "./ui.js";
 import { externalMapLinks, bboxCenter, LINK_ATTRS } from "./extmap.js";
 import { validateBasemap, LAYERS as BASEMAP_LAYERS, LAYER_LABEL as BASEMAP_LAYER_LABEL } from "./basemap.js";
-import { PROVIDERS, resolveTileConfig, prefetchPlan, padBbox, tileUrl, TILE_CACHE, PREFETCH_ZOOMS, KEY_PLACEHOLDER } from "./tiles.js";
+import { PROVIDERS, resolveTileConfig, prefetchPlan, padBbox, tileUrl, hasKeyLike, TILE_CACHE, PREFETCH_ZOOMS, KEY_PLACEHOLDER } from "./tiles.js";
 import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
 import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummaryInfo, yearSummaryRow, yearSummaryCells, recentDeals, parcelSummaryItems } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
@@ -101,13 +101,35 @@ async function loadSettings() {
 // ---- 배경 지도 타일 (J5-024, ADR-18) ----
 // 사용자가 켠 제공자에서만 타일을 받는다. 키는 IndexedDB meta 에만 두고 화면에는 가려서 보인다. 실패해도 위치점·필지·도로 배경은 그대로다.
 async function loadTileSettings() {
-  const [provider, key, template] = await Promise.all([state.store.getMeta("tiles_provider"), state.store.getMeta("tiles_key"), state.store.getMeta("tiles_template")]);
+  let [provider, key, template] = await Promise.all([state.store.getMeta("tiles_provider"), state.store.getMeta("tiles_key"), state.store.getMeta("tiles_template")]);
+  // 0.2.25 까지는 인증키가 든 주소도 저장했다 (J5-061, 리뷰 반영 PR #108). 그 주소와 그 주소로 받은 타일을 지워 키가 화면·저장소에 남지 않게 한다
+  let scrubbed = null;
+  if (template && hasKeyLike(template)) {
+    await state.store.setMeta("tiles_template", null);
+    if (provider === "custom") { await state.store.setMeta("tiles_provider", null); provider = null; }
+    template = null;
+    scrubbed = await scrubKeyTiles();
+  }
   $("tiles-provider").value = provider ?? "";
   $("tiles-key").value = key ?? "";
   $("tiles-template").value = template ?? "";
   updateTileFields();
   applyTileSettings({ provider: provider ?? "", key: key ?? "", template: template ?? "" }, { quiet: true });
+  if (scrubbed !== null) text($("tiles-note"), `주소 칸에 인증키가 들어 있어 그 주소${scrubbed ? `와 그 주소로 받은 타일 ${scrubbed}장` : ""}을 지웠습니다. 배경 지도를 다시 켜려면 직접 입력의 주소에 {key} 를 글자 그대로 두고, 키는 인증키 칸에 넣어 저장합니다.`, "warn");
   renderTileCacheStatus();
+}
+
+/** 캐시 키(요청 주소)에 인증키처럼 보이는 값이 든 타일만 지운다. 지운 수. 저장소를 못 열면 0. */
+async function scrubKeyTiles() {
+  try {
+    if (typeof caches === "undefined") return 0;
+    const c = await caches.open(TILE_CACHE);
+    const bad = (await c.keys()).filter((r) => hasKeyLike(r.url));
+    await Promise.all(bad.map((r) => c.delete(r)));
+    return bad.length;
+  } catch {
+    return 0;
+  }
 }
 
 function updateTileFields() {
