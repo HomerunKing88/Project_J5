@@ -951,8 +951,9 @@ function renderCompsYears(d, per, emd, kind) {
     `대지 평당 중간값 ${ch.from.year}→${ch.to.year}년 ${sign(ch.pct)}: 시작 ${ch.from.year}년 ${per(ch.from.median)} (${ch.from.n}건), 최근 ${ch.to.year}년 ${per(ch.to.median)} (${ch.to.n}건)` + (ch.to.partial ? `, ${ch.to.year}년은 오늘까지` : ""),
     ch.missing ? "pencil" : "");
   const collected = (r) => r.months == null ? "수집 현황 모름" : r.months === 0 ? "미수집" : `수집 ${r.months}/12개월` + (r.kinds ? `, ${r.kinds}` : "");
-  // 거래 수는 수집하지 않은 해·달에 0 이 아니라 모름이다 (막대 없음·테두리만)
-  const value = (r) => mode === "price" ? r.median : r.months === 0 && !r.count ? null : r.count;
+  // 거래 수는 수집하지 않은 해에 0 이 아니라 미수집·모름이다 (막대 없음, 표·누른 값에도 0건을 적지 않는다, 리뷰 반영 PR #118)
+  const countText = (r) => r.counted === "counted" ? `${r.count}건` : r.counted === "unknown" ? "모름" : "미수집";
+  const value = (r) => mode === "price" ? r.median : r.counted === "counted" ? r.count : null;
   const few = (r) => mode === "price" ? r.n < TREND_MIN_CASES : r.partial || (r.months != null && r.months < 12);
   text($("comps-years-key"), mode === "price" ? "그해 대지 평당 중간값" : "그해 거래 수");
   text($("comps-years-few"), mode === "price" ? `테두리만: 대지 평당 사례 ${TREND_MIN_CASES}건 미만인 해` : "테두리만: 12개월을 다 받지 않은 해·올해");
@@ -972,12 +973,12 @@ function renderCompsYears(d, per, emd, kind) {
   const every = d.years.length > 12 ? 5 : d.years.length > 6 ? 2 : 1;
   const note = $("comps-years-note");
   const pick = (g, r) => { for (const x of bars.querySelectorAll(".on")) x.classList.remove("on"); g.classList.add("on");
-    text(note, `${r.year}년${r.partial ? " (오늘까지)" : ""} · 거래 ${r.count}건 · 대지 평당 ` + (r.n ? `중간 ${per(r.median)} (${r.n}건, ${per(r.min)}~${per(r.max)})` : "사례 없음") + ` · ${collected(r)}`); };
+    text(note, `${r.year}년${r.partial ? " (오늘까지)" : ""} · 거래 ${countText(r)} · 대지 평당 ` + (r.n ? `중간 ${per(r.median)} (${r.n}건, ${per(r.min)}~${per(r.max)})` : "사례 없음") + ` · ${collected(r)}`); };
   d.years.forEach((r, i) => {
     if (i % every === 0 || i === d.years.length - 1) labels.append(mk("text", { x: cx(i).toFixed(1), y: H - 6, "text-anchor": "middle" }, String(r.year)));
     const v = value(r);
     const g = mk("g", { class: `chart-bar${few(r) ? " few" : ""}`, tabindex: 0, role: "button", "data-year": r.year,
-      "aria-label": `${r.year}년 ${mode === "price" ? (r.n ? `대지 평당 중간 ${per(r.median)}, 사례 ${r.n}건` : "대지 평당 사례 없음") : v == null ? "미수집" : `거래 ${r.count}건`}` });
+      "aria-label": `${r.year}년 ${mode === "price" ? (r.n ? `대지 평당 중간 ${per(r.median)}, 사례 ${r.n}건` : "대지 평당 사례 없음") : `거래 ${countText(r)}`}` });
     const top = Number.isFinite(v) ? sy(v) : sy(0);
     g.append(mk("rect", { class: "hit", x: (cx(i) - slot / 2).toFixed(1), y: pad.t, width: slot.toFixed(1), height: H - pad.t - pad.b }));
     if (Number.isFinite(v) && v > 0) g.append(mk("rect", { class: "bar", x: (cx(i) - bw / 2).toFixed(1), y: top.toFixed(1), width: bw.toFixed(1), height: Math.max(1, sy(0) - top).toFixed(1), rx: 2 }));
@@ -991,7 +992,7 @@ function renderCompsYears(d, per, emd, kind) {
   text($("comps-years-title"), `같은 동 연도별 ${mode === "price" ? "대지 평당 중간값" : "거래 수"}, ${first.year}~${last.year}년`);
   text(note, `막대 ${d.years.length}개: 막대를 누르면 그해 값이 여기에 나옵니다.`, "pencil small");
   $("comps-years-table").tBodies[0].replaceChildren(...d.years.slice().reverse().map((r) => el("tr", {},
-    el("td", { class: "num", text: `${r.year}${r.partial ? " (오늘까지)" : ""}` }), el("td", { class: "num", text: `${r.count}건` }),
+    el("td", { class: "num", text: `${r.year}${r.partial ? " (오늘까지)" : ""}` }), el("td", { class: "num", text: countText(r) }),
     el("td", { class: "num", text: r.n ? `${per(r.median)} (${r.n}건)` : "사례 없음" }), el("td", { text: collected(r) }))));
 }
 

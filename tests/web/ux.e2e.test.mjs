@@ -431,7 +431,10 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     await cdp.waitFor(`${txt("comps-years-key")} === '그해 거래 수'`);
     assert.equal(await cdp.eval("document.querySelectorAll('#comps-years-chart g.chart-bar.few').length"), thisYear - 2025, "거래 수는 덜 받은 해·올해만 테두리 (연습용 거래는 2025년까지 받았다)");
     assert.equal(await cdp.eval("document.querySelectorAll('#comps-years-chart g.chart-bar rect.bar').length"), 7, "2019~2025년은 해마다 거래가 있고 받지 않은 해에는 막대가 없다");
-    assert.equal(await cdp.eval(`document.querySelector('#comps-years-table tbody tr:first-child td:last-child').textContent`), "미수집");
+    assert.deepEqual(JSON.parse(await cdp.eval("JSON.stringify(Array.from(document.querySelectorAll('#comps-years-table tbody tr:first-child td'), (x) => x.textContent))")).slice(1),
+      ["미수집", "사례 없음", "미수집"], "리뷰 반영(PR #118): 받지 않은 올해는 거래 0건이 아니라 미수집");
+    await cdp.clickRect(`#comps-years-chart g.chart-bar[data-year='${thisYear}'] .hit`);
+    await cdp.waitFor(`${txt("comps-years-note")}.startsWith('${thisYear}년 (오늘까지) · 거래 미수집 · ')`);
     await cdp.eval("(() => { const m = document.getElementById('comps-trend-mode'); m.value = 'price'; m.dispatchEvent(new Event('change')); return 'ok'; })()");
     await cdp.waitFor(`${txt("comps-years-key")} === '그해 대지 평당 중간값'`);
     await cdp.eval("(() => { const y = document.getElementById('comps-years'); y.value = '3'; y.dispatchEvent(new Event('change')); return 'ok'; })()");

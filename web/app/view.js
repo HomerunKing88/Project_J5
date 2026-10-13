@@ -653,6 +653,8 @@ export const TREND_MIN_CASES = COMP_MIN_RATIOS;
  * 같은 동 거래의 연도별 시세 (J5-071). c 는 nearbyComps 결과(달력 연도 첫날부터 모은 것), txDoc 은 거래 파일(수집 개월), feature 는 이 필지.
  * from 은 첫 연도(주지 않으면 거래의 가장 이른 해), today 의 해까지 줄을 만든다. kind 는 고른 종류(수집 개월을 그 종류로 본다).
  * years: [{year, count, n, median, min, max, months, kinds, partial}] 오래된 해부터. count 는 그해 거래 수(지분·면적 없음 포함), n 은 대지 평당이 있는 사례 수(없으면 median 등 null).
+ * counted 는 거래 수를 셀 수 있는지: 그해 거래가 있거나 그 종류를 받은 달이 있으면 "counted", 받은 달이 없으면 "not_collected", 수집 현황이 없는 파일이면 "unknown"
+ *   (counted 가 아니면 count 0 은 0 건이 아니다, 리뷰 반영 PR #118).
  * months 는 이 시군구에서 그해 그 종류를 완전히 받은 개월(수집 현황이 없는 파일이면 null), kinds 는 모든 종류일 때 일부 종류만 받은 해의 메모, partial 은 today 의 해(오늘까지).
  * change: 대지 평당 사례가 TREND_MIN_CASES 건 이상인 가장 이른 해와 가장 늦은 해의 중간값 변동 { from, to, pct } 또는 { missing: 사유 }.
  * 거래가 없으면 null.
@@ -676,7 +678,8 @@ export function compsByYear(c, txDoc, feature, { from = null, today = null, kind
     const r = cov.get(y);
     const months = !hasCov ? null : !r ? 0 : kind === "all" || !r.kind_months ? r.months_complete : r.kind_months[kind] ?? 0;
     const kinds = kind === "all" && r?.kind_months ? kindsOnlyText({ tx: "counted", kindMonths: r.kind_months, monthsComplete: r.months_complete }) : "";
-    years.push({ year: y, count: inYear.length, n: lands.length, median: median(lands), min: lands.length ? Math.min(...lands) : null, max: lands.length ? Math.max(...lands) : null,
+    const counted = inYear.length || (months != null && months > 0) ? "counted" : months == null ? "unknown" : "not_collected";
+    years.push({ year: y, count: inYear.length, counted, n: lands.length, median: median(lands), min: lands.length ? Math.min(...lands) : null, max: lands.length ? Math.max(...lands) : null,
                  months, kinds, partial: y === thisYear });
   }
   const q = years.filter((r) => r.n >= TREND_MIN_CASES);

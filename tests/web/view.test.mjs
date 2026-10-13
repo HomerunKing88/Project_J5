@@ -468,6 +468,7 @@ test("연도별 시세: 달력 연도별 대지 평당 중간값·거래 수·�
   assert.deepEqual(d.years.map((r) => r.months), [12, 12, 12, 12, 12, 9], "이 시군구의 수집 개월만 (다른 시군구 줄은 보지 않는다)");
   assert.deepEqual(d.years.map((r) => r.kinds), ["", "상업·업무 12 · 단독·다가구 12 · 토지 3개월", "", "", "", "상업·업무만"], "모든 종류일 때 일부 종류만 받은 해의 메모");
   assert.deepEqual(d.years.map((r) => r.partial), [false, false, false, false, false, true], "오늘의 해는 오늘까지");
+  assert.deepEqual(d.years.map((r) => r.counted), Array(6).fill("counted"), "받은 달이 있거나 거래가 있으면 센 값 (2023 년 0 건은 받은 해의 0 건)");
   assert.equal(d.change.from.year, 2021, "사례 3건 이상인 가장 이른 해");
   assert.equal(d.change.to.year, 2024, "2026 년은 1건이라 최근 해가 아니다");
   assert.ok(near(d.change.pct, ((14e6 - 12e6) / 12e6) * 100));
@@ -479,8 +480,10 @@ test("연도별 시세: 달력 연도별 대지 평당 중간값·거래 수·�
   assert.match(one.change.missing, /^대지 평당 사례가 3건 이상인 해가 1개라 시작·최근 변동을 적지 않습니다/);
   const noCov = compsByYear(c, {}, mine, { from: 2021, today: "2026-10-13" });
   assert.ok(noCov.years.every((r) => r.months === null), "수집 현황이 없는 파일이면 모름");
+  assert.deepEqual(noCov.years.map((r) => r.counted), ["counted", "counted", "unknown", "counted", "unknown", "counted"], "리뷰 반영(PR #118): 거래가 없고 수집 현황도 없으면 0 건이 아니라 모름");
   const missingYear = compsByYear(c, { coverage: [] }, mine, { from: 2021, today: "2026-10-13" });
   assert.ok(missingYear.years.every((r) => r.months === 0), "수집 현황에 그해가 없으면 받지 않은 해");
+  assert.deepEqual(missingYear.years.map((r) => r.counted), ["counted", "counted", "not_collected", "counted", "not_collected", "counted"], "받지 않았고 거래도 없는 해는 미수집");
   assert.equal(compsByYear(nearbyComps(mine, [], [mine]), txDoc, mine, { today: "2026-10-13" }), null, "거래가 없으면 없음");
   const early = compsByYear(nearbyComps(mine, deals, [mine]), txDoc, mine, { from: 2023, today: "2026-10-13" });
   assert.equal(early.years[0].year, 2021, "주어진 첫해보다 이른 거래가 있으면 그 해부터 (빠뜨리지 않는다)");

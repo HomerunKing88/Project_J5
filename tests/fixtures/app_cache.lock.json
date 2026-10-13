@@ -1,6 +1,6 @@
 {
  "cache": "v0.2.34",
- "sha256": "db6e151ed9a49ca4ddc3fa6667c0f9a5051bec595e516f75ed02d787ece8b7f7",
+ "sha256": "3f25e67fdfa3b3e21ab49b28dcdc1ca7276a00233820aa9c3861945724525dcb",
  "files": [
   "app/basemap.js",
   "app/db.js",
