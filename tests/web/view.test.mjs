@@ -485,6 +485,15 @@ test("연도별 시세: 달력 연도별 대지 평당 중간값·거래 수·�
   assert.ok(missingYear.years.every((r) => r.months === 0), "수집 현황에 그해가 없으면 받지 않은 해");
   assert.deepEqual(missingYear.years.map((r) => r.counted), ["counted", "counted", "not_collected", "counted", "not_collected", "counted"], "받지 않았고 거래도 없는 해는 미수집");
   assert.equal(compsByYear(nearbyComps(mine, [], [mine]), txDoc, mine, { today: "2026-10-13" }), null, "거래가 없으면 없음");
+  // 리뷰 반영(PR #119): 시도했다 실패·부분만인 해는 미수집과 가른다. 종류를 고르면 그 종류의 시도 개월이 파일에 없어 모름
+  const failed = { coverage: [{ lawd_cd: "99999", year: 2023, months_complete: 0, months_any: 2, kind_months: {} }] };
+  const fa = compsByYear(c, failed, mine, { from: 2021, today: "2026-10-13" });
+  assert.deepEqual(fa.years.map((r) => [r.year, r.counted, r.monthsAny]).slice(1, 4), [[2022, "counted", 0], [2023, "incomplete", 2], [2024, "counted", 0]]);
+  assert.deepEqual(compsByYear(c, failed, mine, { from: 2021, today: "2026-10-13", kind: "land" }).years[2].counted, "unknown");
+  assert.equal(compsByYear(c, failed, mine, { from: 2021, today: "2026-10-13", kind: "land" }).years[2].monthsAny, null);
+  // 리뷰 반영(PR #119): 시작 해 중간값이 0(금액 0 신고)이면 변동률을 내지 않는다
+  const zero = [T2(31, "2021-02-01", 0), T2(32, "2021-03-01", 0), T2(33, "2021-04-01", 0), T2(34, "2022-02-01", 5e6), T2(35, "2022-03-01", 6e6), T2(36, "2022-04-01", 7e6)];
+  assert.match(compsByYear(nearbyComps(mine, zero, [mine]), txDoc, mine, { today: "2022-12-31" }).change.missing, /^시작 해\(2021년\)의 대지 평당 중간값이 0 이하라/);
   const early = compsByYear(nearbyComps(mine, deals, [mine]), txDoc, mine, { from: 2023, today: "2026-10-13" });
   assert.equal(early.years[0].year, 2021, "주어진 첫해보다 이른 거래가 있으면 그 해부터 (빠뜨리지 않는다)");
 });

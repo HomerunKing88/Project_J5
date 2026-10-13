@@ -11,8 +11,6 @@
 
 from __future__ import annotations
 
-import re
-
 from j5.collect.rt import KINDS as RT_KINDS, kind_of_provider
 from j5.db.parcel_timeline import fmt_krw
 from j5.db.parcel_years import KIND_SHORT, PNU_RE, kinds_note
@@ -20,6 +18,7 @@ from j5.db.parcels import attribute_history
 from j5.db.store import Db, DbError
 from j5.db.transactions import coverage_by_year
 from j5.db.txlinks import parse_jibun
+from j5.db.validate import parse_date
 
 PYEONG_M2 = 3.305785          # 폰 PYEONG_M2 와 같다
 COMP_MIN_RATIOS = 3           # 참고 추정에 필요한 배율 사례 수 (폰 COMP_MIN_RATIOS)
@@ -68,8 +67,8 @@ def parcel_comps(db: Db, pnu: str, *, years: int = 5, kind: str = "all", on_date
     if kind not in KIND_CHOICES:
         raise DbError("bad_kind", f"종류는 {', '.join(KIND_CHOICES)} 가운데 하나: {kind}")
     on_date = on_date or db.now()[:10]
-    if not re.match(r"^\d{4}-\d{2}-\d{2}$", on_date):
-        raise DbError("bad_date", f"기준일은 YYYY-MM-DD: {on_date}")
+    if parse_date(on_date) is None:   # 달력에 없는 날(2026-02-31)도 거절한다 (리뷰 반영 PR #119)
+        raise DbError("bad_date", f"기준일은 달력에 있는 YYYY-MM-DD: {on_date}")
     h = attribute_history(db, pnu)   # 정본에 없으면 parcel_missing
     me = db.conn.execute("SELECT emd_code, emd_name FROM parcels WHERE pnu = ?", (pnu,)).fetchone()
     sgg, emd = me["emd_code"][:5], me["emd_name"]
@@ -151,17 +150,25 @@ def _by_year(db: Db, comps: list[dict], sgg: str, kind: str, from_year: int | No
         lands = [c["land_unit_krw_py"] for c in inyear if c["land_unit_krw_py"] is not None]
         kind_months = {k: c[str(y)]["complete"] for k, c in cov_kind.items() if c.get(str(y), {}).get("complete")}
         complete = cov_all.get(str(y), {}).get("complete", 0)
-        # 정본은 자기 수집 기록을 안다: 기록이 없는 해는 받지 않은 해다 (폰은 수집 현황이 없는 이전 파일에서만 모름)
+        # 정본은 자기 수집 기록을 안다: 기록이 없는 해는 받지 않은 해다 (폰은 수집 현황이 없는 이전 파일에서만 모름).
+        # 시도했으나 실패·부분만인 해는 incomplete 로 가른다 (parcels-years 의 collection_incomplete 와 같다, 리뷰 반영 PR #119)
         months = complete if kind == "all" else kind_months.get(kind, 0)
-        counted = "counted" if inyear or months > 0 else "not_collected"
-        out.append({"year": y, "count": len(inyear), "counted": counted, **_stats(lands), "months": months,
+        months_any = (cov_all if kind == "all" else cov_kind[kind]).get(str(y), {}).get("any", 0)
+        counted = "counted" if inyear or months > 0 else "incomplete" if months_any > 0 else "not_collected"
+        out.append({"year": y, "count": len(inyear), "counted": counted, **_stats(lands), "months": months, "months_any": months_any,
                     "kinds": kinds_note(kind_months, complete) if kind == "all" else "", "partial": y == this_year})
-    q = [r for r in out if r["n"] >= TREND_MIN_CASES]
+    return {"years": out, "change": trend_change(out)}
+
+
+def trend_change(years: list[dict]) -> dict:
+    """대지 평당 사례가 TREND_MIN_CASES 건 이상인 가장 이른 해와 가장 늦은 해의 중간값 변동 {from, to, pct} 또는 {missing} (폰 compsByYear 와 같다).
+    시작 해의 중간값이 0 이하이면(금액 0 신고) 변동률을 내지 않는다 (리뷰 반영 PR #119)."""
+    q = [r for r in years if r["n"] >= TREND_MIN_CASES]
     if len(q) < 2:
-        change = {"missing": f"대지 평당 사례가 {TREND_MIN_CASES}건 이상인 해가 {len(q)}개라 시작·최근 변동을 적지 않는다 (2개 해부터)"}
-    else:
-        change = {"from": q[0]["year"], "to": q[-1]["year"], "pct": (q[-1]["median"] - q[0]["median"]) / q[0]["median"] * 100}
-    return {"years": out, "change": change}
+        return {"missing": f"대지 평당 사례가 {TREND_MIN_CASES}건 이상인 해가 {len(q)}개라 시작·최근 변동을 적지 않는다 (2개 해부터)"}
+    if not q[0]["median"] > 0:
+        return {"missing": f"시작 해({q[0]['year']}년)의 대지 평당 중간값이 0 이하라 변동을 적지 않는다"}
+    return {"from": q[0]["year"], "to": q[-1]["year"], "pct": (q[-1]["median"] - q[0]["median"]) / q[0]["median"] * 100}
 
 
 def _py(v) -> str:
@@ -190,11 +197,12 @@ def comps_text(r: dict) -> str:
         ch = by["change"]
         lines.append("  연도별 시세 (기간이 시작하는 해의 1월부터, 최근 먼저): " + (ch["missing"] if "missing" in ch else f"대지 평당 중간값 {ch['from']}→{ch['to']}년 {ch['pct']:+.1f}%"))
         for y in reversed(by["years"]):
-            if y["counted"] == "not_collected":
-                lines.append(f"    {y['year']}{' (오늘까지)' if y['partial'] else ''}: 거래 미수집 (0 건이 아니다)")
+            if y["counted"] != "counted":
+                what = "거래 미수집" if y["counted"] == "not_collected" else f"거래 수집 실패·부분만 ({y['months_any']}개월 시도)"
+                lines.append(f"    {y['year']}{' (오늘까지)' if y['partial'] else ''}: {what} (0 건이 아니다)")
                 continue
             cnt = f"{y['count']}건"
-            col = "미수집" if y["months"] == 0 else f"수집 {y['months']}/12개월" + (f", {y['kinds']}" if y["kinds"] else "")
+            col = (f"수집 실패·부분만 ({y['months_any']}개월 시도)" if y["months_any"] else "미수집") if y["months"] == 0 else f"수집 {y['months']}/12개월" + (f", {y['kinds']}" if y["kinds"] else "")
             lines.append(f"    {y['year']}{' (오늘까지)' if y['partial'] else ''}: 거래 {cnt} · 대지 평당 " + (f"중간 {_py(y['median'])} ({y['n']}건)" if y["n"] else "사례 없음") + f" · {col}")
     lines.append("실거래 신고 자료에서 계산한 단가와 배율이며 감정평가가 아니다. 지분 거래는 단가에서 뺀다. 번지대 거래는 어느 필지로도 확정하지 않는다.")
     return "\n".join(lines) + "\n"
