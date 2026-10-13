@@ -26,6 +26,18 @@ export function pickLabel(name, now = new Date()) {
   return `지도에서 고른 곳 (${p2(now.getMonth() + 1)}-${p2(now.getDate())} ${p2(now.getHours())}:${p2(now.getMinutes())})`;
 }
 
+/** 자리 고르기의 위치점 (리뷰 반영 PR #109): 지도를 세계 한 바퀴 넘게 밀면 경도가 ±180 을 넘으므로 -180~180 으로 감고, 위도가 범위 밖이거나 숫자가 아니면 null.
+ *  소수 7자리로 반올림한다 (assets.new.json 스키마 범위 안). */
+export function pickPoint(c) {
+  if (!Array.isArray(c) || c.length !== 2 || !c.every(Number.isFinite)) return null;
+  let lon = ((((c[0] + 180) % 360) + 360) % 360) - 180;
+  if (Object.is(lon, -0)) lon = 0;
+  const lat = c[1];
+  if (lat < -90 || lat > 90) return null;
+  const r = [Number(lon.toFixed(7)), Number(lat.toFixed(7))];
+  return r[0] === 180 ? [-180, r[1]] : r;
+}
+
 /** 저장 시각(ISO)을 "오늘 14:05" / "9월 25일 14:05" 처럼 짧게. 값이 없으면 null. */
 export function shortWhen(iso, now = new Date()) {
   if (!iso) return null;

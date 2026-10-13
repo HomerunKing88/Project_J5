@@ -10,7 +10,7 @@ import { validateSeed, filterAssets, hasTracking, isWatchlist, TRACKING_LABEL, A
 import { validateParcels, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, attrLines, attrsSummary, ZONE_LABELS, findParcels, parcelAt, interiorPoint, priceTrend, priceTrendRow, ownershipKinds, ownershipChanges, parseFilter, hasCriteria, filterParcels, filterRowText, FILTER_LIMIT } from "./parcels.js";
 import { selectRecords, planBatches, buildPackage, hasRemainingBatches, studyIdError } from "./export.js";
 import { migrationReadiness, migrationText, persistenceText } from "./migrate.js";
-import { createNavigator, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, pickLabel, MODE_LABEL, MODE_SHORT } from "./ui.js";
+import { createNavigator, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, pickLabel, pickPoint, MODE_LABEL, MODE_SHORT } from "./ui.js";
 import { externalMapLinks, bboxCenter, LINK_ATTRS } from "./extmap.js";
 import { validateBasemap, LAYERS as BASEMAP_LAYERS, LAYER_LABEL as BASEMAP_LAYER_LABEL } from "./basemap.js";
 import { PROVIDERS, resolveTileConfig, prefetchPlan, padBbox, tileUrl, hasKeyLike, TILE_CACHE, PREFETCH_ZOOMS, KEY_PLACEHOLDER } from "./tiles.js";
@@ -1017,7 +1017,8 @@ function endPick() {
 async function pickHere() {
   const c = state.map?.visibleCenter?.();
   if (!c || !c.every(Number.isFinite)) return text($("pick-note"), "지도 가운데 자리를 읽지 못했습니다. 지도를 조금 움직인 뒤 다시 누릅니다.", "warn");
-  const pt = [Number(c[0].toFixed(7)), Number(c[1].toFixed(7))];
+  const pt = pickPoint(c);
+  if (!pt) return text($("pick-note"), "이 자리의 위치를 쓸 수 없습니다. 지도를 조금 움직인 뒤 다시 누릅니다.", "warn");
   const feature = state.parcels ? parcelAt(state.parcels.features, pt) : null;
   if (feature) {   // 필지 안: 그 필지 카드에서 필지로 대상을 만들거나 기존 대상을 기록한다
     endPick();
@@ -1059,7 +1060,8 @@ function closeParcelPanel() {
 async function initMap() {
   try {
     const { createMap } = await import("./map.js");
-    state.map = createMap($("map-svg"), { onSelect: selectOnMap, onSelectParcel: showParcel, onTileStatus, home: FIELD_HOME });
+    // 자리 고르기 중에는 점·필지 누르기로 카드를 열지 않는다 (고르기 상태가 남지 않게, 리뷰 반영 PR #109). 고르기는 지도를 끌어 맞춘다
+    state.map = createMap($("map-svg"), { onSelect: (a) => { if (!state.picking) selectOnMap(a); }, onSelectParcel: (f) => { if (!state.picking) showParcel(f); }, onTileStatus, home: FIELD_HOME });
     $("map-zoom-in").addEventListener("click", () => mapCall((m) => m.zoomBy(2)));
     $("map-zoom-out").addEventListener("click", () => mapCall((m) => m.zoomBy(0.5)));
     $("map-fit").addEventListener("click", () => mapCall((m) => m.fit()));

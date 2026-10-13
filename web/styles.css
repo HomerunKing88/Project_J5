@@ -348,6 +348,7 @@ details.disclosure.quiet > summary { color: var(--pencil); font-weight: 600; }
 .locate-ring { fill: var(--blue); fill-opacity: .12; stroke: var(--blue); stroke-opacity: .5; stroke-width: 1; }
 .locate-dot { fill: var(--blue); stroke: #fff; stroke-width: 2.5; }
 /* 자리 고르기 (J5-062): 가운데 십자와 위 막대 */
+.layer-pick { pointer-events: none; }   /* 십자는 누르기를 받지 않는다 */
 .pick-ring { fill: none; stroke: var(--blue); stroke-width: 2.5; }
 .pick-line { stroke: var(--blue); stroke-width: 2.5; }
 .pick-bar { width: 100%; max-width: 480px; display: grid; gap: var(--s-2); padding: var(--s-3); background: var(--sheet); border: 1px solid var(--rule); border-radius: 12px; box-shadow: var(--shadow-float); }

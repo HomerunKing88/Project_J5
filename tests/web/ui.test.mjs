@@ -1,7 +1,7 @@
 // ui.js 순수 함수 (J5-020): 해시 → 화면, 짧은 시각, 물건별 기록 요약, 다음 대상, 내보내기 단계. DOM 없음.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { pickLabel, PICK_NAME_MAX, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, VIEWS, DEFAULT_VIEW, MODE_LABEL } from "../../web/app/ui.js";
+import { pickLabel, pickPoint, PICK_NAME_MAX, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, VIEWS, DEFAULT_VIEW, MODE_LABEL } from "../../web/app/ui.js";
 
 const ev = (asset, saved, status = "no_change", photos = 0, exported = false) => ({
   asset_id: asset, saved_at: saved, status: exported ? "exported" : "saved",
@@ -59,4 +59,15 @@ test("pickLabel: 자리 고르기로 만든 대상 이름 (J5-062)", () => {
   assert.equal(pickLabel("", new Date(2026, 9, 13, 9, 5)), "지도에서 고른 곳 (10-13 09:05)");
   assert.equal(pickLabel("   ", new Date(2026, 0, 2, 23, 59)), "지도에서 고른 곳 (01-02 23:59)");
   assert.equal(pickLabel("가".repeat(80)).length, PICK_NAME_MAX);
+});
+
+test("pickPoint: 경도를 -180~180 으로 감고 범위 밖 위도·숫자 아님은 거절 (리뷰 반영 PR #109)", () => {
+  assert.deepEqual(pickPoint([127.00191234567, 37.57091234567]), [127.0019123, 37.5709123]);
+  assert.deepEqual(pickPoint([127.0019 + 360, 37.5709]), [127.0019, 37.5709], "한 바퀴 넘게 밀어도 같은 곳");
+  assert.deepEqual(pickPoint([127.0019 - 720, 37.5709]), [127.0019, 37.5709]);
+  assert.deepEqual(pickPoint([180, 10]), [-180, 10]);
+  assert.deepEqual(pickPoint([-180, 10]), [-180, 10]);
+  for (const bad of [null, [1], [NaN, 1], [1, Infinity], [1, 91], [1, -91]]) assert.equal(pickPoint(bad), null, JSON.stringify(bad));
+  const [lon, lat] = pickPoint([540.5, 85]);
+  assert.ok(lon >= -180 && lon <= 180 && lat <= 90);
 });

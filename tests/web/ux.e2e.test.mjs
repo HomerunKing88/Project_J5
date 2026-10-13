@@ -295,7 +295,16 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     assert.equal(await cdp.eval("document.querySelector('#map-svg .layer-pick').getAttribute('visibility')"), "hidden");
     assert.equal(await cdp.eval("document.getElementById('parcel-pnu').textContent"), pTarget.pnu, "필지 안이면 그 필지 카드");
     await cdp.eval("document.getElementById('map-pick').click(); 'ok'");
-    await cdp.waitFor(visible("pick-bar"));
+    await cdp.waitFor(`${visible("pick-bar")} && document.getElementById('parcel-panel').hidden`);
+    // 고르는 중에는 필지·점을 눌러도 카드가 열리지 않고 고르기가 이어진다 (리뷰 반영 PR #109)
+    const tapSel = await cdp.eval(`(() => { const top = document.getElementById('pick-bar').getBoundingClientRect().bottom + 30, bottom = document.getElementById('field-sheet').getBoundingClientRect().top - 30;
+      const s = document.getElementById('map-svg').getBoundingClientRect(); const m = /translate\\(([-\\d.]+),([-\\d.]+)\\)/.exec(document.querySelector('#map-svg .layer-pick').getAttribute('transform')); const cx = s.left + Number(m[1]), cy = s.top + Number(m[2]);
+      const p = Array.from(document.querySelectorAll('#map-svg path.parcel')).find((el) => { const b = el.getBoundingClientRect(); const x = b.left + b.width / 2, y = b.top + b.height / 2; return y > top && y < bottom && b.width > 8 && Math.hypot(x - cx, y - cy) > 60; });
+      return p ? '#map-svg path.parcel[data-pnu="' + p.dataset.pnu + '"]' : null; })()`);
+    assert.ok(tapSel, "누를 수 있는 필지가 보인다");
+    await cdp.clickRect(tapSel);
+    await new Promise((r) => setTimeout(r, 300));
+    assert.ok(await cdp.eval("document.getElementById('parcel-panel').hidden && !document.getElementById('pick-bar').hidden"), "고르는 중 누르기는 무시");
     cross = await cdp.eval(PICK_AT);
     for (let i = 0; i < 3; i++) await drag({ x: cross.x, y: cross.y + 150 }, { x: cross.x, y: cross.y - 150 });   // 필지 묶음에서 멀리
     await cdp.eval("document.getElementById('pick-name').value = '  세운상가 옆 3층  '; document.getElementById('pick-ok').click(); 'ok'");
