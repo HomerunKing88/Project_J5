@@ -388,6 +388,7 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     assert.equal(await cdp.eval("document.querySelector('#comps-facts li .v').textContent"), "9건", "전체 기간의 가상동 거래 9건");
     assert.match(await cdp.eval("document.querySelectorAll('#comps-facts li')[1].textContent"), /^대지 평당중간 [0-9,.억만]+\/평 \([0-9,.억만]+\/평~[0-9,.억만]+\/평, 8건\)$/, "지분 거래 1건은 단가에서 뺀다");
     assert.match(await cdp.eval(txt("comps-reference")), /견줄 수 있는 사례가 0건이라 참고값을 내지 않습니다/);
+    assert.match(await cdp.eval("document.querySelectorAll('#comps-facts li')[2].textContent"), /^연면적 평당중간 [0-9,.억만]+\/평 \([0-9,.억만]+\/평~[0-9,.억만]+\/평, 8건\)$/, "연면적 평당도 범위");
     assert.equal(await cdp.eval("document.querySelectorAll('#comps-list li').length"), 5);
     await cdp.eval("(() => { const y = document.getElementById('comps-years'); y.value = '3'; y.dispatchEvent(new Event('change')); return 'ok'; })()");
     await cdp.waitFor(`document.querySelector('#comps-facts li .v').textContent === '${expectDeals(3).n}건' && document.getElementById('deal-years').value === '3'`);   // 지도 실거래 기간도 같이
@@ -399,6 +400,17 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     await cdp.waitFor(`document.querySelectorAll('#map-svg g.deal').length === 5 && ${txt("deal-count")}.startsWith('대지 평당, 거래 9건')`);
     await cdp.eval("document.getElementById('map-deals').click(); 'ok'");
     await cdp.waitFor("document.querySelectorAll('#map-svg g.deal').length === 0 && document.getElementById('deal-legend').hidden");
+    // 거래 파일은 있으나 거래가 0건(수집했고 거래 없음)이면 주변 사례를 감추지 않고 0건으로 보인다 (리뷰 반영 PR #111)
+    await cdp.eval(`new Promise((res) => { const q = indexedDB.open('j5'); q.onsuccess = () => { const tx = q.result.transaction('view', 'readwrite'); const st = tx.objectStore('view');
+      const g = st.get('active'); g.onsuccess = () => { const v = g.result; v.transactions = { ...v.transactions, count: 0, transactions: [] }; st.put(v, 'active'); }; tx.oncomplete = () => { q.result.close(); res('ok'); }; }; })`);
+    await cdp.navigate(`${base}/index.html?reload=nodeals`);
+    await cdp.waitFor("document.querySelectorAll('#map-svg path.parcel').length === 6");
+    assert.ok(await cdp.eval("document.getElementById('map-deals').hidden"), "거래 0건이면 지도 실거래 버튼은 감춘다");
+    await cdp.eval("document.getElementById('parcel-search').value = '2'; document.getElementById('parcel-search-form').requestSubmit(); 'ok'");
+    await cdp.waitFor(`${visible("parcel-panel")} && ${visible("parcel-comps")}`);
+    assert.equal(await cdp.eval("document.querySelector('#comps-facts li .v').textContent"), "0건");
+    assert.equal(await cdp.eval(txt("comps-reference")), "이 기간에 같은 동의 거래가 없습니다.");
+    await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
     // 연습용 자료 지우기에 거래도 들어간다
     await go(cdp, "settings");
     await cdp.eval("document.getElementById('clear-sample').click(); 'ok'");

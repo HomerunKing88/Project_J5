@@ -494,7 +494,8 @@ const dealYear = (t) => Number(String(t.deal_date ?? t.deal_ymd).slice(0, 4));
 
 /**
  * 이 필지의 주변 사례. feature 의 시군구(emd_code 앞 5자리)·법정동 이름과 같은 거래만, since 이후.
- * { comps: [{t, where, landUnit, floorUnit, ratio, mine}], count, land: {n, median, min, max}, floor: {n, median}, ratio: {n, median}, reference }.
+ * { comps: [{t, where, landUnit, floorUnit, ratio, priceYear, mine}], count, land: {n, median, min, max}, floor: {n, median, min, max}, ratio: {n, median}, reference }.
+ * priceYear 는 배율에 쓴 공시지가의 실제 기준연도(거래 연도와 다를 수 있다, 리뷰 반영 PR #111).
  * landUnit·floorUnit 은 평당 원(지분 거래·면적 없음은 null). ratio 는 지번이 온전히 닿는 필지의 그 거래 연도 공시지가가 있을 때만.
  * reference: { unit(평당 원), perM2, price, priceYear, ratio, n } 또는 { missing: 사유 }.
  */
@@ -507,8 +508,9 @@ export function nearbyComps(feature, transactions, features, { since = null } = 
     for (const f of features ?? []) if (jibunMatch(t, f.properties) === "exact") { exact = f; break; }
     const pr = exact ? priceForYear(exact, dealYear(t)) : null;
     const perM2 = !t.share_deal && Number.isFinite(t.amount_krw) && Number.isFinite(t.plottage_area_m2) && t.plottage_area_m2 > 0 ? t.amount_krw / t.plottage_area_m2 : null;
+    const ok = perM2 !== null && pr && pr.price > 0;
     return { t, where: `${t.emd_name ?? ""} ${t.jibun ?? "지번 미공개"}${t.jibun_masked ? " 번지대" : ""}`.trim(), landUnit: unitPrice(t, "land"), floorUnit: unitPrice(t, "floor"),
-             ratio: perM2 !== null && pr && pr.price > 0 ? perM2 / pr.price : null, mine: exact?.id === feature?.id };
+             ratio: ok ? perM2 / pr.price : null, priceYear: ok ? pr.year : null, mine: exact?.id === feature?.id };
   });
   const lands = comps.map((c) => c.landUnit).filter(Number.isFinite);
   const floors = comps.map((c) => c.floorUnit).filter(Number.isFinite);
@@ -520,5 +522,5 @@ export function nearbyComps(feature, transactions, features, { since = null } = 
   else if (!own) reference = { missing: "이 필지의 공시지가 자료가 없어 참고값을 내지 않습니다" };
   else reference = { perM2: own.price * r, unit: own.price * r * PYEONG_M2, price: own.price, priceYear: own.year, ratio: r, n: ratios.length };
   return { comps, count: comps.length, land: { n: lands.length, median: median(lands), min: lands.length ? Math.min(...lands) : null, max: lands.length ? Math.max(...lands) : null },
-           floor: { n: floors.length, median: median(floors) }, ratio: { n: ratios.length, median: r }, reference };
+           floor: { n: floors.length, median: median(floors), min: floors.length ? Math.min(...floors) : null, max: floors.length ? Math.max(...floors) : null }, ratio: { n: ratios.length, median: r }, reference };
 }

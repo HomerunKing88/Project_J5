@@ -333,6 +333,10 @@ test("nearbyComps: 같은 시군구·동, 기간, 평당 단가 중간·범위, 
   assert.equal(Math.round(c.land.min / PYEONG_M2), 1_500_000);
   assert.equal(Math.round(c.land.max / PYEONG_M2), 9_000_000);
   assert.deepEqual(c.comps.map((x) => x.ratio === null ? null : Number(x.ratio.toFixed(2))), [2, null, 3, null, 2.5]);
+  assert.deepEqual(c.comps.map((x) => x.priceYear), [2024, null, 2020, null, 2020], "배율에 쓴 공시지가의 실제 기준연도 (2023 거래는 2020 값)");
+  assert.equal(c.floor.n, 4);
+  assert.equal(Math.round(c.floor.min / PYEONG_M2), 500_000, "연면적 평당 범위 (연면적은 대지의 3배)");
+  assert.equal(Math.round(c.floor.max / PYEONG_M2), 3_000_000);
   assert.equal(c.ratio.n, 3);
   assert.equal(c.ratio.median, 2.5);
   assert.equal(c.reference.ratio, 2.5);

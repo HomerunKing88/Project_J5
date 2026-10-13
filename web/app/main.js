@@ -859,8 +859,9 @@ function renderRecentDeals(items) {
 // ---- 주변 사례 (J5-064): 같은 시군구·법정동의 거래로 단가 중간값·범위와 공시지가 대비 배율, 이 필지의 참고 추정 ----
 function renderComps(feature) {
   const all = dealTxs();
-  $("parcel-comps").hidden = !all.length;
-  if (!all.length) return;
+  // 거래 파일이 있으면 거래가 0건이어도 보인다: 수집했고 거래가 없는 것과 자료가 없는 것을 가른다 (리뷰 반영 PR #111)
+  $("parcel-comps").hidden = !state.view?.transactions;
+  if (!state.view?.transactions) return;
   const years = state.dealView.years;
   $("comps-years").value = String(years);
   const c = nearbyComps(feature, all, state.parcels?.features ?? [], { since: dealSince(years, localDate()) });
@@ -870,8 +871,8 @@ function renderComps(feature) {
   const facts = [["거래", `${c.count}건`]];
   if (c.count) {
     facts.push(["대지 평당", c.land.n ? `중간 ${per(c.land.median)} (${per(c.land.min)}~${per(c.land.max)}, ${c.land.n}건)` : "면적이 있는 거래 없음"]);
-    facts.push(["연면적 평당", c.floor.n ? `중간 ${per(c.floor.median)} (${c.floor.n}건)` : "면적이 있는 거래 없음"]);
-    facts.push(["공시지가 대비", c.ratio.n ? `중간 ${c.ratio.median.toFixed(2)}배 (${c.ratio.n}건, 거래 연도의 그 필지 공시지가 기준)` : "견줄 수 있는 사례 없음"]);
+    facts.push(["연면적 평당", c.floor.n ? `중간 ${per(c.floor.median)} (${per(c.floor.min)}~${per(c.floor.max)}, ${c.floor.n}건)` : "면적이 있는 거래 없음"]);
+    facts.push(["공시지가 대비", c.ratio.n ? `중간 ${c.ratio.median.toFixed(2)}배 (${c.ratio.n}건, 그 필지의 거래 연도 이하 가장 최근 공시지가 기준, 사례마다 기준연도를 아래에 적음)` : "견줄 수 있는 사례 없음"]);
   }
   $("comps-facts").replaceChildren(...facts.map(([k, v]) => el("li", {}, el("span", { class: "k", text: k }), el("span", { class: "v", text: v }))));
   const r = c.reference;
@@ -882,7 +883,7 @@ function renderComps(feature) {
     el("span", { class: "deal-date num", text: x.t.deal_date ?? x.t.deal_ymd }),
     el("span", { class: "deal-main" }, el("strong", { class: "num", text: `${dealKind(x.t)} ${fmtKrw(x.t.amount_krw)}` }),
       ...(x.mine ? [el("span", { class: "badge match-exact", text: "이 필지" })] : []),
-      el("span", { class: "deal-sub", text: [x.where, `대지 ${dealValueText(x.t, "land")}`, x.ratio ? `공시지가의 ${x.ratio.toFixed(2)}배` : null].filter(Boolean).join(", ") })))));
+      el("span", { class: "deal-sub", text: [x.where, `대지 ${dealValueText(x.t, "land")}`, x.ratio ? `${x.priceYear}년 공시지가의 ${x.ratio.toFixed(2)}배` : null].filter(Boolean).join(", ") })))));
 }
 
 function openParcelHistory(feature, inside) {
