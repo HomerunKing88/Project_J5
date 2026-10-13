@@ -26,7 +26,7 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
       const origAdd = IDBObjectStore.prototype.add;
       IDBObjectStore.prototype.add = function (v, k) { if (this.name === 'events' && window.__failSave) throw new DOMException('저장 공간 부족 (e2e)', 'QuotaExceededError'); return origAdd.call(this, v, k); };` });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor(`${txt("status-line")}.includes('앱 0.2.25')`);
+    await cdp.waitFor(`${txt("status-line")}.includes('앱 0.2.26')`);
 
     // 1. 처음 실행: 현장 화면, 시트가 펼쳐져 시작하기(PC 자료 파일·연습용 자료)가 보인다, 기술 용어 없음
     assert.ok(await cdp.eval(visible("view-map")) && await cdp.eval("document.getElementById('view-records').hidden"), "첫 화면은 현장");
@@ -232,11 +232,49 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     await cdp.waitFor("document.querySelectorAll('#asset-list li .row-act').length === 2");
     assert.ok(await cdp.eval("document.getElementById('map-selected').hidden"), "사라진 물건의 선택 카드는 닫힌다");
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.pt.sel').length"), 0);
+    // 13c. 연습용 자료 지우기 (J5-061): 앱에 든 연습용 필지·윤곽·대상만 지우고, 파일에서 가져온 대상 목록과 저장한 기록은 그대로
+    await go(cdp, "settings");
+    await cdp.waitFor(visible("sample-item"));
+    const recordsBefore = await cdp.eval("document.querySelectorAll('#record-list li').length");
+    assert.ok(recordsBefore > 0, "지우기 전에 저장한 기록이 있다");
+    await cdp.eval("document.getElementById('clear-sample').click(); 'ok'");
+    await cdp.waitFor(`${txt("sample-note")}.includes('지웠습니다')`);
+    assert.ok((await cdp.eval(txt("sample-note"))).includes("필지·건물·도로 윤곽") && !(await cdp.eval(txt("sample-note"))).includes("대상 목록"), "파일에서 가져온 대상 목록은 지우지 않는다");
+    assert.ok(await cdp.eval("document.getElementById('sample-item').hidden"), "지울 연습용 자료가 없으면 감춘다");
+    assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li .row-act').length"), 2);
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel').length"), 0, "연습용 필지가 지도에서 사라진다");
+    await cdp.eval("document.getElementById('load-synthetic').click(); 'ok'");
+    await cdp.waitFor(`${visible("sample-item")} && ${txt("stat-targets")} === '5'`);
+    await cdp.eval("document.getElementById('clear-sample').click(); 'ok'");
+    await cdp.waitFor(`${txt("sample-note")}.includes('대상 목록')`);
+    assert.ok((await cdp.eval(txt("sample-note"))).includes("작업 공간에서 자료 종류를 실제 자료로"), "연습용 모드면 실제 자료로 바꾸는 곳을 알린다");
+    assert.equal(await cdp.eval(txt("stat-targets")), "0");
+    assert.equal(await cdp.eval("document.querySelectorAll('#record-list li').length"), recordsBefore, "저장한 기록은 지우지 않는다");
+    // 13d. 예전 판이 저장한 인증키 든 주소 (리뷰 반영 PR #108): 다시 열면 그 주소와 그 주소로 받은 타일을 지우고 안내한다. 다른 타일은 남긴다 (가상 UUID)
+    const fakeKey = "0A1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D";
+    await cdp.eval(`(async () => {
+      const db = await new Promise((res, rej) => { const q = indexedDB.open('j5'); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+      await new Promise((res) => { const tx = db.transaction('meta', 'readwrite'); tx.objectStore('meta').put('custom', 'tiles_provider'); tx.objectStore('meta').put('https://api.vworld.kr/req/wmts/1.0.0/{${fakeKey}}/Base/{z}/{y}/{x}.png', 'tiles_template'); tx.oncomplete = res; });
+      db.close();
+      const c = await caches.open('j5-tiles-v1');
+      await c.put('https://api.vworld.kr/req/wmts/1.0.0/%7B${fakeKey}%7D/Base/15/1/2.png', new Response('x'));
+      await c.put(location.origin + '/tiles/15/1/2.png', new Response('y'));
+      return 'ok';
+    })()`);
+    await cdp.navigate(`${base}/index.html?reload=key#settings`);
+    await cdp.waitFor(`${txt("tiles-note")}.includes('인증키가 들어 있어')`);
+    assert.ok((await cdp.eval(txt("tiles-note"))).includes("타일 1장"), "키가 든 주소로 받은 타일만 지운다");
+    assert.ok(!(await cdp.eval("document.body.innerText")).includes(fakeKey), "화면 어디에도 키가 없다");
+    assert.equal(await cdp.eval("document.getElementById('tiles-template').value"), "");
+    assert.equal(await cdp.eval("document.getElementById('tiles-provider').value"), "");
+    assert.deepEqual(await cdp.eval("caches.open('j5-tiles-v1').then((c) => c.keys()).then((ks) => ks.map((r) => new URL(r.url).pathname))"), ["/tiles/15/1/2.png"]);
+    assert.equal(await cdp.eval(`new Promise((res) => { const q = indexedDB.open('j5'); q.onsuccess = () => { const g = q.result.transaction('meta').objectStore('meta').get('tiles_template'); g.onsuccess = () => { res(g.result ?? null); q.result.close(); }; }; })`), null);
+    await cdp.eval("caches.delete('j5-tiles-v1').then(() => 'ok')");
     // 14. 접근성 속성: 입력마다 label, 아이콘 버튼 aria-label, 상태 메시지 live, 제목 순서
     const a11y = await cdp.eval(`(() => {
       const unlabeled = Array.from(document.querySelectorAll('input:not([type=hidden]), select, textarea')).filter(i => !(i.labels && i.labels.length) && !i.getAttribute('aria-label') && !i.getAttribute('aria-labelledby')).map(i => i.id || i.name);
       const iconNoLabel = Array.from(document.querySelectorAll('button.icon')).filter(b => !b.getAttribute('aria-label')).map(b => b.id);
-      const live = ['observe-note', 'export-note', 'settings-note', 'seed-note', 'parcels-note', 'basemap-note', 'view-note', 'tiles-note', 'tiles-prefetch-note', 'map-note'].filter(id => !document.getElementById(id).getAttribute('role') && !document.getElementById(id).getAttribute('aria-live'));
+      const live = ['observe-note', 'export-note', 'settings-note', 'seed-note', 'parcels-note', 'basemap-note', 'view-note', 'tiles-note', 'tiles-prefetch-note', 'map-note', 'sample-note'].filter(id => !document.getElementById(id).getAttribute('role') && !document.getElementById(id).getAttribute('aria-live'));
       const heads = Array.from(document.querySelectorAll('h1, h2, h3')).map(h => Number(h.tagName[1]));
       let bad = false; for (let i = 1; i < heads.length; i++) if (heads[i] - heads[i - 1] > 1) bad = true;
       return { unlabeled, iconNoLabel, live, headingJump: bad, navLabel: document.querySelector('nav').getAttribute('aria-label') };
