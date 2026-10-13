@@ -443,3 +443,24 @@ test("주변 사례 추이: 점(대지 평당)·공시지가 계단선(평당 �
   assert.equal(compsChartData(c, { properties: {} }).steps.length, 0, "공시지가 자료가 없으면 선 없음");
   assert.equal(compsChartData(nearbyComps(mine, [txs[2], txs[3]], [mine]), mine), null, "대지 평당이 있는 사례가 없으면 그래프 없음");
 });
+
+// ---- 여러 시군구의 범위 규칙 (J5-068): PC j5.db.zones.classify 와 같은 진리표 ----
+import { zoneOfRule } from "../../web/app/view.js";
+
+test("zoneOfRule: 시군구를 붙인 항목이 먼저, 이름만 쓴 항목은 규칙 시군구에만 (PC 와 같다)", () => {
+  const zr = { version: 1, core: ["종로5가", "11140:을지로4가"], comparison: ["11140:종로5가", "예지동"], lawd_cd: "11110" };
+  const cases = [["종로5가", "11110", "core"], ["종로5가", "11140", "comparison"], ["을지로4가", "11140", "core"], ["을지로4가", "11110", "outside"],
+    ["예지동", "11140", "outside"], ["예지동", "11110", "comparison"], ["효제동", "11110", "outside"], [null, "11110", "outside"]];
+  for (const [emd, sgg, want] of cases) assert.equal(zoneOfRule(zr, emd, sgg), want, `${sgg}:${emd}`);
+  const noSgg = { ...zr, lawd_cd: null };
+  assert.equal(zoneOfRule(noSgg, "예지동", "11140"), "comparison");
+  assert.equal(zoneOfRule(noSgg, "종로5가", "11140"), "comparison");
+  // 연도별 표: 다른 시군구의 같은 이름 동도 시군구를 붙여 넣으면 범위 안 (0건과 범위 밖을 가른다)
+  const f = (code, name) => ({ id: `${code}00100010000`.slice(0, 19), properties: { emd_name: name, emd_code: code, label: "1", bon: 1, bu: 0, mountain: false } });
+  const txDoc = { j5transactions: "1.0.0", count: 0, transactions: [], zone_rule: { version: 1, core: ["11110:종로5가"], comparison: ["11140:종로5가"], lawd_cd: null },
+    coverage: [{ lawd_cd: "11110", year: 2026, months_complete: 8, months_any: 8 }, { lawd_cd: "11140", year: 2026, months_complete: 8, months_any: 8 },
+      { lawd_cd: "11350", year: 2026, months_complete: 8, months_any: 8 }] };
+  assert.deepEqual(validateTransactionsDoc(txDoc), []);
+  assert.equal(parcelYearSummary(f("1114012300", "종로5가"), [], txDoc, [])[0].tx, "counted");
+  assert.equal(parcelYearSummary(f("1135012300", "종로5가"), [], txDoc, [])[0].tx, "outside", "규칙에 없는 시군구의 같은 이름 동은 범위 밖");
+});

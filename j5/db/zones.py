@@ -2,6 +2,8 @@
 
 - 범위 규칙(zone_rules): 법정동 이름 목록으로 핵심(core)·비교(comparison)를 정한 버전. `apply_rules` 는 새 버전을 넣고 정본의 모든 거래를 다시 분류한다.
   규칙 밖 법정동은 outside, 규칙이 없으면 unclassified. 마스킹 지번 때문에 법정동보다 작은 경계는 두지 않는다("미확인 주소를 임의 경계 안에 넣지 않는다").
+- 여러 시군구(J5-068, ADR-23): 목록 항목에 `11140:을지로4가` 처럼 시군구 5자리를 붙이면 그 시군구의 그 법정동만 뜻한다. 이름만 쓴 항목은 이전처럼
+  규칙의 `lawd_cd` 시군구(없으면 모든 시군구)에 적용한다. 시군구를 붙인 항목이 이름만 쓴 항목보다 먼저 맞는다.
 - 변경 점검(`changes_since`): 어떤 실행 이후 새로 보인 거래, 취소로 바뀐 거래, 응답에서 사라진 거래를 센다. 취소·정정 점검(월 1회 최근 6개월 `rt-recheck`)의 결과를 읽는 용도다.
 - 파생본용 거래 목록(`transactions_for_projection`): 핵심·비교 범위의 취소 확정이 아닌 거래. 범위 밖 행은 파생본에 넣지 않는다.
 """
@@ -9,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -17,6 +20,7 @@ from j5.db.validate import ValidationError
 from j5.schemas_loader import schema_errors
 
 RULES_SCHEMA = "zone_rules.schema.json"
+QUALIFIED_RE = re.compile(r"^([0-9]{5}):(.+)$")
 TRANSACTIONS_FILE_VERSION = "1.0.0"
 
 
@@ -49,16 +53,37 @@ def load_rules(path: Path) -> dict:
     errs = schema_errors(RULES_SCHEMA, doc)
     if errs:
         raise ValidationError([f"입력이 {RULES_SCHEMA} 에 맞지 않는다"] + errs[:10])
-    core = [c.strip() for c in doc["core"]]
-    comp = [c.strip() for c in doc["comparison"]]
-    if any(not c for c in core + comp):
+    core = [_norm_entry(c) for c in doc["core"]]
+    comp = [_norm_entry(c) for c in doc["comparison"]]
+    if any(not c or c.endswith(":") for c in core + comp):
         raise ValidationError(["법정동 이름이 비어 있다"])
+    bad = [c for c in core + comp if ":" in c and not QUALIFIED_RE.match(c)]
+    if bad:
+        raise ValidationError([f"시군구를 붙인 법정동은 '시군구 5자리:법정동' 형식이다 (예: 11140:을지로4가): {bad[:5]}"])
     overlap = sorted(set(core) & set(comp))
     if overlap:
         raise ValidationError([f"같은 법정동이 핵심과 비교 둘 다에 있다: {overlap}"])
     if len(set(core)) != len(core) or len(set(comp)) != len(comp):
         raise ValidationError(["같은 법정동이 한 목록에 두 번 있다 (앞뒤 공백 차이 포함)"])
     return {"kind": "zone_rules", "name": doc["name"].strip(), "core": core, "comparison": comp, "lawd_cd": doc.get("lawd_cd"), "note": doc.get("note")}
+
+
+def _norm_entry(entry: str) -> str:
+    """목록 항목의 앞뒤 공백을 지운다. 시군구를 붙인 항목(`11140:을지로4가`)은 시군구와 이름 사이 공백도 지운다."""
+    e = entry.strip()
+    m = re.match(r"^([0-9]{5})\s*:\s*(.*)$", e)
+    return f"{m.group(1)}:{m.group(2).strip()}" if m else e
+
+
+def split_entry(entry: str) -> tuple[str | None, str]:
+    """목록 항목 → (시군구 또는 None, 법정동 이름)."""
+    m = QUALIFIED_RE.match(entry)
+    return (m.group(1), m.group(2)) if m else (None, entry)
+
+
+def has_plain_entries(rules: dict) -> bool:
+    """시군구를 붙이지 않은 법정동 이름이 있는가 (규칙에 lawd_cd 가 없으면 모든 시군구에 적용되는 항목)."""
+    return any(split_entry(e)[0] is None for e in [*rules["core"], *rules["comparison"]])
 
 
 def current_rules(db: Db) -> dict | None:
@@ -71,9 +96,16 @@ def current_rules(db: Db) -> dict | None:
 
 
 def classify(rules: dict | None, emd_name: str | None, lawd_cd: str | None = None) -> str:
-    """법정동 이름으로 범위를 정한다. 규칙에 시군구(lawd_cd)가 있으면 다른 시군구의 거래는 이름이 같아도 범위 밖이다 (J5-048: 여러 지역 정본, ADR-23)."""
+    """법정동 이름으로 범위를 정한다. 시군구를 붙인 항목(`11140:을지로4가`)이 먼저 맞는다 (J5-068). 이름만 쓴 항목은 규칙에 시군구(lawd_cd)가 있으면
+    그 시군구의 거래에만 맞고 다른 시군구의 거래는 이름이 같아도 범위 밖이다 (J5-048: 여러 지역 정본, ADR-23)."""
     if rules is None:
         return "unclassified"
+    if lawd_cd and emd_name:
+        key = f"{lawd_cd}:{emd_name}"
+        if key in rules["core"]:
+            return "core"
+        if key in rules["comparison"]:
+            return "comparison"
     if rules.get("lawd_cd") and lawd_cd != rules["lawd_cd"]:
         return "outside"
     if emd_name in rules["core"]:
@@ -117,8 +149,17 @@ def zone_counts(db: Db) -> dict:
 def rules_text(rules: dict | None, counts: dict) -> str:
     if rules is None:
         return "범위 규칙 없음: 모든 거래가 unclassified 다. `j5 db rt-zones apply <규칙.json>` 으로 정한다 (schemas/zone_rules.schema.json)\n"
+    entries = [*rules["core"], *rules["comparison"]]
+    qualified = sorted({s for s, _ in map(split_entry, entries) if s})
+    if not qualified:   # 이전 규칙과 같은 글
+        sgg = f"{rules['lawd_cd']} 만" if rules.get("lawd_cd") else "정하지 않음 (다른 시군구의 같은 이름 법정동도 범위에 든다)"
+    elif not has_plain_entries(rules):
+        sgg = f"법정동마다 시군구를 붙임 ({', '.join(qualified)})"
+    else:
+        sgg = (f"이름만 쓴 법정동은 {rules['lawd_cd']} 만" if rules.get("lawd_cd") else "이름만 쓴 법정동은 정하지 않음 (다른 시군구의 같은 이름 법정동도 범위에 든다)")
+        sgg += f" · 시군구를 붙인 법정동: {', '.join(qualified)}"
     return (f"범위 규칙 v{rules['version']} '{rules['name']}' ({rules['recorded_at']})\n"
-            f"  시군구: {rules['lawd_cd'] + ' 만' if rules.get('lawd_cd') else '정하지 않음 (다른 시군구의 같은 이름 법정동도 범위에 든다)'}\n  핵심: {', '.join(rules['core'])}\n  비교: {', '.join(rules['comparison']) or '(없음)'}\n"
+            f"  시군구: {sgg}\n  핵심: {', '.join(rules['core'])}\n  비교: {', '.join(rules['comparison']) or '(없음)'}\n"
             f"  거래(취소 제외): 핵심 {counts.get('core', 0)}, 비교 {counts.get('comparison', 0)}, 범위 밖 {counts.get('outside', 0)}, 미분류 {counts.get('unclassified', 0)}\n")
 
 
