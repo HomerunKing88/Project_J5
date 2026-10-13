@@ -26,7 +26,7 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
       const origAdd = IDBObjectStore.prototype.add;
       IDBObjectStore.prototype.add = function (v, k) { if (this.name === 'events' && window.__failSave) throw new DOMException('저장 공간 부족 (e2e)', 'QuotaExceededError'); return origAdd.call(this, v, k); };` });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor(`${txt("status-line")}.includes('앱 0.2.31')`);
+    await cdp.waitFor(`${txt("status-line")}.includes('앱 0.2.32')`);
 
     // 1. 처음 실행: 현장 화면, 시트가 펼쳐져 시작하기(PC 자료 파일·연습용 자료)가 보인다, 기술 용어 없음
     assert.ok(await cdp.eval(visible("view-map")) && await cdp.eval("document.getElementById('view-records').hidden"), "첫 화면은 현장");
@@ -403,6 +403,16 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     assert.match(await cdp.eval(txt("comps-reference")), /견줄 수 있는 사례가 0건이라 참고값을 내지 않습니다/);
     assert.match(await cdp.eval("document.querySelectorAll('#comps-facts li')[2].textContent"), /^연면적 평당중간 [0-9,.억만]+\/평 \([0-9,.억만]+\/평~[0-9,.억만]+\/평, 9건\)$/, "연면적 평당도 범위 (토지 거래는 빠진다)");
     assert.equal(await cdp.eval("document.querySelectorAll('#comps-list li').length"), 5);
+    // 주변 사례 추이 (J5-067): 대지 평당이 있는 사례마다 점 하나, 연습용 필지에는 공시지가가 없어 선이 없다. 점을 누르면 값을 적고, 같은 값이 표에도 있다
+    assert.ok(await cdp.eval(visible("comps-chart-wrap")));
+    assert.equal(await cdp.eval("document.querySelectorAll('#comps-chart g.chart-pt').length"), 10, "대지 평당 10건과 같은 수");
+    assert.equal(await cdp.eval("document.querySelectorAll('#comps-chart .chart-line path').length"), 0);
+    assert.match(await cdp.eval(txt("comps-chart-title")), /^같은 동 거래 10건의 대지 평당 단가와 이 필지 공시지가의 평당 환산, 공시지가 자료 없음$/);
+    assert.equal(await cdp.eval("document.querySelectorAll('#comps-chart-table tbody tr').length"), 10);
+    assert.equal(await cdp.eval("document.querySelectorAll('#comps-chart [style]').length"), 0, "SVG 에 style 속성 없음 (CSP)");
+    await cdp.clickRect("#comps-chart g.chart-pt:last-of-type .hit");
+    await cdp.waitFor("document.querySelector('#comps-chart g.chart-pt.on') !== null");
+    assert.match(await cdp.eval(txt("comps-chart-note")), /^\d{4}-\d{2}-\d{2} · \S+ · 대지 평당 [0-9,.억만]+\/평 · 가상동 /, "누른 점의 날짜·종류·대지 평당·지번");
     await cdp.eval("(() => { const y = document.getElementById('comps-years'); y.value = '3'; y.dispatchEvent(new Event('change')); return 'ok'; })()");
     await cdp.waitFor(`document.querySelector('#comps-facts li .v').textContent === '${expectDeals(3).n}건' && document.getElementById('deal-years').value === '3'`);   // 지도 실거래 기간도 같이
     await cdp.eval("(() => { const y = document.getElementById('comps-years'); y.value = '0'; y.dispatchEvent(new Event('change')); return 'ok'; })()");
@@ -415,6 +425,7 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     assert.equal(await cdp.eval("document.querySelectorAll('#comps-facts li')[2].textContent"), "연면적 평당면적이 있는 거래 없음", "토지 거래에는 연면적이 없다");
     assert.equal(await cdp.eval(txt("deal-count")), "대지 평당, 토지, 거래 1건");
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.deal').length"), 1, "토지 매매가 있는 필지 4-2 하나");
+    assert.equal(await cdp.eval("document.querySelectorAll('#comps-chart g.chart-pt').length"), 1, "그래프도 같은 종류 (J5-067)");
     await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
     // 켬·값·기간·종류는 이 폰에 남는다
     await cdp.navigate(`${base}/index.html?reload=deals`);

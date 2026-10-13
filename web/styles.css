@@ -24,6 +24,8 @@
   --danger: #a12a24;
   --danger-soft: #fbe9e7;
   --map-bg: #eceff1;
+  --chart-1: #2a78d6;    /* 그래프 계열 1: 거래 점 (J5-067, 시각화 검증기로 밝은·어두운 면 모두 통과) */
+  --chart-2: #eb6834;    /* 그래프 계열 2: 공시지가 선 */
   --bm-road: #ffffff;
   --bm-building: #dce1e5;
   --shadow-float: 0 1px 2px rgba(16, 24, 32, .12), 0 6px 20px rgba(16, 24, 32, .10);
@@ -58,6 +60,7 @@
     --blue: #8ea6ff; --blue-ink: #0d1430; --blue-soft: #1e2747; --cad: #f07a6e; --marker: #ffe14d; --marker-ink: #2b2500;
     --ok: #74c99c; --ok-soft: #173023; --warn: #e8ad52; --warn-soft: #33270f; --danger: #f28b82; --danger-soft: #3a1f1d;
     --map-bg: #161a1e; --bm-road: #2a3036; --bm-building: #303841;
+    --chart-1: #3987e5; --chart-2: #d95926;
     --shadow-float: 0 0 0 1px #2e353d, 0 6px 20px rgba(0, 0, 0, .4); --shadow-sheet: 0 -1px 0 #2e353d, 0 -8px 28px rgba(0, 0, 0, .45);
   }
 }
@@ -363,6 +366,25 @@ details.disclosure.quiet > summary { color: var(--pencil); font-weight: 600; }
 .deal-years { width: auto; flex: 0 0 auto; min-height: var(--touch); font-size: var(--t-xs); }
 .deal-count { color: var(--pencil); flex: 1 1 120px; min-width: 0; }   /* 종류 고르기(J5-066) 옆에 붙고 그 안에서 줄을 바꾼다 (실거래 줄을 두 줄로) */
 /* 주변 사례 (J5-064) */
+/* 주변 사례 추이 (J5-067): 얇은 표시, 회색 실선 격자, 글자는 글자 색(계열 색을 입히지 않는다) */
+.comps-chart { margin: var(--s-2) 0 0; }
+svg.chart { display: block; width: 100%; height: 180px; touch-action: pan-y; }
+.chart-grid line { stroke: var(--rule); stroke-width: 1; }
+.chart-tick text { fill: var(--pencil); font-size: 11px; }
+.chart-tick text.chart-direct { fill: var(--pencil); font-weight: 700; }
+.chart-line path { fill: none; stroke: var(--chart-2); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart-pt { cursor: pointer; outline: none; }
+.chart-pt .hit { fill: transparent; }
+.chart-pt .dot { fill: var(--chart-1); stroke: var(--sheet); stroke-width: 2; }
+.chart-pt.on .dot, .chart-pt:focus-visible .dot { stroke: var(--ink); stroke-width: 3; }
+.comps-chart figcaption { display: grid; gap: 2px; font-size: var(--t-xs); }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--ink); }
+.chart-key { display: inline-flex; align-items: center; gap: 6px; }
+.key-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--chart-1); }
+.key-dot.big { width: 12px; height: 12px; }
+.key-line { width: 16px; height: 2px; border-radius: 1px; background: var(--chart-2); }
+table.chart-table { width: 100%; border-collapse: collapse; font-size: var(--t-xs); }
+table.chart-table th, table.chart-table td { text-align: left; padding: 4px 6px 4px 0; border-top: 1px solid var(--rule); }
 .comps-scope { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); margin: 0; }
 .layer-pick { pointer-events: none; }   /* 십자는 누르기를 받지 않는다 */
 .pick-ring { fill: none; stroke: var(--blue); stroke-width: 2.5; }

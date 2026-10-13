@@ -414,3 +414,32 @@ test("거래 종류 거르기: 종류 칸이 없으면 상업·업무용, 종류
   const doc = JSON.parse(readFileSyncDeals(new URL("../../web/data/transactions.synthetic.json", import.meta.url), "utf8"));
   assert.deepEqual(dealKindsPresent(doc.transactions), ["nrg", "sh", "land"], "연습용 거래에는 세 종류가 다 있다");
 });
+
+// ---- 주변 사례 추이 (J5-067) ----
+import { compsChartData, niceTicks, yearFrac } from "../../web/app/view.js";
+
+test("주변 사례 추이: 점(대지 평당)·공시지가 계단선(평당 환산)·축 범위", () => {
+  assert.equal(yearFrac("2024-07-01"), 2024.5);
+  assert.ok(Math.abs(yearFrac("2024-03") - (2024 + 2 / 12 + 14 / 365)) < 1e-9, "월만 알면 그달 15일");
+  assert.deepEqual(niceTicks(9e6, 2.1e7, 3), { lo: 5e6, hi: 2.5e7, ticks: [5e6, 1e7, 1.5e7, 2e7, 2.5e7] });
+  assert.equal(niceTicks(100, 120, 3).lo >= 0, true);
+  assert.deepEqual(niceTicks(5, 5, 3).ticks.length >= 2, true, "값이 하나여도 범위가 생긴다");
+  const mine = compParcel("p1", 1, [[2019, 1_000_000], [2022, 1_200_000]]);
+  const txs = [compTx(ID(1), "2023-06-01", "1", 1_000_000_000, 330), compTx(ID(2), "2021-02-01", "2", 800_000_000, 300),
+    compTx(ID(3), "2022-08-01", "2", 500_000_000, 200, { share_deal: true }), compTx(ID(4), "2024-01-10", "1-*", 900_000_000, null)];
+  const c = nearbyComps(mine, txs, [mine, compParcel("p2", 2, [[2019, 900_000]])]);
+  const d = compsChartData(c, mine, { since: "2020-10-13", today: "2026-10-13" });
+  assert.deepEqual(d.points.map((p) => p.date), ["2021-02-01", "2023-06-01"], "지분·면적 없는 거래는 점이 없다, 오래된 것부터");
+  assert.equal(d.points[1].mine, true);
+  assert.ok(Math.abs(d.points[1].y - 1_000_000_000 / (330 / PYEONG_M2)) < 1e-6);
+  assert.deepEqual([d.x[0], d.x[1]], [yearFrac("2020-10-13"), yearFrac("2026-10-13")]);
+  assert.deepEqual(d.steps.map((s) => [s.year, +s.x0.toFixed(3), +s.x1.toFixed(3)]), [[2019, +yearFrac("2020-10-13").toFixed(3), 2022], [2022, 2022, +yearFrac("2026-10-13").toFixed(3)]],
+    "기간 시작에 걸친 기준연도 값부터, 다음 기준연도에서 바뀐다");
+  assert.ok(Math.abs(d.steps[1].y - 1_200_000 * PYEONG_M2) < 1e-6, "원/㎡ × 평");
+  assert.ok(d.y[0] <= Math.min(...d.points.map((p) => p.y), ...d.steps.map((s) => s.y)) && d.y[1] >= Math.max(...d.points.map((p) => p.y), ...d.steps.map((s) => s.y)));
+  assert.deepEqual(d.xTicks, [2021, 2022, 2023, 2024, 2025, 2026]);
+  const all = compsChartData(c, mine);
+  assert.deepEqual([all.x[0], all.x[1]], [2021, 2024], "전체 기간은 점의 연도로 맞춘다");
+  assert.equal(compsChartData(c, { properties: {} }).steps.length, 0, "공시지가 자료가 없으면 선 없음");
+  assert.equal(compsChartData(nearbyComps(mine, [txs[2], txs[3]], [mine]), mine), null, "대지 평당이 있는 사례가 없으면 그래프 없음");
+});
