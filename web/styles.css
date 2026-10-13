@@ -348,6 +348,20 @@ details.disclosure.quiet > summary { color: var(--pencil); font-weight: 600; }
 .locate-ring { fill: var(--blue); fill-opacity: .12; stroke: var(--blue); stroke-opacity: .5; stroke-width: 1; }
 .locate-dot { fill: var(--blue); stroke: #fff; stroke-width: 2.5; }
 /* 자리 고르기 (J5-062): 가운데 십자와 위 막대 */
+/* 실거래 꼬리표 (J5-063): 종류 칸(먹)과 값 칸(시트), 번지대는 점선 */
+.deal { cursor: pointer; }
+.deal-bg { fill: var(--sheet); stroke: var(--ink); stroke-width: 1; }
+.deal-kind-bg { fill: var(--ink); }
+.deal-kind { fill: var(--paper); font-size: 12px; font-weight: 700; }
+.deal-value { fill: var(--ink); font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.deal.masked .deal-bg { stroke-dasharray: 4 3; }
+.deal.masked .deal-kind-bg { fill: var(--pencil); }
+.deal-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 8px; background: var(--sheet); border: 1px solid var(--rule); border-radius: 12px; box-shadow: var(--shadow-float); font-size: var(--t-xs); }
+.deal-seg { display: inline-flex; border: 1px solid var(--rule); border-radius: var(--r-pill); overflow: hidden; }
+.deal-seg-btn { min-height: var(--touch); padding: 0 10px; border: none; background: transparent; color: var(--ink); font-size: var(--t-xs); font-weight: 700; }
+.deal-seg-btn[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.deal-years { width: auto; flex: 0 0 auto; min-height: var(--touch); font-size: var(--t-xs); }
+.deal-count { color: var(--pencil); }
 .layer-pick { pointer-events: none; }   /* 십자는 누르기를 받지 않는다 */
 .pick-ring { fill: none; stroke: var(--blue); stroke-width: 2.5; }
 .pick-line { stroke: var(--blue); stroke-width: 2.5; }

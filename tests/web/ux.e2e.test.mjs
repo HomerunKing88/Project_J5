@@ -26,7 +26,7 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
       const origAdd = IDBObjectStore.prototype.add;
       IDBObjectStore.prototype.add = function (v, k) { if (this.name === 'events' && window.__failSave) throw new DOMException('저장 공간 부족 (e2e)', 'QuotaExceededError'); return origAdd.call(this, v, k); };` });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor(`${txt("status-line")}.includes('앱 0.2.27')`);
+    await cdp.waitFor(`${txt("status-line")}.includes('앱 0.2.28')`);
 
     // 1. 처음 실행: 현장 화면, 시트가 펼쳐져 시작하기(PC 자료 파일·연습용 자료)가 보인다, 기술 용어 없음
     assert.ok(await cdp.eval(visible("view-map")) && await cdp.eval("document.getElementById('view-records').hidden"), "첫 화면은 현장");
@@ -317,11 +317,83 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     assert.ok(plon > 126 && plon < 128 && plat > 37 && plat < 38, "위치점은 지도 가운데의 경도·위도");
     await cdp.eval("document.getElementById('cancel-observation').click(); 'ok'");
     await cdp.waitFor("document.getElementById('sec-observe').hidden");
+    // 13f. 지도의 실거래 (J5-063): 연습용 거래를 넣으면 실거래가 켜져 필지·번지대 위에 종류+금액 꼬리표. 값·기간 바꾸기, 번지대 카드(필지 미확정), 필지 꼬리표 → 필지 카드
+    assert.ok(await cdp.eval("document.getElementById('map-deals').hidden"), "거래 자료가 없으면 실거래 버튼을 감춘다");
+    await cdp.eval("document.getElementById('home-load-synthetic').click(); 'ok'");
+    await cdp.waitFor("!document.getElementById('map-deals').hidden && document.getElementById('map-deals').getAttribute('aria-pressed') === 'false'", 15000);
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.deal').length"), 0, "연습용 거래를 넣어도 저절로 켜지지 않는다");
+    await cdp.eval("document.getElementById('map-deals').click(); 'ok'");
+    await cdp.waitFor("document.getElementById('map-deals').getAttribute('aria-pressed') === 'true' && document.querySelectorAll('#map-svg g.deal').length === 5");
+    await cdp.clickRect("#map-fit");   // 앞 단계에서 지도를 멀리 끌어 두었다
+    assert.ok(await cdp.eval(visible("deal-legend")));
+    assert.equal(await cdp.eval(txt("deal-count")), "총액, 거래 7건, 번지대 1곳, 지도 밖 1건", "5년 안 거래 (가상 기준일 2026-10 이전 5년)");
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.deal.masked').length"), 1, "번지대는 점선 꼬리표 하나");
+    assert.match(await cdp.eval("document.querySelector('#map-svg g.deal[data-deal-id^=\"p:9999900100100020000\"]').textContent"), /업무24\.8억$/);
+    await cdp.eval("document.querySelector('[data-deal-mode=\"land\"]').click(); 'ok'");
+    await cdp.waitFor(`${txt("deal-count")}.startsWith('대지 평당')`);
+    assert.match(await cdp.eval("document.querySelector('#map-svg g.deal[data-deal-id^=\"p:9999900100100020000\"] .deal-value').textContent"), /^1\.9억\/평$|만\/평$/, "대지 평당 단가");
+    await cdp.eval("const s = document.getElementById('deal-years'); s.value = '0'; s.dispatchEvent(new Event('change')); 'ok'");
+    await cdp.waitFor(`${txt("deal-count")} === '대지 평당, 거래 9건, 번지대 1곳, 지도 밖 1건'`);
+    const groupSel = '#map-svg g.deal.masked .deal-bg';
+    // 앞 단계의 먼 대상(세운상가 옆 3층) 때문에 필지 묶음이 작게 모여 꼬리표가 겹친다. 필지 묶음 위에서 휠로 확대해 벌린다
+    for (let i = 0; i < 4 && await cdp.eval("document.querySelector('#map-svg g.deal.masked').getAttribute('visibility') !== 'visible'"); i++) {
+      const c = await cdp.eval("(() => { const b = document.querySelector('#map-svg path.parcel[data-pnu=\"9999900100100010001\"]').getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; })()");
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: c.x, y: c.y, deltaX: 0, deltaY: -120 });
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    assert.equal(await cdp.eval("document.querySelector('#map-svg g.deal.masked').getAttribute('visibility')"), "visible");
+    await cdp.clickRect(groupSel);
+    await cdp.waitFor(`${visible("deal-panel")} && ${txt("deal-title")} === '가상동 1-*'`);
+    assert.equal(await cdp.eval("document.querySelectorAll('#deal-list li').length"), 2);
+    assert.match(await cdp.eval(txt("deal-note")), /필지 2곳 가운데 어느 필지의 거래인지 확정하지 않습니다/);
+    assert.ok(await cdp.eval("document.getElementById('parcel-panel').hidden"), "카드는 하나만");
+    // 펼친 시트·위 덮개 아래의 꼬리표는 보이지 않는다 (리뷰 반영 PR #110)
+    assert.equal(await cdp.eval(`(() => { const top = document.getElementById('deal-legend').getBoundingClientRect().bottom, bottom = document.getElementById('field-sheet').getBoundingClientRect().top;
+      return Array.from(document.querySelectorAll('#map-svg g.deal')).filter((g) => g.getAttribute('visibility') === 'visible').filter((g) => { const b = g.querySelector('.deal-bg').getBoundingClientRect(); return b.top < top - 1 || b.bottom > bottom + 1; }).length; })()`), 0);
+    // 지도를 끌어 보이던 꼬리표 하나를 펼친 시트 아래로 보내면 감춘다 (리뷰 반영 PR #110)
+    const under = await cdp.eval(`(() => { const sheetTop = document.getElementById('field-sheet').getBoundingClientRect().top; const top = document.getElementById('deal-legend').getBoundingClientRect().bottom;
+      const g = Array.from(document.querySelectorAll('#map-svg g.deal')).find((x) => x.getAttribute('visibility') === 'visible');
+      const b = g.querySelector('.deal-bg').getBoundingClientRect(); return { id: g.dataset.dealId, dy: sheetTop - b.top + 12, x: 12, y: top + 12 }; })()`);
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: under.x, y: under.y });
+    await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: under.x, y: under.y, button: "left", clickCount: 1 });
+    for (let i = 1; i <= 8; i++) await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: under.x, y: under.y + (under.dy * i) / 8, button: "left", buttons: 1 });
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: under.x, y: under.y + under.dy, button: "left", clickCount: 1 });
+    assert.equal(await cdp.eval(`document.querySelector('#map-svg g.deal[data-deal-id="${under.id}"]').getAttribute('visibility')`), "hidden", "시트 아래로 간 꼬리표는 감춘다");
+    // 기간을 바꿔 그 번지대 거래가 없어지면 열린 카드를 닫는다 (리뷰 반영 PR #110: 1년 안에는 1-* 거래가 없다)
+    await cdp.eval("(() => { const y = document.getElementById('deal-years'); y.value = '1'; y.dispatchEvent(new Event('change')); return 'ok'; })()");
+    await cdp.waitFor("document.getElementById('deal-panel').hidden");
+    await cdp.eval("(() => { const y = document.getElementById('deal-years'); y.value = '0'; y.dispatchEvent(new Event('change')); return 'ok'; })()");
+    await cdp.waitFor(`${txt("deal-count")} === '대지 평당, 거래 9건, 번지대 1곳, 지도 밖 1건'`);
+    if (await cdp.eval("document.getElementById('field-sheet').dataset.state === 'open'")) await cdp.eval("document.getElementById('sheet-toggle').click(); 'ok'");
+    await cdp.waitFor("document.getElementById('field-sheet').dataset.state === 'peek'");
+    await cdp.clickRect("#map-fit");
+    await new Promise((r) => setTimeout(r, 400));
+    // 펼친 시트·위 덮개에 가리지 않은 필지 꼬리표를 누른다
+    const exactSel = await cdp.eval(`(() => { const top = document.getElementById('deal-legend').getBoundingClientRect().bottom, bottom = document.getElementById('field-sheet').getBoundingClientRect().top;
+      const g = Array.from(document.querySelectorAll('#map-svg g.deal:not(.masked)')).find((x) => { const b = x.querySelector('.deal-bg').getBoundingClientRect(); return x.getAttribute('visibility') === 'visible' && b.top > top && b.bottom < bottom; });
+      return g ? '#map-svg g.deal[data-deal-id="' + g.dataset.dealId + '"] .deal-bg' : null; })()`);
+    assert.ok(exactSel);
+    await cdp.clickRect(exactSel);
+    await cdp.waitFor(`${visible("parcel-panel")} && ${visible("parcel-deals")}`);
+    assert.ok(await cdp.eval("document.getElementById('deal-panel').hidden"));
+    await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
+    // 켬·값·기간은 이 폰에 남는다
+    await cdp.navigate(`${base}/index.html?reload=deals`);
+    await cdp.waitFor(`document.querySelectorAll('#map-svg g.deal').length === 5 && ${txt("deal-count")}.startsWith('대지 평당, 거래 9건')`);
+    await cdp.eval("document.getElementById('map-deals').click(); 'ok'");
+    await cdp.waitFor("document.querySelectorAll('#map-svg g.deal').length === 0 && document.getElementById('deal-legend').hidden");
+    // 연습용 자료 지우기에 거래도 들어간다
+    await go(cdp, "settings");
+    await cdp.eval("document.getElementById('clear-sample').click(); 'ok'");
+    await cdp.waitFor(`${txt("sample-note")}.includes('거래')`);
+    assert.ok(await cdp.eval("document.getElementById('map-deals').hidden"));
+    assert.match(await cdp.eval(txt("view-status")), /아직 가져오지 않았습니다/);
+    await go(cdp, "map");
     // 14. 접근성 속성: 입력마다 label, 아이콘 버튼 aria-label, 상태 메시지 live, 제목 순서
     const a11y = await cdp.eval(`(() => {
       const unlabeled = Array.from(document.querySelectorAll('input:not([type=hidden]), select, textarea')).filter(i => !(i.labels && i.labels.length) && !i.getAttribute('aria-label') && !i.getAttribute('aria-labelledby')).map(i => i.id || i.name);
       const iconNoLabel = Array.from(document.querySelectorAll('button.icon')).filter(b => !b.getAttribute('aria-label')).map(b => b.id);
-      const live = ['observe-note', 'export-note', 'settings-note', 'seed-note', 'parcels-note', 'basemap-note', 'view-note', 'tiles-note', 'tiles-prefetch-note', 'map-note', 'sample-note', 'pick-note'].filter(id => !document.getElementById(id).getAttribute('role') && !document.getElementById(id).getAttribute('aria-live'));
+      const live = ['observe-note', 'export-note', 'settings-note', 'seed-note', 'parcels-note', 'basemap-note', 'view-note', 'tiles-note', 'tiles-prefetch-note', 'map-note', 'sample-note', 'pick-note', 'deal-count'].filter(id => !document.getElementById(id).getAttribute('role') && !document.getElementById(id).getAttribute('aria-live'));
       const heads = Array.from(document.querySelectorAll('h1, h2, h3')).map(h => Number(h.tagName[1]));
       let bad = false; for (let i = 1; i < heads.length; i++) if (heads[i] - heads[i - 1] > 1) bad = true;
       return { unlabeled, iconNoLabel, live, headingJump: bad, navLabel: document.querySelector('nav').getAttribute('aria-label') };
