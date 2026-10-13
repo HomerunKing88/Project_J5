@@ -1,0 +1,31 @@
+{
+ "cache": "v0.2.33",
+ "sha256": "7e6ed1e020e8e9b5b4f6c86a5c4f7e286818e505fb387966a1421f6e02c0a04e",
+ "files": [
+  "app/basemap.js",
+  "app/db.js",
+  "app/event.js",
+  "app/export.js",
+  "app/extmap.js",
+  "app/hash.js",
+  "app/limits.js",
+  "app/main.js",
+  "app/map.js",
+  "app/migrate.js",
+  "app/parcels.js",
+  "app/seed.js",
+  "app/sha256.js",
+  "app/sniff.js",
+  "app/tiles.js",
+  "app/time.js",
+  "app/ui.js",
+  "app/unzip.js",
+  "app/uuid.js",
+  "app/view.js",
+  "app/zip.js",
+  "favicon.svg",
+  "index.html",
+  "styles.css"
+ ],
+ "note": "J5-069: sw.js 의 CACHE 와 캐시 목록 파일들의 해시. 앱 파일을 바꾸면 CACHE 를 올리고 이 파일을 다시 쓴다"
+}
