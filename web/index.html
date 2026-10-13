@@ -123,6 +123,18 @@
           <h4 id="parcel-comps-title" class="sub-title">주변 사례</h4>
           <p class="comps-scope"><span id="comps-scope" class="pencil small"></span><label for="comps-years" class="sr-only">주변 사례 기간</label><select id="comps-years" class="deal-years"><option value="1">1년</option><option value="3">3년</option><option value="5">5년</option><option value="0">전체</option></select><label for="comps-kind" class="sr-only">주변 사례 거래 종류</label><select id="comps-kind" class="deal-years" hidden><option value="all">모든 종류</option><option value="nrg">상업·업무</option><option value="sh">단독·다가구</option><option value="land">토지</option></select></p>
           <ul id="comps-facts" class="facts"></ul>
+          <figure id="comps-chart-wrap" class="comps-chart" hidden>
+            <svg id="comps-chart" class="chart" role="group" aria-labelledby="comps-chart-title"></svg>
+            <figcaption>
+              <span id="comps-chart-title" class="sr-only"></span>
+              <span class="chart-legend"><span class="chart-key"><span class="key-dot" aria-hidden="true"></span>같은 동 거래의 대지 평당</span><span class="chart-key"><span class="key-line" aria-hidden="true"></span>이 필지 공시지가 (평당 환산)</span><span id="comps-chart-mine" class="chart-key" hidden><span class="key-dot big" aria-hidden="true"></span>큰 점은 이 필지의 거래</span></span>
+              <span id="comps-chart-note" class="pencil small" role="status"></span>
+            </figcaption>
+            <details class="disclosure quiet">
+              <summary>그래프 값 표</summary>
+              <table id="comps-chart-table" class="chart-table"><thead><tr><th scope="col">계약일</th><th scope="col">종류</th><th scope="col">대지 평당</th><th scope="col">지번</th></tr></thead><tbody></tbody></table>
+            </details>
+          </figure>
           <p id="comps-reference" class="note" role="status"></p>
           <ul id="comps-list" class="rows deal-list"></ul>
           <p class="pencil small">실거래 신고 자료에서 계산한 단가와 배율이며 감정평가가 아닙니다. 지분 거래는 단가에서 뺍니다. 기간은 지도의 실거래 기간과 같습니다.</p>

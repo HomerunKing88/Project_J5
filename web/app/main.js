@@ -15,10 +15,10 @@ import { externalMapLinks, bboxCenter, LINK_ATTRS } from "./extmap.js";
 import { validateBasemap, LAYERS as BASEMAP_LAYERS, LAYER_LABEL as BASEMAP_LAYER_LABEL } from "./basemap.js";
 import { PROVIDERS, resolveTileConfig, prefetchPlan, padBbox, tileUrl, hasKeyLike, TILE_CACHE, PREFETCH_ZOOMS, KEY_PLACEHOLDER } from "./tiles.js";
 import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
-import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummaryInfo, yearSummaryRow, yearSummaryCells, recentDeals, parcelSummaryItems, fmtKrw, placeDeals, dealKind, dealValueText, dealDetailText, dealsSince, dealSince, DEAL_MODES, DEAL_YEARS, nearbyComps, COMP_LIST_MAX, DEAL_KIND_NAMES, DEAL_KIND_FILTERS, dealsOfKind, dealKindsPresent } from "./view.js";
+import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummaryInfo, yearSummaryRow, yearSummaryCells, recentDeals, parcelSummaryItems, fmtKrw, placeDeals, dealKind, dealValueText, dealDetailText, dealsSince, dealSince, compsChartData, DEAL_MODES, DEAL_YEARS, nearbyComps, COMP_LIST_MAX, DEAL_KIND_NAMES, DEAL_KIND_FILTERS, dealsOfKind, dealKindsPresent } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.31";
+export const APP_VERSION = "0.2.32";
 /** 자료가 없을 때 지도가 처음 보이는 곳: 종로5가역 부근 [경도, 위도] (J5-062, 배경 지도만 켠 경우) */
 const FIELD_HOME = [127.0019, 37.5709];
 const PARCEL_CARD_YEARS = 5;   // 필지 카드의 연도별 표에 보이는 최근 연도 수 (J5-055)
@@ -876,6 +876,7 @@ function renderComps(feature) {
     facts.push(["공시지가 대비", c.ratio.n ? `중간 ${c.ratio.median.toFixed(2)}배 (${c.ratio.n}건, 그 필지의 거래 연도 이하 가장 최근 공시지가 기준, 사례마다 기준연도를 아래에 적음)` : "견줄 수 있는 사례 없음"]);
   }
   $("comps-facts").replaceChildren(...facts.map(([k, v]) => el("li", {}, el("span", { class: "k", text: k }), el("span", { class: "v", text: v }))));
+  renderCompsChart(compsChartData(c, feature, { since: dealSince(years, localDate()), today: localDate() }), per);
   const r = c.reference;
   text($("comps-reference"), !c.count ? `이 기간에 같은 동의 ${kind === "all" ? "" : `${DEAL_KIND_NAMES[kind]} `}거래가 없습니다.` : r.missing ? r.missing :
     `참고 추정: 이 필지 공시지가 ${Math.round(r.price).toLocaleString("ko-KR")}원/㎡ (${r.priceYear}년) × ${r.ratio.toFixed(2)}배 ≈ ${per(r.unit)} (사례 ${r.n}건, 추정값이며 시세 판단이 아닙니다)`,
@@ -885,6 +886,49 @@ function renderComps(feature) {
     el("span", { class: "deal-main" }, el("strong", { class: "num", text: `${dealKind(x.t)} ${fmtKrw(x.t.amount_krw)}` }),
       ...(x.mine ? [el("span", { class: "badge match-exact", text: "이 필지" })] : []),
       el("span", { class: "deal-sub", text: [x.where, `대지 ${dealValueText(x.t, "land")}`, x.ratio ? `${x.priceYear}년 공시지가의 ${x.ratio.toFixed(2)}배` : null].filter(Boolean).join(", ") })))));
+}
+
+/** 주변 사례 추이 그래프 (J5-067): 거래 점(대지 평당)과 이 필지 공시지가 계단선(평당 환산)을 한 축(원/평)에. 점을 누르거나 초점을 주면 아래에 값을 적는다.
+ *  값은 아래 표(그래프 값 표)와 사례 목록에도 있어 그래프 없이 읽을 수 있다. 크기는 카드 폭에 맞추고 SVG 에 style 속성은 쓰지 않는다(CSP). */
+function renderCompsChart(d, per) {
+  const wrap = $("comps-chart-wrap"), svg = $("comps-chart");
+  wrap.hidden = !d;
+  if (!d) { svg.replaceChildren(); return; }
+  const ns = svg.namespaceURI;
+  const mk = (tag, attrs = {}, text = null) => { const e = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, String(v)); if (text != null) e.textContent = text; return e; };
+  const W = Math.max(240, Math.round(svg.getBoundingClientRect().width || wrap.getBoundingClientRect().width || 320)), H = 180;
+  const pad = { l: 52, r: 12, t: 12, b: 24 };
+  const sx = (x) => pad.l + ((x - d.x[0]) / (d.x[1] - d.x[0])) * (W - pad.l - pad.r);
+  const sy = (y) => pad.t + (1 - (y - d.y[0]) / (d.y[1] - d.y[0])) * (H - pad.t - pad.b);
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const grid = mk("g", { class: "chart-grid" }), labels = mk("g", { class: "chart-tick" });
+  for (const v of d.yTicks) { grid.append(mk("line", { x1: pad.l, x2: W - pad.r, y1: sy(v).toFixed(1), y2: sy(v).toFixed(1) })); labels.append(mk("text", { x: pad.l - 6, y: (sy(v) + 4).toFixed(1), "text-anchor": "end" }, fmtKrw(v))); }
+  for (const y of d.xTicks) labels.append(mk("text", { x: sx(y).toFixed(1), y: H - 6, "text-anchor": "middle" }, String(y)));
+  const steps = mk("g", { class: "chart-line" });
+  if (d.steps.length) {
+    const path = d.steps.map((s, i) => `${i ? "L" : "M"}${sx(s.x0).toFixed(1)},${sy(s.y).toFixed(1)}H${sx(s.x1).toFixed(1)}`).join("");
+    steps.append(mk("path", { d: path }));
+    const last = d.steps.at(-1);
+    labels.append(mk("text", { x: (sx(last.x1) - 2).toFixed(1), y: (sy(last.y) - 6).toFixed(1), "text-anchor": "end", class: "chart-direct" }, "공시지가"));
+  }
+  const note = $("comps-chart-note");
+  const dots = mk("g", { class: "chart-dots" });
+  const pick = (g, p) => { for (const x of dots.querySelectorAll(".on")) x.classList.remove("on"); g.classList.add("on"); text(note, `${p.date} · ${p.kind} · 대지 평당 ${per(p.y)} · ${p.where}${p.mine ? " (이 필지)" : ""}`); };
+  for (const p of d.points) {
+    const g = mk("g", { class: `chart-pt${p.mine ? " mine" : ""}`, transform: `translate(${sx(p.x).toFixed(1)},${sy(p.y).toFixed(1)})`, tabindex: 0, role: "button", "data-id": p.id,
+      "aria-label": `${p.date} ${p.kind} 대지 평당 ${per(p.y)}` });
+    g.append(mk("circle", { class: "hit", r: 12 }), mk("circle", { class: "dot", r: p.mine ? 6 : 4.5 }));
+    g.addEventListener("click", () => pick(g, p));
+    g.addEventListener("focus", () => pick(g, p));
+    dots.append(g);
+  }
+  $("comps-chart-mine").hidden = !d.points.some((p) => p.mine);   // 이 필지 거래는 큰 점 (점마다 글자를 붙이면 이웃 점과 겹친다)
+  svg.replaceChildren(grid, steps, dots, labels);
+  const lastPrice = d.steps.at(-1);
+  text($("comps-chart-title"), `같은 동 거래 ${d.points.length}건의 대지 평당 단가와 이 필지 공시지가의 평당 환산` + (lastPrice ? ` (${lastPrice.year}년 ${per(lastPrice.y)})` : ", 공시지가 자료 없음"));
+  text(note, `점 ${d.points.length}개: 점을 누르면 값이 여기에 나옵니다.` + (lastPrice ? "" : " 이 필지 공시지가 자료가 없어 선이 없습니다."), "pencil small");
+  $("comps-chart-table").tBodies[0].replaceChildren(...d.points.slice().reverse().map((p) => el("tr", {},
+    el("td", { class: "num", text: p.date }), el("td", { text: p.kind }), el("td", { class: "num", text: per(p.y) }), el("td", { text: p.where + (p.mine ? " (이 필지)" : "") }))));
 }
 
 function openParcelHistory(feature, inside) {

@@ -575,3 +575,56 @@ export function nearbyComps(feature, transactions, features, { since = null } = 
   return { comps, count: comps.length, land: { n: lands.length, median: median(lands), min: lands.length ? Math.min(...lands) : null, max: lands.length ? Math.max(...lands) : null },
            floor: { n: floors.length, median: median(floors), min: floors.length ? Math.min(...floors) : null, max: floors.length ? Math.max(...floors) : null }, ratio: { n: ratios.length, median: r }, reference };
 }
+
+// ---- 주변 사례 추이 (J5-067): 같은 동 거래의 대지 평당 단가(점)와 이 필지 공시지가의 평당 환산(계단선)을 한 축(원/평)에 ----
+
+/** 날짜(YYYY-MM-DD) → 연도 소수 (2024-07-01 ≈ 2024.5). 월만 알면 그달 가운데로 둔다. */
+export function yearFrac(date) {
+  const [y, m = 7, d = 15] = String(date).split("-").map(Number);
+  return y + (m - 1) / 12 + (d - 1) / 365;
+}
+
+/** lo~hi 를 1·2·5 단계의 눈금 n개 남짓으로 덮는다 → { lo, hi, ticks } (lo 는 0 아래로 내려가지 않는다) */
+export function niceTicks(lo, hi, n = 3) {
+  const span = hi - lo || Math.abs(hi) || 1;
+  const raw = span / n;
+  const p = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 5, 10].map((k) => k * p).find((s) => s >= raw);
+  const a = Math.max(0, Math.floor(lo / step) * step), b = Math.ceil(hi / step) * step;
+  const ticks = [];
+  for (let v = a; v <= b + step / 2; v += step) ticks.push(Math.round(v));
+  return { lo: a, hi: Math.max(b, a + step), ticks };
+}
+
+/**
+ * 주변 사례 추이 그래프의 자료 (J5-067). c 는 nearbyComps 결과, feature 는 이 필지.
+ * points: 대지 평당 단가가 있는 사례 [{x, y, date, kind, mine, where, id}] (지분·면적 없음은 nearbyComps 처럼 뺀다).
+ * steps: 이 필지 공시지가(원/㎡ × 평)를 기준연도 1월 1일부터 다음 기준연도까지 [{x0, x1, y, year, price}] (기간 안만).
+ * 대지 평당 단가가 있는 사례가 없으면 null (공시지가 선만으로는 그리지 않는다: 연도별 표에 있다).
+ */
+export function compsChartData(c, feature, { since = null, today = null } = {}) {
+  const points = (c?.comps ?? []).filter((x) => Number.isFinite(x.landUnit)).map((x) => {
+    const date = x.t.deal_date ?? `${x.t.deal_ymd.slice(0, 4)}-${x.t.deal_ymd.slice(4, 6)}`;
+    return { x: yearFrac(date), y: x.landUnit, date, kind: dealKind(x.t), mine: !!x.mine, where: x.where, id: x.t.transaction_id };
+  }).sort((a, b) => a.x - b.x);
+  if (!points.length) return null;
+  const xs = points.map((p) => p.x);
+  let x0 = since ? yearFrac(since) : Math.floor(Math.min(...xs));
+  let x1 = today ? Math.max(yearFrac(today), Math.max(...xs)) : Math.ceil(Math.max(...xs) + 1e-9);
+  x0 = Math.min(x0, Math.min(...xs));
+  if (x1 - x0 < 1) x0 = x1 - 1;
+  const p = feature?.properties ?? {};
+  const trend = priceTrend(p.attrs, p.attrs_history).filter((q) => Number.isInteger(q.year) && Number.isFinite(q.price)).sort((a, b) => a.year - b.year);
+  const steps = [];
+  trend.forEach((q, i) => {
+    const a = Math.max(q.year, x0), b = Math.min(trend[i + 1]?.year ?? Infinity, x1);
+    if (a < b) steps.push({ x0: a, x1: b, y: q.price * PYEONG_M2, year: q.year, price: q.price });
+  });
+  const ys = [...points.map((q) => q.y), ...steps.map((s) => s.y)];
+  const yt = niceTicks(Math.min(...ys), Math.max(...ys), 4);
+  const yearsSpan = Math.floor(x1) - Math.ceil(x0);
+  const every = yearsSpan > 12 ? 5 : yearsSpan > 6 ? 2 : 1;
+  const xTicks = [];
+  for (let y = Math.ceil(x0); y <= x1; y++) if (y % every === 0) xTicks.push(y);
+  return { points, steps, x: [x0, x1], y: [yt.lo, yt.hi], yTicks: yt.ticks, xTicks };
+}
