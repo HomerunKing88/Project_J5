@@ -262,7 +262,7 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onSelectDeal, onTil
     for (const d of deals) {
       const p = toScreen(d.world, view);
       const r = { x0: p.x - d.w / 2, y0: p.y - d.h - 6, x1: p.x + d.w / 2, y1: p.y - 6 };
-      const off = r.x1 < open.x0 || r.x0 > open.x1 || r.y0 < open.y0 || r.y1 > open.y1;
+      const off = r.x0 < open.x0 || r.x1 > open.x1 || r.y0 < open.y0 || r.y1 > open.y1;   // 꼬리표 전체가 들어야 보인다 (경계에 걸치면 일부가 가려져 누르기 어렵다, 리뷰 반영 PR #113)
       const vis = !off && !placed.some((q) => r.x0 < q.x1 && r.x1 > q.x0 && r.y0 < q.y1 && r.y1 > q.y0);
       if (vis) { placed.push(r); d.g.setAttribute("transform", `translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`); }
       if (vis !== d.visible) { d.visible = vis; d.g.setAttribute("visibility", vis ? "visible" : "hidden"); }

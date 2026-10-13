@@ -357,15 +357,15 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     // 펼친 시트·위 덮개 아래의 꼬리표는 보이지 않는다 (리뷰 반영 PR #110)
     assert.equal(await cdp.eval(`(() => { const top = document.getElementById('deal-legend').getBoundingClientRect().bottom, bottom = document.getElementById('field-sheet').getBoundingClientRect().top;
       return Array.from(document.querySelectorAll('#map-svg g.deal')).filter((g) => g.getAttribute('visibility') === 'visible').filter((g) => { const b = g.querySelector('.deal-bg').getBoundingClientRect(); return b.top < top - 1 || b.bottom > bottom + 1; }).length; })()`), 0);
-    // 지도를 끌어 보이던 꼬리표 하나를 펼친 시트 아래로 보내면 감춘다 (리뷰 반영 PR #110)
+    // 지도를 끌어 보이던 꼬리표 하나를 펼친 시트 경계에 걸치게 보내면 감춘다 (리뷰 반영 PR #110, 걸침은 PR #113: 일부가 가려지면 누르기 어렵다)
     const under = await cdp.eval(`(() => { const sheetTop = document.getElementById('field-sheet').getBoundingClientRect().top; const top = document.getElementById('deal-legend').getBoundingClientRect().bottom;
       const g = Array.from(document.querySelectorAll('#map-svg g.deal')).find((x) => x.getAttribute('visibility') === 'visible');
-      const b = g.querySelector('.deal-bg').getBoundingClientRect(); return { id: g.dataset.dealId, dy: sheetTop - b.top + 12, x: 12, y: top + 12 }; })()`);
+      const b = g.querySelector('.deal-bg').getBoundingClientRect(); return { id: g.dataset.dealId, dy: sheetTop - b.top - 12, x: 12, y: top + 12 }; })()`);
     await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: under.x, y: under.y });
     await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: under.x, y: under.y, button: "left", clickCount: 1 });
     for (let i = 1; i <= 8; i++) await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: under.x, y: under.y + (under.dy * i) / 8, button: "left", buttons: 1 });
     await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: under.x, y: under.y + under.dy, button: "left", clickCount: 1 });
-    assert.equal(await cdp.eval(`document.querySelector('#map-svg g.deal[data-deal-id="${under.id}"]').getAttribute('visibility')`), "hidden", "시트 아래로 간 꼬리표는 감춘다");
+    assert.equal(await cdp.eval(`document.querySelector('#map-svg g.deal[data-deal-id="${under.id}"]').getAttribute('visibility')`), "hidden", "시트 경계에 걸친 꼬리표는 감춘다");
     // 기간을 바꿔 그 번지대 거래가 없어지면 열린 카드를 닫는다 (리뷰 반영 PR #110: 1년 안에는 1-* 거래가 없다)
     await cdp.eval("(() => { const y = document.getElementById('deal-years'); y.value = '1'; y.dispatchEvent(new Event('change')); return 'ok'; })()");
     await cdp.waitFor("document.getElementById('deal-panel').hidden");
@@ -373,6 +373,19 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     await cdp.waitFor(`${txt("deal-count")} === '대지 평당, 거래 11건, 번지대 1곳, 지도 밖 1건'`);   // 전체 기간은 날짜와 무관
     if (await cdp.eval("document.getElementById('field-sheet').dataset.state === 'open'")) await cdp.eval("document.getElementById('sheet-toggle').click(); 'ok'");
     await cdp.waitFor("document.getElementById('field-sheet').dataset.state === 'peek'");
+    await cdp.clickRect("#map-fit");
+    await new Promise((r) => setTimeout(r, 400));
+    // 가로로 지도 왼쪽 끝에 걸친 꼬리표도 감춘다 (리뷰 반영 PR #113: 전체가 덮이지 않은 영역에 들어야 보인다)
+    const edge = await cdp.eval(`(() => { const top = document.getElementById('deal-legend').getBoundingClientRect().bottom;
+      const gs = Array.from(document.querySelectorAll('#map-svg g.deal')).filter((x) => x.getAttribute('visibility') === 'visible');
+      const g = gs.sort((a, b) => a.querySelector('.deal-bg').getBoundingClientRect().left - b.querySelector('.deal-bg').getBoundingClientRect().left)[0];
+      if (!g) return null; const b = g.querySelector('.deal-bg').getBoundingClientRect(); return { id: g.dataset.dealId, dx: -(b.left + b.width / 2), x: 250, y: top + 12 }; })()`);
+    assert.ok(edge && edge.x + edge.dx >= 0, JSON.stringify(edge));
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: edge.x, y: edge.y });
+    await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: edge.x, y: edge.y, button: "left", clickCount: 1 });
+    for (let i = 1; i <= 8; i++) await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: edge.x + (edge.dx * i) / 8, y: edge.y, button: "left", buttons: 1 });
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: edge.x + edge.dx, y: edge.y, button: "left", clickCount: 1 });
+    assert.equal(await cdp.eval(`document.querySelector('#map-svg g.deal[data-deal-id="${edge.id}"]').getAttribute('visibility')`), "hidden", "왼쪽 끝에 반쯤 걸친 꼬리표는 감춘다");
     await cdp.clickRect("#map-fit");
     await new Promise((r) => setTimeout(r, 400));
     // 펼친 시트·위 덮개에 가리지 않은 필지 꼬리표를 누른다
