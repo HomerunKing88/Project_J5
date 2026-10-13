@@ -15,10 +15,10 @@ import { externalMapLinks, bboxCenter, LINK_ATTRS } from "./extmap.js";
 import { validateBasemap, LAYERS as BASEMAP_LAYERS, LAYER_LABEL as BASEMAP_LAYER_LABEL } from "./basemap.js";
 import { PROVIDERS, resolveTileConfig, prefetchPlan, padBbox, tileUrl, hasKeyLike, TILE_CACHE, PREFETCH_ZOOMS, KEY_PLACEHOLDER } from "./tiles.js";
 import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
-import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummaryInfo, yearSummaryRow, yearSummaryCells, recentDeals, parcelSummaryItems, fmtKrw, placeDeals, dealKind, dealValueText, dealDetailText, dealsSince, dealSince, DEAL_MODES, DEAL_YEARS, nearbyComps, COMP_LIST_MAX } from "./view.js";
+import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummaryInfo, yearSummaryRow, yearSummaryCells, recentDeals, parcelSummaryItems, fmtKrw, placeDeals, dealKind, dealValueText, dealDetailText, dealsSince, dealSince, DEAL_MODES, DEAL_YEARS, nearbyComps, COMP_LIST_MAX, DEAL_KIND_NAMES, DEAL_KIND_FILTERS, dealsOfKind, dealKindsPresent } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.30";
+export const APP_VERSION = "0.2.31";
 /** 자료가 없을 때 지도가 처음 보이는 곳: 종로5가역 부근 [경도, 위도] (J5-062, 배경 지도만 켠 경우) */
 const FIELD_HOME = [127.0019, 37.5709];
 const PARCEL_CARD_YEARS = 5;   // 필지 카드의 연도별 표에 보이는 최근 연도 수 (J5-055)
@@ -26,7 +26,7 @@ const PARCEL_CARD_DEALS = 3;   // 필지 카드의 최근 거래 수 (J5-057)
 const $ = (id) => document.getElementById(id);
 const state = { store: null, parcelFilter: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, zoneColors: false, seedLoadedAt: null, seedSource: null, openParcel: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
                 nav: null, returnFocus: null, mapSelected: null, assetFilter: "all", picking: false,
-                dealView: { on: false, mode: "total", years: 5 }, dealGroups: new Map(), openDealKey: null };
+                dealView: { on: false, mode: "total", years: 5, kind: "all" }, dealGroups: new Map(), openDealKey: null };
 
 // 대상 목록은 synthetic·private_real, 필지·배경 번들은 synthetic·real 을 쓴다 (리뷰 반영 PR #103)
 const DATA_MODE_TEXT = { synthetic: "연습용 자료", private_real: "실제 자료", real: "실제 자료" };
@@ -864,9 +864,10 @@ function renderComps(feature) {
   if (!state.view?.transactions) return;
   const years = state.dealView.years;
   $("comps-years").value = String(years);
-  const c = nearbyComps(feature, all, state.parcels?.features ?? [], { since: dealSince(years, localDate()) });
+  const kind = dealKindChoice(all, $("comps-kind"));
+  const c = nearbyComps(feature, dealsOfKind(all, kind), state.parcels?.features ?? [], { since: dealSince(years, localDate()) });
   const p = feature.properties;
-  text($("comps-scope"), `${p.emd_name ?? "같은 동"}, ${years ? `최근 ${years}년` : "전체 기간"}`);
+  text($("comps-scope"), `${p.emd_name ?? "같은 동"}, ${years ? `최근 ${years}년` : "전체 기간"}` + (kind === "all" ? "" : `, ${DEAL_KIND_NAMES[kind]}`));
   const per = (v) => (Number.isFinite(v) ? `${fmtKrw(Math.round(v))}/평` : "모름");
   const facts = [["거래", `${c.count}건`]];
   if (c.count) {
@@ -876,7 +877,7 @@ function renderComps(feature) {
   }
   $("comps-facts").replaceChildren(...facts.map(([k, v]) => el("li", {}, el("span", { class: "k", text: k }), el("span", { class: "v", text: v }))));
   const r = c.reference;
-  text($("comps-reference"), !c.count ? "이 기간에 같은 동의 거래가 없습니다." : r.missing ? r.missing :
+  text($("comps-reference"), !c.count ? `이 기간에 같은 동의 ${kind === "all" ? "" : `${DEAL_KIND_NAMES[kind]} `}거래가 없습니다.` : r.missing ? r.missing :
     `참고 추정: 이 필지 공시지가 ${Math.round(r.price).toLocaleString("ko-KR")}원/㎡ (${r.priceYear}년) × ${r.ratio.toFixed(2)}배 ≈ ${per(r.unit)} (사례 ${r.n}건, 추정값이며 시세 판단이 아닙니다)`,
     r.missing || !c.count ? "pencil" : "");
   $("comps-list").replaceChildren(...c.comps.slice(0, COMP_LIST_MAX).map((x) => el("li", {},
@@ -1035,14 +1036,15 @@ const dealTxs = () => state.view?.transactions?.transactions ?? [];
 async function loadDealView() {
   const v = await state.store.getMeta("deal_view");
   if (v && typeof v === "object") {
-    state.dealView = { on: v.on === true, mode: DEAL_MODES[v.mode] ? v.mode : "total", years: DEAL_YEARS.includes(v.years) ? v.years : 5 };
+    state.dealView = { on: v.on === true, mode: DEAL_MODES[v.mode] ? v.mode : "total", years: DEAL_YEARS.includes(v.years) ? v.years : 5,
+                       kind: DEAL_KIND_FILTERS.includes(v.kind) ? v.kind : "all" };
   }
 }
 
 async function setDealView(next) {
   state.dealView = { ...state.dealView, ...next };
   renderDeals();
-  if (state.openParcel && !$("parcel-panel").hidden) renderComps(state.openParcel);   // 주변 사례도 같은 기간 (J5-064)
+  if (state.openParcel && !$("parcel-panel").hidden) renderComps(state.openParcel);   // 주변 사례도 같은 기간 (J5-064)·종류 (J5-066)
   try { await state.store.setMeta("deal_view", state.dealView); } catch { /* 저장 실패는 화면을 막지 않는다 */ }
 }
 
@@ -1055,9 +1057,12 @@ function renderDeals() {
   if ($("deal-legend").hidden === on) { $("deal-legend").hidden = !on; updateMapInset(); }
   for (const b of document.querySelectorAll("[data-deal-mode]")) b.setAttribute("aria-pressed", String(b.dataset.dealMode === state.dealView.mode));
   $("deal-years").value = String(state.dealView.years);
+  const kindShown = !$("deal-kind").hidden;
+  const kind = dealKindChoice(all, $("deal-kind"));
+  if (on && kindShown === $("deal-kind").hidden) updateMapInset();   // 종류 고르기가 생기거나 없어지면 줄 높이가 바뀐다 (꼬리표가 줄 밑에 숨지 않게)
   state.dealGroups = new Map();
   if (!on) { mapCall((m) => m.setDeals([])); text($("deal-count"), ""); refreshDealPanel(); return; }
-  const txs = dealsSince(all, dealSince(state.dealView.years, localDate()));
+  const txs = dealsSince(dealsOfKind(all, kind), dealSince(state.dealView.years, localDate()));
   const placed = placeDeals(txs, state.parcels?.features ?? []);
   const mode = state.dealView.mode;
   const item = (id, lonlat, list, masked, where) => ({ id, lonlat, kind: masked ? "번지대" : dealKind(list[0]), value: dealValueText(list[0], mode), more: list.length - 1, masked,
@@ -1072,7 +1077,18 @@ function renderDeals() {
   items.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));   // 최근 거래의 꼬리표가 겹침에서 이긴다
   mapCall((m) => m.setDeals(items));
   refreshDealPanel();
-  text($("deal-count"), `${DEAL_MODES[mode]}, 거래 ${txs.length}건` + (placed.groups.length ? `, 번지대 ${placed.groups.length}곳` : "") + (placed.outside ? `, 지도 밖 ${placed.outside}건` : ""));
+  text($("deal-count"), `${DEAL_MODES[mode]}, ${kind === "all" ? "" : `${DEAL_KIND_NAMES[kind]}, `}거래 ${txs.length}건` + (placed.groups.length ? `, 번지대 ${placed.groups.length}곳` : "") + (placed.outside ? `, 지도 밖 ${placed.outside}건` : ""));
+}
+
+/** 종류 고르기 (J5-066): 거래에 종류가 둘 이상일 때만 보인다. 고른 종류가 이 자료에 없으면 모든 종류로 본다(저장한 선택은 그대로 둔다).
+ *  지도 실거래와 주변 사례가 같은 선택을 쓴다. */
+function dealKindChoice(all, select) {
+  const present = dealKindsPresent(all);
+  select.hidden = present.length < 2;
+  for (const o of select.options) o.hidden = o.disabled = o.value !== "all" && !present.includes(o.value);   // iOS Safari 는 option 의 hidden 을 무시해 disabled 도 준다
+  const kind = present.length >= 2 && present.includes(state.dealView.kind) ? state.dealView.kind : "all";
+  select.value = kind;
+  return kind;
 }
 
 function selectDeal(id) {
@@ -1216,6 +1232,7 @@ async function initMap() {
     $("map-deals").addEventListener("click", () => setDealView({ on: !state.dealView.on }));
     for (const b of document.querySelectorAll("[data-deal-mode]")) b.addEventListener("click", () => setDealView({ mode: b.dataset.dealMode }));
     $("deal-years").addEventListener("change", () => setDealView({ years: Number($("deal-years").value) }));
+    $("deal-kind").addEventListener("change", () => setDealView({ kind: $("deal-kind").value }));
     $("deal-close").addEventListener("click", closeDealPanel);
     $("pick-ok").addEventListener("click", pickHere);
     $("pick-cancel").addEventListener("click", endPick);
@@ -1794,6 +1811,7 @@ async function main() {
   $("clear-basemap").addEventListener("click", clearBasemap);
   $("clear-sample").addEventListener("click", clearSample);
   $("comps-years").addEventListener("change", () => setDealView({ years: Number($("comps-years").value) }));   // 지도가 못 떠도 필지 카드는 열린다
+  $("comps-kind").addEventListener("change", () => setDealView({ kind: $("comps-kind").value }));
   $("tiles-provider").addEventListener("change", updateTileFields);
   $("tiles-template").addEventListener("input", updateTileFields);
   $("tiles-save").addEventListener("click", saveTileSettings);

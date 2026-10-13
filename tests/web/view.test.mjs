@@ -393,3 +393,24 @@ test("수집 종류: 거래 파일 검사와 연도별 표의 받은 종류", ()
   assert.deepEqual(yearSummaryCells(old[0]).txNotes, ["수집 8/12개월"], "종류 정보가 없는 이전 파일은 그대로");
   assert.equal("kindMonths" in old[0], false);
 });
+
+// ---- 거래 종류 거르기 (J5-066) ----
+import { dealKindOf, dealsOfKind, dealKindsPresent, DEAL_KIND_FILTERS } from "../../web/app/view.js";
+
+test("거래 종류 거르기: 종류 칸이 없으면 상업·업무용, 종류별 거르기, 든 종류", () => {
+  assert.deepEqual(DEAL_KIND_FILTERS, ["all", "nrg", "sh", "land"]);
+  assert.equal(dealKindOf({}), "nrg", "J5-065 전 파일은 상업·업무용만 담았다");
+  assert.equal(dealKindOf({ deal_kind: null }), "nrg");
+  assert.equal(dealKindOf({ deal_kind: "land" }), "land");
+  assert.equal(dealKindOf({ deal_kind: "apt" }), "nrg", "모르는 값은 검사기가 거절하며, 여기서는 기본 종류로 본다");
+  const txs = [{ id: 1 }, { id: 2, deal_kind: "sh" }, { id: 3, deal_kind: "land" }, { id: 4, deal_kind: "land" }];
+  assert.equal(dealsOfKind(txs, "all"), txs, "전체는 그대로");
+  assert.deepEqual(dealsOfKind(txs, "land").map((t) => t.id), [3, 4]);
+  assert.deepEqual(dealsOfKind(txs, "nrg").map((t) => t.id), [1]);
+  assert.deepEqual(dealsOfKind(null, "land"), []);
+  assert.deepEqual(dealKindsPresent(txs), ["nrg", "sh", "land"]);
+  assert.deepEqual(dealKindsPresent([{ deal_kind: "land" }, {}]), ["nrg", "land"], "정해진 순서");
+  assert.deepEqual(dealKindsPresent([]), []);
+  const doc = JSON.parse(readFileSyncDeals(new URL("../../web/data/transactions.synthetic.json", import.meta.url), "utf8"));
+  assert.deepEqual(dealKindsPresent(doc.transactions), ["nrg", "sh", "land"], "연습용 거래에는 세 종류가 다 있다");
+});

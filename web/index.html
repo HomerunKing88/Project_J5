@@ -53,6 +53,8 @@
         </span>
         <label for="deal-years" class="sr-only">기간</label>
         <select id="deal-years" class="deal-years"><option value="1">1년</option><option value="3">3년</option><option value="5">5년</option><option value="0">전체</option></select>
+        <label for="deal-kind" class="sr-only">거래 종류</label>
+        <select id="deal-kind" class="deal-years" hidden><option value="all">모든 종류</option><option value="nrg">상업·업무</option><option value="sh">단독·다가구</option><option value="land">토지</option></select>
         <span id="deal-count" class="deal-count" role="status"></span>
       </div>
     </div>
@@ -119,7 +121,7 @@
         </section>
         <section id="parcel-comps" class="card-comps" aria-labelledby="parcel-comps-title" hidden>
           <h4 id="parcel-comps-title" class="sub-title">주변 사례</h4>
-          <p class="comps-scope"><span id="comps-scope" class="pencil small"></span><label for="comps-years" class="sr-only">주변 사례 기간</label><select id="comps-years" class="deal-years"><option value="1">1년</option><option value="3">3년</option><option value="5">5년</option><option value="0">전체</option></select></p>
+          <p class="comps-scope"><span id="comps-scope" class="pencil small"></span><label for="comps-years" class="sr-only">주변 사례 기간</label><select id="comps-years" class="deal-years"><option value="1">1년</option><option value="3">3년</option><option value="5">5년</option><option value="0">전체</option></select><label for="comps-kind" class="sr-only">주변 사례 거래 종류</label><select id="comps-kind" class="deal-years" hidden><option value="all">모든 종류</option><option value="nrg">상업·업무</option><option value="sh">단독·다가구</option><option value="land">토지</option></select></p>
           <ul id="comps-facts" class="facts"></ul>
           <p id="comps-reference" class="note" role="status"></p>
           <ul id="comps-list" class="rows deal-list"></ul>

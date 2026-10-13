@@ -256,11 +256,13 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onSelectDeal, onTil
       m.g.setAttribute("transform", `translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`);
     }
     // 실거래 꼬리표: 점 위쪽에 둔다. 앞(최근)의 것과 겹치거나, 덮이지 않은 영역(위 버튼 줄·아래 시트 밖) 밖으로 나가면 감춘다 (리뷰 반영 PR #110: 덮개 아래에서는 읽거나 누를 수 없다)
+    // 판정은 실제로 덮이지 않은 영역으로 한다: visibleRect 는 맞추기·확대가 쓸 최소 높이(80px)를 지키느라 위 줄이 높고 시트를 펼치면 덮개 아래까지 넓어진다 (J5-066)
     const placed = [];
+    const open = { x0: inset.left, y0: inset.top, x1: size.w - inset.right, y1: size.h - inset.bottom };
     for (const d of deals) {
       const p = toScreen(d.world, view);
       const r = { x0: p.x - d.w / 2, y0: p.y - d.h - 6, x1: p.x + d.w / 2, y1: p.y - 6 };
-      const off = r.x1 < vr.x || r.x0 > vr.x + vr.w || r.y0 < vr.y || r.y1 > vr.y + vr.h;
+      const off = r.x1 < open.x0 || r.x0 > open.x1 || r.y0 < open.y0 || r.y1 > open.y1;
       const vis = !off && !placed.some((q) => r.x0 < q.x1 && r.x1 > q.x0 && r.y0 < q.y1 && r.y1 > q.y0);
       if (vis) { placed.push(r); d.g.setAttribute("transform", `translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`); }
       if (vis !== d.visible) { d.visible = vis; d.g.setAttribute("visibility", vis ? "visible" : "hidden"); }
