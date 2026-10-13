@@ -1,0 +1,17 @@
+# Cloudflare Pages 응답 헤더 (J5-059, ADR-24). 이 파일은 배포 설정이며 사이트에서 내려받을 수 없다.
+# 앱 페이지의 CSP 는 index.html·devtest.html 의 meta 에 있다. 여기서는 meta 로 줄 수 없는 frame-ancestors 만 더한다(정책은 함께 적용된다).
+/*
+  Content-Security-Policy: frame-ancestors 'none'
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  Cross-Origin-Opener-Policy: same-origin
+  Permissions-Policy: geolocation=(self), microphone=(), payment=(), usb=(), interest-cohort=()
+
+# 앱 진입점과 서비스 워커는 매번 새로 확인한다(새 판이 바로 보이게). 나머지 파일은 서비스 워커의 캐시 판으로 바뀐다.
+/
+  Cache-Control: no-cache
+/index.html
+  Cache-Control: no-cache
+/sw.js
+  Cache-Control: no-cache
