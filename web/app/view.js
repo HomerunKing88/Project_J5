@@ -89,11 +89,12 @@ export function validateTransactionsDoc(doc) {
       const key = `${c?.lawd_cd}:${c?.year}`;
       const ok = c && typeof c === "object" && typeof c.lawd_cd === "string" && /^\d{5}$/.test(c.lawd_cd) && Number.isInteger(c.year)
         && Number.isInteger(c.months_complete) && Number.isInteger(c.months_any) && c.months_complete >= 0 && c.months_complete <= c.months_any && c.months_any <= 12 && !seen.has(key)
-        && (c.kinds === undefined || (Array.isArray(c.kinds) && c.kinds.every(knownKind) && new Set(c.kinds).size === c.kinds.length));
+        && (c.kind_months === undefined || (c.kind_months && typeof c.kind_months === "object" && !Array.isArray(c.kind_months)
+          && Object.entries(c.kind_months).every(([k, v]) => knownKind(k) && Number.isInteger(v) && v >= 1 && v <= c.months_complete)));
       seen.add(key);
       return !ok;
     });
-    if (bad) errs.push("coverage 형식 (시군구 5자리·연도·수집 개월 0~12, 완전 ≤ 전체, 중복 없음, 종류 목록)");
+    if (bad) errs.push("coverage 형식 (시군구 5자리·연도·수집 개월 0~12, 완전 ≤ 전체, 중복 없음, 종류별 개월)");
   }
   return errs;
 }
@@ -309,7 +310,7 @@ export function parcelYearSummaryInfo(feature, items, txDoc, prices = [], { maxY
     rows.push({ year: y, price, deltaPct: price != null && prev ? ((price - prev) / prev) * 100 : null,
                 exact: counted ? t?.exact ?? 0 : null, prefix: counted ? t?.prefix ?? 0 : null, linked: counted ? t?.linked ?? 0 : null,
                 monthsComplete: c?.months_complete ?? (hasCoverage ? 0 : null), monthsAny: c?.months_any ?? (hasCoverage ? 0 : null), tx,
-                ...(Array.isArray(c?.kinds) ? { kinds: c.kinds } : {}),
+                ...(c?.kind_months ? { kindMonths: c.kind_months } : {}),
                 owner: ownership ? { known: !!ownership.known, dates: (ownership.dates ?? []).filter((d) => d.startsWith(`${y}-`)) } : null });
     prev = price;
   }
@@ -336,10 +337,18 @@ const TX_STATE_SHORT = { not_collected: "미수집", incomplete: "일부만 수�
 export const DEAL_KIND_NAMES = { nrg: "상업·업무", sh: "단독·다가구", land: "토지" };
 const knownKind = (k) => typeof k === "string" && Object.keys(DEAL_KIND_NAMES).includes(k);
 
-/** 그해 완전히 받은 종류가 일부뿐이면 "상업·업무만" 처럼 적는다. 종류 정보가 없거나(이전 형식) 모든 종류면 "" (0 건이 받은 종류 안의 0 건임을 보인다) */
+/** 그해 종류별로 받은 개월이 고르지 않으면 적는다 (0 건이 받은 종류·달 안의 0 건임을 보인다, 리뷰 반영 PR #112):
+ *  모든 종류를 같은 개월만큼 받았으면 "", 받은 종류는 모두 같은 개월이면 "상업·업무만", 종류마다 개월이 다르면 "상업·업무 12 · 토지 1개월".
+ *  종류 정보가 없는 이전 파일은 "". */
 function kindsOnlyText(r) {
-  if (r.tx !== "counted" || !Array.isArray(r.kinds) || !r.kinds.length || r.kinds.length >= Object.keys(DEAL_KIND_NAMES).length) return "";
-  return `${r.kinds.map((k) => DEAL_KIND_NAMES[k]).join("·")}만`;
+  const km = r.kindMonths;
+  if (r.tx !== "counted" || !km) return "";
+  const kinds = Object.keys(DEAL_KIND_NAMES).filter((k) => km[k] > 0);
+  if (!kinds.length) return "";
+  const even = kinds.every((k) => km[k] === r.monthsComplete);
+  if (even && kinds.length === Object.keys(DEAL_KIND_NAMES).length) return "";
+  if (even) return `${kinds.map((k) => DEAL_KIND_NAMES[k]).join("·")}만`;
+  return `${kinds.map((k) => `${DEAL_KIND_NAMES[k]} ${km[k]}`).join(" · ")}개월`;
 }
 
 /**

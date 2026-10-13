@@ -373,21 +373,23 @@ test("수집 종류: dealKind·단가 사유·상세 글 (토지·단독·다가
 
 test("수집 종류: 거래 파일 검사와 연도별 표의 받은 종류", () => {
   const ok = { j5transactions: "1.0.0", count: 1, transactions: [{ ...T(ID(1), "202608", "1"), deal_kind: "land", land_category: "대" }],
-    coverage: [{ lawd_cd: "99999", year: 2026, months_complete: 8, months_any: 8, kinds: ["nrg", "land"] }] };
+    coverage: [{ lawd_cd: "99999", year: 2026, months_complete: 8, months_any: 8, kind_months: { nrg: 8, land: 2 } }] };
   assert.deepEqual(validateTransactionsDoc(ok), []);
   assert.deepEqual(validateTransactionsDoc({ ...ok, transactions: [{ ...ok.transactions[0], deal_kind: "apt" }] }), ["transactions[0] deal_kind"]);
   assert.deepEqual(validateTransactionsDoc({ ...ok, transactions: [{ ...ok.transactions[0], land_category: 3 }] }), ["transactions[0] land_category"]);
-  for (const kinds of [["nrg", "nrg"], ["apt"], "nrg"]) {
-    assert.equal(validateTransactionsDoc({ ...ok, coverage: [{ ...ok.coverage[0], kinds }] }).length, 1, `kinds ${JSON.stringify(kinds)}`);
+  for (const km of [{ apt: 1 }, { nrg: 9 }, { nrg: 0 }, { nrg: 1.5 }, ["nrg"], "nrg"]) {
+    assert.equal(validateTransactionsDoc({ ...ok, coverage: [{ ...ok.coverage[0], kind_months: km }] }).length, 1, `kind_months ${JSON.stringify(km)}`);
   }
   const feature = { id: "9999900100100010000", properties: { emd_name: "가상동", emd_code: "9999900100", label: "1", bon: 1, bu: 0, mountain: false } };
   const txDoc = { ...ok, zone_rule: { version: 1, core: ["가상동"], comparison: [] }, transactions: [] , count: 0,
-    coverage: [{ lawd_cd: "99999", year: 2026, months_complete: 8, months_any: 8, kinds: ["nrg"] }, { lawd_cd: "99999", year: 2025, months_complete: 12, months_any: 12, kinds: ["nrg", "sh", "land"] }] };
+    coverage: [{ lawd_cd: "99999", year: 2026, months_complete: 8, months_any: 8, kind_months: { nrg: 8 } }, { lawd_cd: "99999", year: 2025, months_complete: 12, months_any: 12, kind_months: { nrg: 12, sh: 12, land: 12 } },
+      { lawd_cd: "99999", year: 2024, months_complete: 12, months_any: 12, kind_months: { nrg: 12, sh: 1, land: 1 } }] };
   const rows = parcelYearSummary(feature, [], txDoc, []);
   assert.deepEqual(yearSummaryCells(rows[0]).txNotes, ["수집 8/12개월", "상업·업무만"], "일부 종류만 받은 해의 0건은 그 종류 안의 0건");
   assert.match(yearSummaryRow(rows[0])[1], /\(수집 8\/12개월, 상업·업무만\)$/);
-  assert.deepEqual(yearSummaryCells(rows[1]).txNotes, ["수집 12/12개월"], "모든 종류를 받은 해는 덧붙이지 않는다");
-  const old = parcelYearSummary(feature, [], { ...txDoc, coverage: txDoc.coverage.map(({ kinds, ...c }) => c) }, []);
+  assert.deepEqual(yearSummaryCells(rows[1]).txNotes, ["수집 12/12개월"], "모든 종류를 같은 개월 받은 해는 덧붙이지 않는다");
+  assert.deepEqual(yearSummaryCells(rows[2]).txNotes, ["수집 12/12개월", "상업·업무 12 · 단독·다가구 1 · 토지 1개월"], "리뷰 반영(PR #112): 세 종류가 있어도 개월이 다르면 종류별 개월");
+  const old = parcelYearSummary(feature, [], { ...txDoc, coverage: txDoc.coverage.map(({ kind_months, ...c }) => c) }, []);
   assert.deepEqual(yearSummaryCells(old[0]).txNotes, ["수집 8/12개월"], "종류 정보가 없는 이전 파일은 그대로");
-  assert.equal("kinds" in old[0], false);
+  assert.equal("kindMonths" in old[0], false);
 });

@@ -19,77 +19,77 @@
    "year": 2019,
    "months_complete": 12,
    "months_any": 12,
-   "kinds": [
-    "nrg",
-    "sh",
-    "land"
-   ]
+   "kind_months": {
+    "nrg": 12,
+    "sh": 12,
+    "land": 12
+   }
   },
   {
    "lawd_cd": "99999",
    "year": 2020,
    "months_complete": 12,
    "months_any": 12,
-   "kinds": [
-    "nrg",
-    "sh",
-    "land"
-   ]
+   "kind_months": {
+    "nrg": 12,
+    "sh": 12,
+    "land": 12
+   }
   },
   {
    "lawd_cd": "99999",
    "year": 2021,
    "months_complete": 12,
    "months_any": 12,
-   "kinds": [
-    "nrg",
-    "sh",
-    "land"
-   ]
+   "kind_months": {
+    "nrg": 12,
+    "sh": 12,
+    "land": 12
+   }
   },
   {
    "lawd_cd": "99999",
    "year": 2022,
    "months_complete": 12,
    "months_any": 12,
-   "kinds": [
-    "nrg",
-    "sh",
-    "land"
-   ]
+   "kind_months": {
+    "nrg": 12,
+    "sh": 12,
+    "land": 12
+   }
   },
   {
    "lawd_cd": "99999",
    "year": 2023,
    "months_complete": 12,
    "months_any": 12,
-   "kinds": [
-    "nrg",
-    "sh",
-    "land"
-   ]
+   "kind_months": {
+    "nrg": 12,
+    "sh": 12,
+    "land": 12
+   }
   },
   {
    "lawd_cd": "99999",
    "year": 2024,
    "months_complete": 12,
    "months_any": 12,
-   "kinds": [
-    "nrg",
-    "sh",
-    "land"
-   ]
+   "kind_months": {
+    "nrg": 12,
+    "sh": 12,
+    "land": 12
+   }
   },
   {
    "lawd_cd": "99999",
    "year": 2025,
    "months_complete": 12,
    "months_any": 12,
-   "kinds": [
-    "nrg",
-    "sh",
-    "land"
-   ]
+   "kind_months": {
+    "nrg": 12,
+    "sh": 12,
+    "land": 12
+   }
   }
  ],
  "count": 11,

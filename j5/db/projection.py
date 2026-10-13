@@ -268,9 +268,10 @@ def _verify_tx_extras(tx: dict) -> None:
             ok = False
             break
         seen.add((c["lawd_cd"], c["year"]))
-        # J5-065: 그해 완전히 받은 종류 목록 (없으면 이전 형식)
-        kinds = c.get("kinds")
-        if kinds is not None and not (isinstance(kinds, list) and all(k in RT_KINDS for k in kinds) and len(set(kinds)) == len(kinds)):
+        # J5-065: 종류마다 그해 완전히 받은 개월 수 (없으면 이전 형식). 종류를 가리지 않은 개월 수보다 클 수 없다
+        km = c.get("kind_months")
+        if km is not None and not (isinstance(km, dict) and all(k in RT_KINDS and isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= c["months_complete"]
+                                                                for k, v in km.items())):
             ok = False
             break
     if not ok:

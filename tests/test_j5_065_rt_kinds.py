@@ -2,7 +2,7 @@
 
 시험: 종류 등록부(제공자·기본 주소·원본 폴더), 종류마다 따로 쌓이는 원본·실행 기록·완료 월, 종류별 정규화(면적·주택유형·지목·지분·없는 값의 사유),
 상업·업무용 식별 해시는 이전과 같고 다른 종류는 제공자를 넣는다, 다른 종류의 완전한 응답으로 사라짐을 적지 않는다, 폴더와 제공자가 다른 실행 기록 거절,
-종류별 범위 현황·반영 대기·최근 수집, 파생본의 deal_kind·land_category·coverage.kinds 와 게시 전 확인, CLI --kind.
+종류별 범위 현황·반영 대기·최근 수집, 파생본의 deal_kind·land_category·coverage.kind_months 와 게시 전 확인, CLI --kind.
 단독·다가구·토지의 응답 필드 이름은 가정이다(가상 응답만 쓴다). 실제 공공데이터포털 응답 확인이 아니다.
 """
 
@@ -142,7 +142,10 @@ def test_load_by_kind_and_isolation(db, home):
     assert c["kind"] == "land" and c["months"][0]["collection"] == "complete" and c["months"][0]["runs"] == 2 and c["transactions"] == 2
     cn = coverage(db, LAWD, ["202608"])
     assert cn["kind"] == "nrg" and cn["months"][0]["collection"] == "empty" and cn["transactions"] == 0, "기본 범위 현황은 상업·업무용만"
-    assert coverage_rows(db) == [{"lawd_cd": LAWD, "year": 2026, "months_complete": 1, "months_any": 1, "kinds": ["nrg", "sh", "land"]}]
+    assert coverage_rows(db) == [{"lawd_cd": LAWD, "year": 2026, "months_complete": 1, "months_any": 1, "kind_months": {"nrg": 1, "sh": 1, "land": 1}}]
+    # 리뷰 반영(PR #112): 상업·업무용만 더 받은 해는 종류마다 개월이 다르게 남는다 (모든 종류를 다 받은 해로 보이지 않는다)
+    load_run(db, home, LAWD, fetch(home, None, [], ym="202607").run_id)
+    assert coverage_rows(db) == [{"lawd_cd": LAWD, "year": 2026, "months_complete": 2, "months_any": 2, "kind_months": {"nrg": 2, "sh": 1, "land": 1}}]
 
 
 def test_run_record_in_wrong_kind_folder_is_rejected(db, home):
@@ -185,21 +188,23 @@ def test_projection_exports_kind_and_verifier(db, home, tmp_path):
     tx = json.loads((out / "transactions.json").read_text(encoding="utf-8"))
     kinds = sorted(((t["deal_kind"], t["land_category"], t["building_use"]) for t in tx["transactions"]), key=lambda x: tuple(v or "" for v in x))
     assert kinds == [("land", None, None), ("land", "대", None), ("nrg", None, "제2종근린생활"), ("sh", None, "단독")]
-    assert tx["coverage"] == [{"lawd_cd": LAWD, "year": 2026, "months_complete": 1, "months_any": 1, "kinds": ["nrg", "sh", "land"]}]
+    assert tx["coverage"] == [{"lawd_cd": LAWD, "year": 2026, "months_complete": 1, "months_any": 1, "kind_months": {"nrg": 1, "sh": 1, "land": 1}}]
     land = next(t for t in tx["transactions"] if t["land_category"] == "대")
     assert land["building_area_m2"] is None and land["missing_reasons"] == {"buildingAr": "not_applicable", "buildYear": "not_applicable"} and land["scope"] == "land_only"
     verify_projection_dir(out)
     saved = {n: (out / n).read_bytes() for n in ("transactions.json", "manifest.json")}
     for change, code in ((lambda t: t["transactions"][0].update(deal_kind="apt"), "verify_transaction_kind"),
-                         (lambda t: t["coverage"][0].update(kinds=["nrg", "nrg"]), "verify_transactions_coverage"),
-                         (lambda t: t["coverage"][0].update(kinds="nrg"), "verify_transactions_coverage")):
+                         (lambda t: t["coverage"][0].update(kind_months={"apt": 1}), "verify_transactions_coverage"),
+                         (lambda t: t["coverage"][0].update(kind_months={"nrg": 2}), "verify_transactions_coverage"),
+                         (lambda t: t["coverage"][0].update(kind_months={"nrg": 0}), "verify_transactions_coverage"),
+                         (lambda t: t["coverage"][0].update(kind_months=["nrg"]), "verify_transactions_coverage")):
         tamper(out, change)
         with pytest.raises(ProjectionError) as e:
             verify_projection_dir(out)
         assert e.value.code == code
         for n, data in saved.items():
             (out / n).write_bytes(data)
-    tamper(out, lambda t: [x.pop("deal_kind") for x in t["transactions"]] and [c.pop("kinds") for c in t["coverage"]])
+    tamper(out, lambda t: [x.pop("deal_kind") for x in t["transactions"]] and [c.pop("kind_months") for c in t["coverage"]])
     verify_projection_dir(out)  # 이전 형식(종류 없음)도 받는다
 
 
