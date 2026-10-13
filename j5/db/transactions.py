@@ -8,6 +8,10 @@
 - 같은 달을 다시 받은 실행: 다시 보인 거래는 last_seen 과 가변 필드를 갱신하고, 완전한(complete/empty) 응답에서 사라진 거래는 missing_since_run_id 만 적는다.
   사라졌다는 이유로 취소를 확정하지 않는다. 취소는 제공자의 cdealType 만 근거로 삼는다. 더 오래된 실행을 나중에 반영하면 새 거래만 넣고(그 뒤의 완전한 실행에서 안 보였으면 사라짐으로 표시) 최신 상태는 건드리지 않는다.
 - 결측은 null 과 사유(missing_reasons_json). 금액·면적을 0 으로 채우지 않는다.
+- 종류(J5-065): 상업·업무용(nrg)·단독·다가구(sh)·토지(land). 실행 기록의 provider 로 종류를 정하고 종류마다 식별 필드와 열 대응이 다르다.
+  단독·다가구는 연면적 totalFloorAr·대지 plottageAr·주택유형 houseType(→ building_use_raw), 토지는 거래면적 dealArea(→ plottage_area_m2)·지목 jimok·용도지역 landUse 로
+  가정한다(첫 실제 응답으로 확인 전). 그 종류에 없는 값(토지 거래의 연면적·건축년도)은 null 과 사유 not_applicable 이다.
+  nrg 의 식별 해시는 이전과 같고, 다른 종류는 해시에 제공자를 넣어 종류가 다른 거래가 같은 해시를 갖지 않게 한다.
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from j5.collect.rt import OK_CODES, PROVIDER, RAW_DIR, CollectError, list_run_ids, page_mismatch, page_no_text, parse_response
+from j5.collect.rt import KINDS, OK_CODES, CollectError, RtKind, kind_of_provider, list_run_ids, page_mismatch, page_no_text, parse_response, rt_kind
 from j5.db import schema as S
 from j5.db.store import Db, DbError
 from j5.db.validate import parse_date
@@ -27,6 +31,14 @@ from j5.db.validate import parse_date
 # 거래를 식별하는 제공자 필드. 나머지(cdealType, cdealDay, dealingGbn, estateAgentSggNm, buyerGbn, slerGbn)는 가변 필드다.
 IDENTITY_FIELDS = ("sggCd", "umdNm", "jibun", "buildingAr", "plottageAr", "buildYear", "dealYear", "dealMonth", "dealDay", "dealAmount",
                    "buildingType", "buildingUse", "landUse", "floor", "shareDealingType")
+# 종류별 식별 필드 (J5-065). 가변 필드(cdealType 등)는 종류와 무관하게 같다. sh·land 의 필드 이름은 첫 실제 응답으로 확인하기 전까지 가정이다
+IDENTITY_FIELDS_BY_KIND = {
+    "nrg": IDENTITY_FIELDS,
+    "sh": ("sggCd", "umdNm", "jibun", "totalFloorAr", "plottageAr", "buildYear", "dealYear", "dealMonth", "dealDay", "dealAmount", "houseType", "landUse",
+           "shareDealingType"),
+    "land": ("sggCd", "umdNm", "jibun", "jimok", "landUse", "dealArea", "dealYear", "dealMonth", "dealDay", "dealAmount", "shareDealingType"),
+}
+SH_HOUSE_TYPES = ("단독", "다가구")
 BUILDING_KIND_BY_RAW = {"일반": "general", "집합": "strata"}
 CANCEL_MARKS = ("O", "o", "Y", "y")
 REAL_ENDPOINT_HOSTS = ("apis.data.go.kr", "openapi.molit.go.kr")
@@ -36,6 +48,7 @@ MAX_RUN_JSON_BYTES = 20 * 1024 * 1024
 @dataclass
 class RunLoadResult:
     run_id: str = ""
+    kind: str = "nrg"
     outcome: str = "unchanged"  # applied / unchanged
     months: int = 0
     pages: int = 0
@@ -49,13 +62,13 @@ class RunLoadResult:
     message: str = ""
 
     def to_dict(self) -> dict:
-        return {"run_id": self.run_id, "outcome": self.outcome, "months": self.months, "pages": self.pages, "observations": self.observations,
+        return {"run_id": self.run_id, "kind": self.kind, "outcome": self.outcome, "months": self.months, "pages": self.pages, "observations": self.observations,
                 "transactions_new": self.transactions_new, "transactions_seen": self.transactions_seen, "transactions_changed": self.transactions_changed,
                 "transactions_missing": self.transactions_missing, "dataset_version": self.dataset_version, "source_document_id": self.source_document_id,
                 "message": self.message}
 
     def to_text(self) -> str:
-        head = f"거래 반영 [{self.run_id}]: {'반영됨' if self.outcome == 'applied' else '변화 없음'}"
+        head = f"거래 반영 [{self.run_id}] {KINDS[self.kind].label}: {'반영됨' if self.outcome == 'applied' else '변화 없음'}"
         if self.outcome == "applied":
             head += (f" · 월 {self.months}, 페이지 {self.pages}, 원본 행 {self.observations} · 거래 신규 {self.transactions_new}, 다시 확인 {self.transactions_seen}"
                      f" (가변 필드 변경 {self.transactions_changed}), 응답에서 사라짐 {self.transactions_missing} · dataset_version {self.dataset_version}")
@@ -70,8 +83,18 @@ def _hash(obj) -> str:
     return hashlib.sha256(_canon(obj).encode("utf-8")).hexdigest()
 
 
-def identity_hash(content: dict) -> str:
-    return _hash({k: content.get(k, "") for k in IDENTITY_FIELDS})
+def identity_hash(content: dict, kind: str | RtKind | None = None) -> str:
+    k = rt_kind(kind)
+    base = {f: content.get(f, "") for f in IDENTITY_FIELDS_BY_KIND[k.name]}
+    # 상업·업무용은 이전 정본과 같은 해시를 유지한다. 다른 종류는 제공자를 넣어 종류 사이의 해시 겹침을 막는다 (관측 조인이 제공자 없이 해시로 맞춘다)
+    return _hash(base if k.name == "nrg" else {"_provider": k.provider, **base})
+
+
+def _kind_name(provider: str) -> str:
+    k = kind_of_provider(provider)
+    if k is None:
+        raise DbError("run_provider_unknown", f"모르는 제공자: {provider!r} (알려진 제공자: {', '.join(x.provider for x in KINDS.values())})")
+    return k.name
 
 
 # ---------------------------------------------------------------- 정규화
@@ -84,8 +107,9 @@ def _clean(v: str | None) -> str:
     return (v or "").replace(",", "").strip()
 
 
-def normalize(content: dict) -> dict:
-    """제공자 행(태그명→문자열)을 transactions 열로 옮긴다. 해석할 수 없으면 null 과 사유."""
+def normalize(content: dict, kind: str | RtKind | None = None) -> dict:
+    """제공자 행(태그명→문자열)을 transactions 열로 옮긴다. 해석할 수 없으면 null 과 사유. kind 는 수집 종류(기본 상업·업무용)."""
+    kname = rt_kind(kind).name
     missing: dict[str, str] = {}
 
     def num(field: str, kind: str):
@@ -111,15 +135,21 @@ def normalize(content: dict) -> dict:
         deal_date = cand if parse_date(cand) is not None else None
     if deal_date is None:
         missing["dealDate"] = "not_provided" if not (y and m and d) else "unparsable"
-    building_area = num("buildingAr", "dec")
-    plottage_area = num("plottageAr", "dec")
-    build_year = num("buildYear", "int")
+    # 면적 필드: 종류마다 제공자 이름이 다르다. 그 종류에 없는 값은 null 과 not_applicable
+    building_field = {"nrg": "buildingAr", "sh": "totalFloorAr", "land": None}[kname]
+    plottage_field = {"nrg": "plottageAr", "sh": "plottageAr", "land": "dealArea"}[kname]
+    building_area = num(building_field, "dec") if building_field else None
+    plottage_area = num(plottage_field, "dec")
+    if kname == "land":
+        missing["buildingAr"] = missing["buildYear"] = "not_applicable"
+        build_year = None
+    else:
+        build_year = num("buildYear", "int")
     if build_year is not None and not (1800 <= build_year <= 2100):
         missing["buildYear"] = "unparsable"
         build_year = None
-    for k in ("buildingAr", "plottageAr"):
-        v = {"buildingAr": building_area, "plottageAr": plottage_area}[k]
-        if v is not None and v < 0:
+    for k, v in ((building_field, building_area), (plottage_field, plottage_area)):
+        if k and v is not None and v < 0:
             missing[k] = "unparsable"
     if building_area is not None and building_area < 0:
         building_area = None
@@ -129,8 +159,17 @@ def normalize(content: dict) -> dict:
     masked = "*" in jibun
     prefix_m = re.match(r"^\d+", jibun)
     jibun_prefix = prefix_m.group(0) if prefix_m else None
-    btype = (content.get("buildingType") or "").strip()
-    kind = BUILDING_KIND_BY_RAW.get(btype, "unknown")
+    if kname == "nrg":
+        btype = (content.get("buildingType") or "").strip()
+        bkind = BUILDING_KIND_BY_RAW.get(btype, "unknown")
+        building_use = (content.get("buildingUse") or "").strip() or None
+    elif kname == "sh":
+        # 단독·다가구 주택은 일반건축물이다. 주택유형(단독/다가구)을 건물 용도 열에 둔다
+        btype = ""
+        building_use = (content.get("houseType") or "").strip() or None
+        bkind = "general" if building_use in SH_HOUSE_TYPES else "unknown"
+    else:
+        btype, building_use, bkind = "", None, "unknown"
     share = (content.get("shareDealingType") or "").strip() == "지분"
     cancel_mark = (content.get("cdealType") or "").strip()
     cancelled = cancel_mark in CANCEL_MARKS
@@ -143,11 +182,11 @@ def normalize(content: dict) -> dict:
             cancel_date = cand if parse_date(cand) is not None else None
         if cancel_date is None:
             missing["cdealDay"] = "not_provided" if not cd else "unparsable"
-    scope = "partial_share" if share else ("strata_unit" if kind == "strata" else "unclear")
+    scope = "partial_share" if share else ("strata_unit" if bkind == "strata" else "land_only" if kname == "land" else "unclear")
     return {"deal_date": deal_date, "amount_krw": amount_krw, "building_area_m2": building_area, "plottage_area_m2": plottage_area, "build_year": build_year,
             "missing_reasons_json": _canon(missing), "emd_name": (content.get("umdNm") or "").strip() or None, "jibun_raw": jibun or None,
-            "jibun_masked": int(masked), "jibun_prefix": jibun_prefix, "building_kind": kind, "building_type_raw": btype or None,
-            "building_use_raw": (content.get("buildingUse") or "").strip() or None, "land_use_raw": (content.get("landUse") or "").strip() or None,
+            "jibun_masked": int(masked), "jibun_prefix": jibun_prefix, "building_kind": bkind, "building_type_raw": btype or None,
+            "building_use_raw": building_use, "land_use_raw": (content.get("landUse") or "").strip() or None,
             "floor_raw": (content.get("floor") or "").strip() or None, "share_deal": int(share), "cancel_status": "cancelled" if cancelled else "none",
             "cancel_date": cancel_date, "dealing_gbn_raw": (content.get("dealingGbn") or "").strip() or None,
             "agent_sgg_raw": (content.get("estateAgentSggNm") or "").strip() or None, "buyer_kind_raw": (content.get("buyerGbn") or "").strip() or None,
@@ -160,8 +199,9 @@ MUTABLE_COLUMNS = ("cancel_status", "cancel_date", "dealing_gbn_raw", "agent_sgg
 
 # ---------------------------------------------------------------- 실행 기록 읽기
 
-def read_run_record(data_home: Path, lawd_cd: str, run_id: str) -> dict:
-    p = Path(data_home) / RAW_DIR / lawd_cd / f"run-{run_id}.json"
+def read_run_record(data_home: Path, lawd_cd: str, run_id: str, kind: str | RtKind | None = None) -> dict:
+    k = rt_kind(kind)
+    p = Path(data_home) / k.raw_dir / lawd_cd / f"run-{run_id}.json"
     if not p.is_file():
         raise DbError("run_missing", f"실행 기록이 없다: {p}")
     if p.stat().st_size > MAX_RUN_JSON_BYTES:
@@ -171,6 +211,8 @@ def read_run_record(data_home: Path, lawd_cd: str, run_id: str) -> dict:
     except (OSError, UnicodeDecodeError, ValueError) as e:
         raise DbError("run_unreadable", f"실행 기록을 읽을 수 없다: {p}: {e}") from e
     errs = _run_record_errors(doc, lawd_cd, run_id)
+    if not errs and doc["provider"] != k.provider:
+        errs.append(f"provider {doc['provider']!r} 가 {k.label} 폴더({k.raw_dir.as_posix()})의 제공자 {k.provider} 가 아니다")
     if errs:
         raise DbError("run_invalid", f"실행 기록 {p.name} 형식 오류: " + "; ".join(errs[:5]))
     doc["_run_path"] = p.relative_to(Path(data_home)).as_posix()
@@ -223,10 +265,11 @@ def is_real_endpoint(endpoint: str) -> bool:
 
 # ---------------------------------------------------------------- 반영
 
-def load_run(db: Db, data_home: Path, lawd_cd: str, run_id: str) -> RunLoadResult:
+def load_run(db: Db, data_home: Path, lawd_cd: str, run_id: str, kind: str | RtKind | None = None) -> RunLoadResult:
     data_home = Path(data_home)
-    doc = read_run_record(data_home, lawd_cd, run_id)
-    r = RunLoadResult(run_id=run_id)
+    rk = rt_kind(kind)
+    doc = read_run_record(data_home, lawd_cd, run_id, rk)
+    r = RunLoadResult(run_id=run_id, kind=rk.name)
     if is_real_endpoint(doc["endpoint"]) and db.data_mode != "private_real":
         raise DbError("data_mode_mismatch", f"실제 제공자({doc['endpoint']})의 응답은 data_mode {db.data_mode} 정본에 넣지 않는다")
     already = db.conn.execute("SELECT COUNT(*) FROM collection_runs WHERE run_id = ? AND lawd_cd = ?", (run_id, lawd_cd)).fetchone()[0]
@@ -303,7 +346,7 @@ def load_run(db: Db, data_home: Path, lawd_cd: str, run_id: str) -> RunLoadResul
             seen_keys: set[tuple[str, int]] = set()
             assigned = assign_ordinals(db, doc["provider"], lawd_cd, deal_ymd, rows)
             for (page_no, row_index, content), ordinal in zip(rows, assigned):
-                ih = identity_hash(content)
+                ih = identity_hash(content, rk)
                 ch = _hash(content)
                 obs_id = str(uuid.uuid4())
                 fetched = next((p.get("fetched_at") for p in m["pages"] if p["page_no"] == page_no), None) or doc["finished_at"]
@@ -316,10 +359,10 @@ def load_run(db: Db, data_home: Path, lawd_cd: str, run_id: str) -> RunLoadResul
                 seen_keys.add((ih, ordinal))
                 cur = db.conn.execute("SELECT transaction_id, content_hash, last_seen_run_id FROM transactions WHERE provider = ? AND lawd_cd = ? AND deal_ymd = ? AND identity_hash = ? AND ordinal = ?",
                                       (doc["provider"], lawd_cd, deal_ymd, ih, ordinal)).fetchone()
-                norm = normalize(content)
+                norm = normalize(content, rk)
                 if cur is None:
                     tid = str(uuid.uuid4())
-                    missing_since = None if is_newest else _first_complete_run_after(db, lawd_cd, deal_ymd, run_id)
+                    missing_since = None if is_newest else _first_complete_run_after(db, doc["provider"], lawd_cd, deal_ymd, run_id)
                     db.conn.execute(
                         "INSERT INTO transactions (transaction_id, provider, lawd_cd, deal_ymd, identity_hash, ordinal, deal_date, amount_krw, building_area_m2, plottage_area_m2,"
                         " build_year, missing_reasons_json, emd_name, jibun_raw, jibun_masked, jibun_prefix, building_kind, building_type_raw, building_use_raw, land_use_raw,"
@@ -370,9 +413,10 @@ def assign_ordinals(db: Db, provider: str, lawd_cd: str, deal_ymd: str, rows: li
     """응답 행마다 거래 순번을 정한다. 식별 해시가 같은 행이 여럿이면(같은 값의 별개 행) 정본의 기존 거래와 먼저 맞춘다:
     1) 내용 해시(가변 필드 포함)가 같은 기존 거래의 순번, 2) 남은 행은 남은 기존 순번을 순서대로, 3) 그래도 남으면 새 순번.
     제공자가 행 순서를 바꾸거나 한 행이 빠져도 취소 상태·최신 관측이 다른 거래에 붙지 않는다."""
+    kname = _kind_name(provider)
     groups: dict[str, list[int]] = {}
     for i, (_, _, content) in enumerate(rows):
-        groups.setdefault(identity_hash(content), []).append(i)
+        groups.setdefault(identity_hash(content, kname), []).append(i)
     out = [0] * len(rows)
     for ih, idxs in groups.items():
         existing = db.conn.execute("SELECT ordinal, content_hash FROM transactions WHERE provider = ? AND lawd_cd = ? AND deal_ymd = ? AND identity_hash = ? ORDER BY ordinal",
@@ -401,16 +445,18 @@ def assign_ordinals(db: Db, provider: str, lawd_cd: str, deal_ymd: str, rows: li
     return out
 
 
-def _first_complete_run_after(db: Db, lawd_cd: str, deal_ymd: str, run_id: str) -> str | None:
-    row = db.conn.execute("SELECT MIN(run_id) FROM collection_runs WHERE lawd_cd = ? AND deal_ymd = ? AND run_id > ? AND outcome IN ('complete', 'empty')",
-                          (lawd_cd, deal_ymd, run_id)).fetchone()
+def _first_complete_run_after(db: Db, provider: str, lawd_cd: str, deal_ymd: str, run_id: str) -> str | None:
+    """같은 제공자(종류)의 뒤 실행만 본다: 다른 종류의 완전한 응답에 안 보였다고 사라짐으로 적지 않는다 (J5-065)."""
+    row = db.conn.execute("SELECT MIN(run_id) FROM collection_runs WHERE provider = ? AND lawd_cd = ? AND deal_ymd = ? AND run_id > ? AND outcome IN ('complete', 'empty')",
+                          (provider, lawd_cd, deal_ymd, run_id)).fetchone()
     return row[0] if row and row[0] else None
 
 
-def unloaded_run_ids(db: Db, data_home: Path, lawd_cd: str) -> list[str]:
-    """실데이터 홈에 있는 실행 기록 중 정본에 없는 것 (오래된 순)."""
-    loaded = {r[0] for r in db.conn.execute("SELECT DISTINCT run_id FROM collection_runs WHERE lawd_cd = ?", (lawd_cd,))}
-    return [rid for rid in list_run_ids(data_home, lawd_cd) if rid not in loaded]
+def unloaded_run_ids(db: Db, data_home: Path, lawd_cd: str, kind: str | RtKind | None = None) -> list[str]:
+    """실데이터 홈의 그 종류 폴더에 있는 실행 기록 중 정본에 없는 것 (오래된 순)."""
+    k = rt_kind(kind)
+    loaded = {r[0] for r in db.conn.execute("SELECT DISTINCT run_id FROM collection_runs WHERE lawd_cd = ? AND provider = ?", (lawd_cd, k.provider))}
+    return [rid for rid in list_run_ids(data_home, lawd_cd, k) if rid not in loaded]
 
 
 # ---------------------------------------------------------------- 범위 현황
@@ -418,11 +464,13 @@ def unloaded_run_ids(db: Db, data_home: Path, lawd_cd: str) -> list[str]:
 OUTCOME_RANK = {"complete": 3, "empty": 3, "partial": 2, "failed": 1}
 
 
-def coverage(db: Db, lawd_cd: str, months: list[str]) -> dict:
-    """월마다 가장 좋은 수집 결과·최신 실행·거래 수·취소·사라짐. 수집 완료(complete/empty)와 거래 연결은 별개로 센다."""
+def coverage(db: Db, lawd_cd: str, months: list[str], kind: str | RtKind | None = None) -> dict:
+    """그 종류(기본 상업·업무용)의 월마다 가장 좋은 수집 결과·최신 실행·거래 수·취소·사라짐. 수집 완료(complete/empty)와 거래 연결은 별개로 센다."""
+    k = rt_kind(kind)
     out = []
     for ym in months:
-        runs = db.conn.execute("SELECT run_id, outcome, total_count, items FROM collection_runs WHERE lawd_cd = ? AND deal_ymd = ? ORDER BY run_id", (lawd_cd, ym)).fetchall()
+        runs = db.conn.execute("SELECT run_id, outcome, total_count, items FROM collection_runs WHERE lawd_cd = ? AND deal_ymd = ? AND provider = ? ORDER BY run_id",
+                               (lawd_cd, ym, k.provider)).fetchall()
         best = max((r["outcome"] for r in runs), key=lambda o: OUTCOME_RANK[o], default=None)
         # 현재 통계(거래·연결·마스킹·사라짐)는 취소 확정 거래를 뺀다 (데이터 사전 §7.2). 취소 건수는 따로 보인다.
         t = db.conn.execute(
@@ -430,23 +478,26 @@ def coverage(db: Db, lawd_cd: str, months: list[str]) -> dict:
             " SUM(cancel_status <> 'cancelled') AS active, SUM(cancel_status <> 'cancelled' AND missing_since_run_id IS NOT NULL) AS missing,"
             " SUM(cancel_status <> 'cancelled' AND link_status = 'confirmed') AS linked, SUM(cancel_status <> 'cancelled' AND jibun_masked) AS masked,"
             " SUM(cancel_status <> 'cancelled' AND zone = 'core') AS core, SUM(cancel_status <> 'cancelled' AND zone = 'comparison') AS comparison"
-            " FROM transactions WHERE lawd_cd = ? AND deal_ymd = ?", (lawd_cd, ym)).fetchone()
+            " FROM transactions WHERE lawd_cd = ? AND deal_ymd = ? AND provider = ?", (lawd_cd, ym, k.provider)).fetchone()
         out.append({"deal_ymd": ym, "collection": best or "none", "runs": len(runs), "latest_run_id": runs[-1]["run_id"] if runs else None,
                     "transactions": t["active"] or 0, "rows_all": t["rows_all"] or 0, "cancelled": t["cancelled"] or 0, "missing": t["missing"] or 0,
                     "linked": t["linked"] or 0, "masked": t["masked"] or 0, "core": t["core"] or 0, "comparison": t["comparison"] or 0})
     complete = [m["deal_ymd"] for m in out if m["collection"] in ("complete", "empty")]
-    return {"lawd_cd": lawd_cd, "months": out, "complete_months": len(complete), "gap_months": [m["deal_ymd"] for m in out if m["collection"] not in ("complete", "empty")],
+    return {"lawd_cd": lawd_cd, "kind": k.name, "months": out, "complete_months": len(complete), "gap_months": [m["deal_ymd"] for m in out if m["collection"] not in ("complete", "empty")],
             "transactions": sum(m["transactions"] for m in out), "cancelled": sum(m["cancelled"] for m in out), "linked": sum(m["linked"] for m in out),
             "core": sum(m["core"] for m in out), "comparison": sum(m["comparison"] for m in out)}
 
 
-def coverage_by_year(db: Db, lawd_cd: str) -> dict[str, dict]:
+def coverage_by_year(db: Db, lawd_cd: str, kind: str | RtKind | None = None) -> dict[str, dict]:
     """시군구의 연도별 수집 개월 수 {YYYY: {complete, any}}: complete 는 complete/empty 인 달, any 는 결과와 무관하게 실행이 있는 달 (J5-045·047).
-    collection_runs 가 없으면 빈 dict."""
+    kind 를 주지 않으면 종류를 가리지 않는다(한 종류라도 완전히 받은 달은 complete). collection_runs 가 없으면 빈 dict."""
     if not db._has_table("collection_runs"):
         return {}
     months: dict[str, set] = {}
-    for r in db.conn.execute("SELECT deal_ymd, outcome FROM collection_runs WHERE lawd_cd = ?", (lawd_cd,)):
+    sql, args = "SELECT deal_ymd, outcome FROM collection_runs WHERE lawd_cd = ?", [lawd_cd]
+    if kind is not None:
+        sql, args = sql + " AND provider = ?", [lawd_cd, rt_kind(kind).provider]
+    for r in db.conn.execute(sql, args):
         months.setdefault(r["deal_ymd"], set()).add(r["outcome"])
     out: dict[str, dict] = {}
     for ym, outcomes in months.items():
@@ -457,22 +508,29 @@ def coverage_by_year(db: Db, lawd_cd: str) -> dict[str, dict]:
 
 
 def coverage_rows(db: Db) -> list[dict]:
-    """모든 시군구의 연도별 수집 개월 [{lawd_cd, year, months_complete, months_any}] (시군구·연도 순). 파생본 transactions.json 의 coverage (J5-047)."""
+    """모든 시군구의 연도별 수집 개월 [{lawd_cd, year, months_complete, months_any, kinds}] (시군구·연도 순). 파생본 transactions.json 의 coverage (J5-047).
+    개월 수는 종류를 가리지 않고 센다(PC parcels-years 와 같다). kinds 는 그해 완전히 받은 달이 있는 종류 이름(nrg·sh·land 순, J5-065):
+    폰이 "0건" 을 받은 종류 안에서의 0건으로 적게 한다."""
     if not db._has_table("collection_runs"):
         return []
     rows = []
     for (lawd,) in db.conn.execute("SELECT DISTINCT lawd_cd FROM collection_runs ORDER BY lawd_cd").fetchall():
+        providers = {r[0] for r in db.conn.execute("SELECT DISTINCT provider FROM collection_runs WHERE lawd_cd = ?", (lawd,))}
+        by_kind = {k.name: coverage_by_year(db, lawd, k) for k in KINDS.values() if k.provider in providers}
         for y, c in sorted(coverage_by_year(db, lawd).items()):
-            rows.append({"lawd_cd": lawd, "year": int(y), "months_complete": c["complete"], "months_any": c["any"]})
+            kinds = [n for n, cy in by_kind.items() if cy.get(y, {}).get("complete")]
+            rows.append({"lawd_cd": lawd, "year": int(y), "months_complete": c["complete"], "months_any": c["any"], "kinds": kinds})
     return rows
 
 
 def coverage_text(c: dict) -> str:
-    lines = [f"거래 수집 현황 시군구 {c['lawd_cd']}: 완전 수집 {c['complete_months']}/{len(c['months'])}개월 · 거래 {c['transactions']}건 (취소 확정 {c['cancelled']}건 제외)"
+    k = KINDS.get(c.get("kind") or "nrg")
+    lines = [f"거래 수집 현황 {k.label if k else c.get('kind')} · 시군구 {c['lawd_cd']}: 완전 수집 {c['complete_months']}/{len(c['months'])}개월 · 거래 {c['transactions']}건 (취소 확정 {c['cancelled']}건 제외)"
              f" · 핵심 {c['core']}, 비교 {c['comparison']} · 물건 연결 확정 {c['linked']}건 (수집 완료와 연결 완료는 별개)"]
     for m in c["months"]:
         lines.append(f"  {m['deal_ymd'][:4]}-{m['deal_ymd'][4:]}: {m['collection']} · 실행 {m['runs']}회 · 거래 {m['transactions']} (핵심 {m['core']}, 비교 {m['comparison']}, 취소 {m['cancelled']} 별도,"
                      f" 사라짐 {m['missing']}, 지번 마스킹 {m['masked']}, 연결 {m['linked']})")
     if c["gap_months"]:
-        lines.append("미완 월: " + ", ".join(f"{g[:4]}-{g[4:]}" for g in c["gap_months"]) + " (rt-fetch 로 다시 받는다)")
+        opt = "" if (c.get("kind") or "nrg") == "nrg" else f" --kind {c['kind']}"
+        lines.append("미완 월: " + ", ".join(f"{g[:4]}-{g[4:]}" for g in c["gap_months"]) + f" (rt-fetch{opt} 로 다시 받는다)")
     return "\n".join(lines) + "\n"

@@ -32,7 +32,7 @@ from j5.package.preserve import PreserveError, copy_package
 from j5.package.validate import inspect_package
 from j5.collect.config import ConfigError, config_permission_warning, load_config, redact, service_key
 from j5.collect import br as BR
-from j5.collect.rt import DEFAULT_ENDPOINT, DEFAULT_MAX_PAGES, DEFAULT_NUM_ROWS, CollectError, check_lawd, collect_months, month_range, months_done_on_disk, parse_months, recent_months, report_from_raw, report_text, run_text
+from j5.collect.rt import DEFAULT_KIND, DEFAULT_MAX_PAGES, KINDS as RT_KINDS, DEFAULT_NUM_ROWS, CollectError, check_lawd, collect_months, month_range, months_done_on_disk, parse_months, recent_months, report_from_raw, report_text, run_text
 from j5.db.transactions import coverage, coverage_text, load_run, unloaded_run_ids
 from j5.db.txlinks import apply_decisions, candidates, candidates_csv, candidates_text, read_decisions_csv
 from j5.db.zones import apply_rules, changes_since, changes_text, current_rules, load_rules, rules_text, zone_counts
@@ -195,11 +195,13 @@ def _build_parser() -> argparse.ArgumentParser:
     pk = dsub.add_parser("parcels-link", help="검토한 연결 파일(asset_components_input)을 정본 asset_components 에 반영한다")
     rl = dsub.add_parser("rt-load", help="실거래 수집 실행 기록(run-*.json)과 원본 XML 을 정본에 반영한다 (collection_runs / transaction_observations / transactions, db_schema 6). 같은 실행은 다시 반영하지 않는다")
     rl.add_argument("--lawd-cd", required=True, help="시군구 코드 5자리")
+    rl.add_argument("--kind", choices=list(RT_KINDS), default=DEFAULT_KIND, help="수집 종류: nrg 상업·업무용(기본) · sh 단독·다가구 · land 토지 (J5-065). 종류마다 원본 폴더가 다르다")
     rl.add_argument("--run-id", help="특정 실행만. 생략 시 정본에 없는 실행을 오래된 순으로 모두 반영")
     rl.add_argument("--data-home", type=Path, help="원본·기록이 있는 실데이터 홈. 생략 시 J5_DATA_HOME")
     rl.add_argument("--json", action="store_true")
     rc = dsub.add_parser("rt-coverage", help="계약월 범위의 수집 현황(월별 완전/부분/실패/없음, 거래·취소·사라짐·연결 수). 수집 완료와 연결 완료를 따로 센다")
     rc.add_argument("--lawd-cd", required=True)
+    rc.add_argument("--kind", choices=list(RT_KINDS), default=DEFAULT_KIND, help="수집 종류: nrg 상업·업무용(기본) · sh 단독·다가구 · land 토지 (J5-065). 종류마다 원본 폴더가 다르다")
     rc.add_argument("--from", dest="from_ym", required=True, help="시작 계약월 YYYY-MM")
     rc.add_argument("--to", dest="to_ym", required=True, help="끝 계약월 YYYY-MM (포함)")
     rc.add_argument("--json", action="store_true")
@@ -350,40 +352,44 @@ def _build_parser() -> argparse.ArgumentParser:
             cx.add_argument("--csv", type=Path, help="후보별 현금표 CSV 출력 경로 (덮어쓰지 않음)")
     co = sub.add_parser("collect", help="공식 API 수집 (J5-014). 인증키는 J5_DATA_HOME/config.env 의 DATA_GO_KR_SERVICE_KEY 에서만 읽는다")
     csub = co.add_subparsers(dest="collect_command", required=True)
-    cs = csub.add_parser("rt-sample", help="상업·업무용 실거래 API 를 시군구·계약월 단위로 호출해 원본 응답과 요약을 남긴다 (R0 표본 월 실측). 정본에 쓰지 않는다")
+    cs = csub.add_parser("rt-sample", help="매매 실거래 API(기본 상업·업무용, --kind)를 시군구·계약월 단위로 호출해 원본 응답과 요약을 남긴다 (R0 표본 월 실측). 정본에 쓰지 않는다")
     cs.add_argument("--lawd-cd", required=True, help="시군구 코드 5자리 (예: 종로구 11110)")
+    cs.add_argument("--kind", choices=list(RT_KINDS), default=DEFAULT_KIND, help="수집 종류: nrg 상업·업무용(기본) · sh 단독·다가구 · land 토지 (J5-065). 종류마다 원본 폴더가 다르다")
     cs.add_argument("--months", required=True, help="계약월 목록 YYYY-MM,YYYY-MM,… (예: 2026-08,2021-09,2006-03)")
     cs.add_argument("--data-home", type=Path, help="원본·기록·요약을 둘 실데이터 홈. 생략 시 J5_DATA_HOME")
     cs.add_argument("--config", type=Path, help="인증키가 있는 env 파일. 생략 시 J5_DATA_HOME/config.env")
-    cs.add_argument("--endpoint", default=DEFAULT_ENDPOINT, help="API 주소. 공공데이터포털 API 상세 페이지의 값과 대조한다")
+    cs.add_argument("--endpoint", help="API 주소. 생략 시 종류의 기본 주소. 공공데이터포털 API 상세 페이지의 값과 대조한다")
     cs.add_argument("--num-rows", type=int, default=DEFAULT_NUM_ROWS, help="페이지당 행 수 (1~1000)")
     cs.add_argument("--max-pages", type=int, default=DEFAULT_MAX_PAGES, help="월당 최대 페이지 (1~500)")
     cs.add_argument("--json", action="store_true")
     cf = csub.add_parser("rt-fetch", help="계약월 범위를 받는다. 이미 완전히 받은 달(실행 기록의 complete/empty)은 건너뛴다 (--refresh 로 다시 받음). 정본에 쓰지 않는다 (반영은 db rt-load)")
     cf.add_argument("--lawd-cd", required=True, help="시군구 코드 5자리")
+    cf.add_argument("--kind", choices=list(RT_KINDS), default=DEFAULT_KIND, help="수집 종류: nrg 상업·업무용(기본) · sh 단독·다가구 · land 토지 (J5-065). 종류마다 원본 폴더가 다르다")
     cf.add_argument("--from", dest="from_ym", required=True, help="시작 계약월 YYYY-MM")
     cf.add_argument("--to", dest="to_ym", required=True, help="끝 계약월 YYYY-MM (포함)")
     cf.add_argument("--refresh", action="store_true", help="이미 받은 달도 다시 받는다 (취소·정정 점검)")
     cf.add_argument("--data-home", type=Path)
     cf.add_argument("--config", type=Path)
-    cf.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
+    cf.add_argument("--endpoint", help="API 주소. 생략 시 종류의 기본 주소")
     cf.add_argument("--num-rows", type=int, default=DEFAULT_NUM_ROWS)
     cf.add_argument("--max-pages", type=int, default=DEFAULT_MAX_PAGES)
     cf.add_argument("--json", action="store_true")
     ck = csub.add_parser("rt-recheck", help="취소·정정 점검: 최근 N개월(--recent) 또는 실행 기록상 실패·부분 월(--failed)을 다시 받는다. 정본 반영은 db rt-load, 변경 확인은 db rt-changes")
     ck.add_argument("--lawd-cd", required=True)
+    ck.add_argument("--kind", choices=list(RT_KINDS), default=DEFAULT_KIND, help="수집 종류: nrg 상업·업무용(기본) · sh 단독·다가구 · land 토지 (J5-065). 종류마다 원본 폴더가 다르다")
     ck.add_argument("--recent", type=int, help="이번 달 포함 최근 N개월을 다시 받는다 (운영 기본 6)")
     ck.add_argument("--failed", action="store_true", help="실행 기록에서 complete/empty 가 아닌 달을 다시 받는다")
     ck.add_argument("--from", dest="from_ym", help="--failed 의 범위 시작 YYYY-MM (기본 2006-01)")
     ck.add_argument("--to", dest="to_ym", help="--failed 의 범위 끝 YYYY-MM (기본 이번 달)")
     ck.add_argument("--data-home", type=Path)
     ck.add_argument("--config", type=Path)
-    ck.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
+    ck.add_argument("--endpoint", help="API 주소. 생략 시 종류의 기본 주소")
     ck.add_argument("--num-rows", type=int, default=DEFAULT_NUM_ROWS)
     ck.add_argument("--max-pages", type=int, default=DEFAULT_MAX_PAGES)
     ck.add_argument("--json", action="store_true")
     cr = csub.add_parser("rt-report", help="저장된 원본 응답만으로 요약을 다시 만든다 (네트워크 없음)")
     cr.add_argument("--lawd-cd", required=True)
+    cr.add_argument("--kind", choices=list(RT_KINDS), default=DEFAULT_KIND, help="수집 종류: nrg 상업·업무용(기본) · sh 단독·다가구 · land 토지 (J5-065). 종류마다 원본 폴더가 다르다")
     cr.add_argument("--months", required=True)
     cr.add_argument("--data-home", type=Path)
     cr.add_argument("--run-id", help="특정 실행의 파일만")
@@ -617,16 +623,16 @@ def _db_main(args) -> int:
                 if home is None:
                     return USAGE_ERROR
                 lawd = check_lawd(args.lawd_cd)
-                run_ids = [args.run_id] if args.run_id else unloaded_run_ids(db, home, lawd)
+                run_ids = [args.run_id] if args.run_id else unloaded_run_ids(db, home, lawd, args.kind)
                 if not run_ids:
-                    print(f"정본에 없는 실행 기록이 없다 ({home / 'raw' / 'rt_nrg' / lawd})", file=sys.stderr)
+                    print(f"정본에 없는 실행 기록이 없다 ({home / RT_KINDS[args.kind].raw_dir / lawd})", file=sys.stderr)
                     return 0
-                results = [load_run(db, home, lawd, rid) for rid in run_ids]
+                results = [load_run(db, home, lawd, rid, args.kind) for rid in run_ids]
                 sys.stdout.write(json.dumps([r.to_dict() for r in results], ensure_ascii=False, indent=2) + "\n" if args.json else "".join(r.to_text() for r in results))
                 return 0
             if args.db_command == "rt-coverage":
                 lawd = check_lawd(args.lawd_cd)
-                c = coverage(db, lawd, month_range(args.from_ym, args.to_ym))
+                c = coverage(db, lawd, month_range(args.from_ym, args.to_ym), args.kind)
                 sys.stdout.write(json.dumps(c, ensure_ascii=False, indent=2) + "\n" if args.json else coverage_text(c))
                 return 0
             if args.db_command == "rt-candidates":
@@ -1032,6 +1038,11 @@ def _collect_br(args, home: Path) -> int:
         return USAGE_ERROR if e.code in ("bad_pnu", "bad_op", "bad_paging", "bad_endpoint", "too_many_pnus", "no_pnu") else 1
 
 
+def _kind_opt(args) -> str:
+    """다음 명령 안내에 붙일 종류 옵션. 기본 종류(상업·업무용)는 붙이지 않는다."""
+    return "" if args.kind == DEFAULT_KIND else f" --kind {args.kind}"
+
+
 def _collect_main(args) -> int:
     home = _data_home(args)
     if home is None:
@@ -1048,7 +1059,7 @@ def _collect_main(args) -> int:
                 months = recent_months(args.recent)
                 why = f"최근 {args.recent}개월 재조회"
             else:
-                done = months_done_on_disk(home, lawd)
+                done = months_done_on_disk(home, lawd, args.kind)
                 span = month_range(args.from_ym or "2006-01", args.to_ym or recent_months(1)[0][:4] + "-" + recent_months(1)[0][4:])
                 months = [m for m in span if done.get(m) not in ("complete", "empty")]
                 why = f"실패·부분·미수집 월 재조회 ({span[0]}~{span[-1]} 중 {len(months)}개월)"
@@ -1056,14 +1067,14 @@ def _collect_main(args) -> int:
                 print("다시 받을 달이 없다", file=sys.stderr)
                 return 0
             key, source = service_key(home, config_path=args.config)
-            print(f"점검 수집 시작: 시군구 {lawd}, {why}, 인증키 출처 {source}. 이 호출은 공공데이터포털 일일 트래픽을 약 {len(months)}회 이상 쓴다.", file=sys.stderr)
-            run = collect_months(home, key=key, key_source=source, lawd_cd=lawd, months=months, endpoint=args.endpoint, num_rows=args.num_rows, max_pages=args.max_pages)
-            text_ = json.dumps(run.to_dict(), ensure_ascii=False, indent=2) + "\n" if args.json else run_text(run) + f"다음: `j5 db rt-load --lawd-cd {lawd}` 로 반영하고 `j5 db rt-changes --lawd-cd {lawd} --since-run <이전 실행>` 으로 변경을 본다.\n"
+            print(f"점검 수집 시작: {RT_KINDS[args.kind].label} 시군구 {lawd}, {why}, 인증키 출처 {source}. 이 호출은 공공데이터포털 일일 트래픽을 약 {len(months)}회 이상 쓴다.", file=sys.stderr)
+            run = collect_months(home, key=key, key_source=source, lawd_cd=lawd, months=months, endpoint=args.endpoint, num_rows=args.num_rows, max_pages=args.max_pages, kind=args.kind)
+            text_ = json.dumps(run.to_dict(), ensure_ascii=False, indent=2) + "\n" if args.json else run_text(run) + f"다음: `j5 db rt-load{_kind_opt(args)} --lawd-cd {lawd}` 로 반영하고 `j5 db rt-changes --lawd-cd {lawd} --since-run <이전 실행>` 으로 변경을 본다.\n"
             sys.stdout.write(redact(text_, key))
             return 0 if run.ok else 1
         if args.collect_command == "rt-fetch":
             wanted = month_range(args.from_ym, args.to_ym)
-            done = months_done_on_disk(home, lawd)
+            done = months_done_on_disk(home, lawd, args.kind)
             skipped = [] if args.refresh else [m for m in wanted if done.get(m) in ("complete", "empty")]
             months = [m for m in wanted if m not in skipped]
             if not months:
@@ -1073,15 +1084,15 @@ def _collect_main(args) -> int:
             warn = config_permission_warning(load_config(home, path=args.config)[1])
             if warn:
                 print(f"주의: {warn}", file=sys.stderr)
-            print(f"수집 시작: 시군구 {lawd}, {wanted[0]}~{wanted[-1]} 중 {len(months)}개월 (이미 받은 {len(skipped)}개월 건너뜀), 인증키 출처 {source}."
+            print(f"수집 시작: {RT_KINDS[args.kind].label} 시군구 {lawd}, {wanted[0]}~{wanted[-1]} 중 {len(months)}개월 (이미 받은 {len(skipped)}개월 건너뜀), 인증키 출처 {source}."
                   f" 이 호출은 공공데이터포털 일일 트래픽을 약 {len(months)}회 이상 쓴다.", file=sys.stderr)
-            run = collect_months(home, key=key, key_source=source, lawd_cd=lawd, months=months, endpoint=args.endpoint, num_rows=args.num_rows, max_pages=args.max_pages)
-            text_ = json.dumps(run.to_dict(), ensure_ascii=False, indent=2) + "\n" if args.json else run_text(run) + "다음: `j5 db rt-load --lawd-cd " + lawd + "` 로 정본에 반영한다.\n"
+            run = collect_months(home, key=key, key_source=source, lawd_cd=lawd, months=months, endpoint=args.endpoint, num_rows=args.num_rows, max_pages=args.max_pages, kind=args.kind)
+            text_ = json.dumps(run.to_dict(), ensure_ascii=False, indent=2) + "\n" if args.json else run_text(run) + f"다음: `j5 db rt-load{_kind_opt(args)} --lawd-cd {lawd}` 로 정본에 반영한다.\n"
             sys.stdout.write(redact(text_, key))
             return 0 if run.ok else 1
         months = parse_months(args.months)
         if args.collect_command == "rt-report":
-            rep = report_from_raw(home, lawd, months, args.run_id, dist_fields=tuple(args.dist))
+            rep = report_from_raw(home, lawd, months, args.run_id, dist_fields=tuple(args.dist), kind=args.kind)
             sys.stdout.write(json.dumps(rep, ensure_ascii=False, indent=2) + "\n" if args.json else report_text(rep))
             return 0
         if args.collect_command == "rt-sample":
@@ -1090,8 +1101,8 @@ def _collect_main(args) -> int:
             warn = config_permission_warning(cfg_path)
             if warn:
                 print(f"주의: {warn}", file=sys.stderr)
-            print(f"수집 시작: 시군구 {lawd}, 계약월 {', '.join(months)}, 인증키 출처 {source}. 이 호출은 공공데이터포털 일일 트래픽을 쓴다.", file=sys.stderr)
-            run = collect_months(home, key=key, key_source=source, lawd_cd=lawd, months=months, endpoint=args.endpoint, num_rows=args.num_rows, max_pages=args.max_pages)
+            print(f"수집 시작: {RT_KINDS[args.kind].label} 시군구 {lawd}, 계약월 {', '.join(months)}, 인증키 출처 {source}. 이 호출은 공공데이터포털 일일 트래픽을 쓴다.", file=sys.stderr)
+            run = collect_months(home, key=key, key_source=source, lawd_cd=lawd, months=months, endpoint=args.endpoint, num_rows=args.num_rows, max_pages=args.max_pages, kind=args.kind)
             text_ = json.dumps(run.to_dict(), ensure_ascii=False, indent=2) + "\n" if args.json else run_text(run)
             sys.stdout.write(redact(text_, key))  # 화면 출력도 한 번 더 가린다
             return 0 if run.ok else 1

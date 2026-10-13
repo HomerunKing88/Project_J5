@@ -73,6 +73,9 @@ export function validateTransactionsDoc(doc) {
     if (t.amount_krw !== null && !(Number.isFinite(t.amount_krw) && t.amount_krw >= 0)) errs.push(`${at} amount_krw`);
     if (t.asset_id !== null && !UUID_RE.test(t.asset_id)) errs.push(`${at} asset_id`);
     if (!isStr(t.zone) || !isStr(t.link_status) || !isStr(t.scope)) errs.push(`${at} zone·link_status·scope`);
+    // J5-065: 수집 종류·지목 (없으면 이전 형식)
+    if (t.deal_kind !== undefined && t.deal_kind !== null && !knownKind(t.deal_kind)) errs.push(`${at} deal_kind`);
+    if (t.land_category !== undefined && t.land_category !== null && typeof t.land_category !== "string") errs.push(`${at} land_category`);
   }
   // J5-047: 범위 규칙·수집 개월 (없으면 이전 형식: 폰 연도별 요약은 모름으로 표시)
   if (doc.zone_rule !== undefined) {
@@ -85,11 +88,12 @@ export function validateTransactionsDoc(doc) {
     const bad = !Array.isArray(doc.coverage) || doc.coverage.some((c) => {
       const key = `${c?.lawd_cd}:${c?.year}`;
       const ok = c && typeof c === "object" && typeof c.lawd_cd === "string" && /^\d{5}$/.test(c.lawd_cd) && Number.isInteger(c.year)
-        && Number.isInteger(c.months_complete) && Number.isInteger(c.months_any) && c.months_complete >= 0 && c.months_complete <= c.months_any && c.months_any <= 12 && !seen.has(key);
+        && Number.isInteger(c.months_complete) && Number.isInteger(c.months_any) && c.months_complete >= 0 && c.months_complete <= c.months_any && c.months_any <= 12 && !seen.has(key)
+        && (c.kinds === undefined || (Array.isArray(c.kinds) && c.kinds.every(knownKind) && new Set(c.kinds).size === c.kinds.length));
       seen.add(key);
       return !ok;
     });
-    if (bad) errs.push("coverage 형식 (시군구 5자리·연도·수집 개월 0~12, 완전 ≤ 전체, 중복 없음)");
+    if (bad) errs.push("coverage 형식 (시군구 5자리·연도·수집 개월 0~12, 완전 ≤ 전체, 중복 없음, 종류 목록)");
   }
   return errs;
 }
@@ -305,6 +309,7 @@ export function parcelYearSummaryInfo(feature, items, txDoc, prices = [], { maxY
     rows.push({ year: y, price, deltaPct: price != null && prev ? ((price - prev) / prev) * 100 : null,
                 exact: counted ? t?.exact ?? 0 : null, prefix: counted ? t?.prefix ?? 0 : null, linked: counted ? t?.linked ?? 0 : null,
                 monthsComplete: c?.months_complete ?? (hasCoverage ? 0 : null), monthsAny: c?.months_any ?? (hasCoverage ? 0 : null), tx,
+                ...(Array.isArray(c?.kinds) ? { kinds: c.kinds } : {}),
                 owner: ownership ? { known: !!ownership.known, dates: (ownership.dates ?? []).filter((d) => d.startsWith(`${y}-`)) } : null });
     prev = price;
   }
@@ -317,7 +322,8 @@ const TX_STATE_TEXT = { not_collected: "거래 미수집", incomplete: "거래 �
 export function yearSummaryRow(r) {
   const price = r.price == null ? "공시지가 자료 없음" : `공시지가 ${Math.round(r.price).toLocaleString("ko-KR")}원/㎡` + (r.deltaPct == null ? "" : ` (${r.deltaPct > 0 ? "+" : ""}${r.deltaPct.toFixed(1)}%)`);
   let tx;
-  if (r.tx === "counted") tx = `같은 필지 ${r.exact} · 번지대 ${r.prefix}` + (r.linked ? ` · 연결 ${r.linked}` : "") + (r.monthsComplete != null ? ` (수집 ${r.monthsComplete}/12개월)` : "");
+  const only = kindsOnlyText(r);
+  if (r.tx === "counted") tx = `같은 필지 ${r.exact} · 번지대 ${r.prefix}` + (r.linked ? ` · 연결 ${r.linked}` : "") + (r.monthsComplete != null ? ` (수집 ${r.monthsComplete}/12개월${only ? `, ${only}` : ""})` : "");
   else tx = TX_STATE_TEXT[r.tx];
   // 소유 변동일 (J5-053): 토지소유 자료가 없으면 변동이 없는 것이 아니라 모름이다 (PC years_text 와 같은 글)
   const own = !r.owner ? "" : !r.owner.known ? " · 소유 자료 없음" : r.owner.dates.length ? ` · 소유 변동 ${r.owner.dates.join(", ")}` : "";
@@ -325,6 +331,16 @@ export function yearSummaryRow(r) {
 }
 
 const TX_STATE_SHORT = { not_collected: "미수집", incomplete: "일부만 수집", outside: "범위 밖", unknown: "모름" };
+
+/** 수집 종류 (PC j5.collect.rt.KINDS 와 같은 이름, J5-065) → 짧은 이름 */
+export const DEAL_KIND_NAMES = { nrg: "상업·업무", sh: "단독·다가구", land: "토지" };
+const knownKind = (k) => typeof k === "string" && Object.keys(DEAL_KIND_NAMES).includes(k);
+
+/** 그해 완전히 받은 종류가 일부뿐이면 "상업·업무만" 처럼 적는다. 종류 정보가 없거나(이전 형식) 모든 종류면 "" (0 건이 받은 종류 안의 0 건임을 보인다) */
+function kindsOnlyText(r) {
+  if (r.tx !== "counted" || !Array.isArray(r.kinds) || !r.kinds.length || r.kinds.length >= Object.keys(DEAL_KIND_NAMES).length) return "";
+  return `${r.kinds.map((k) => DEAL_KIND_NAMES[k]).join("·")}만`;
+}
 
 /**
  * 연도별 요약 한 줄을 표의 칸으로 (J5-055): 필지 카드·이력 화면의 표가 쓴다. 값·판정은 이 폰의 글 한 줄(yearSummaryRow)과 같고, 규칙은 PC db parcels-years 와 같다.
@@ -338,6 +354,7 @@ export function yearSummaryCells(r) {
   if (counted && r.prefix) txNotes.push(`번지대 ${r.prefix}`);
   if (counted && r.linked) txNotes.push(`연결 ${r.linked}`);
   if (counted && r.monthsComplete != null) txNotes.push(`수집 ${r.monthsComplete}/12개월`);
+  if (kindsOnlyText(r)) txNotes.push(kindsOnlyText(r));
   if (r.tx === "incomplete" && r.monthsAny) txNotes.push(`${r.monthsAny}개월 시도`);   // PC 의 "거래 수집 실패·부분만 (n개월 시도)" 와 같은 값
   const owner = !r.owner ? null : !r.owner.known ? "자료 없음" : r.owner.dates.length ? r.owner.dates.map((d) => d.slice(5)).join(", ") : "없음";
   return {
@@ -379,10 +396,13 @@ export const DEAL_YEARS = Object.freeze([1, 3, 5, 0]);   // 0 = 전체
 const DEAL_KIND_RULES = [["근린", "근린"], ["업무", "업무"], ["숙박", "숙박"], ["판매", "판매"], ["의료", "의료"], ["교육", "교육"], ["공장", "공장"], ["창고", "창고"],
   ["다가구", "다가구"], ["단독", "단독"], ["주택", "주택"]];
 
-/** 거래 종류의 짧은 이름 (지도 표시용). 건물 용도 → 근린·업무·숙박 등, 건물 정보 없이 대지만 있으면 토지, 모르면 건물. */
+/** 거래 종류의 짧은 이름 (지도 표시용). 토지 매매(deal_kind land)는 토지, 건물 용도 → 근린·업무·숙박·단독·다가구 등, 건물 정보 없이 대지만 있으면 토지,
+ *  단독·다가구 매매인데 주택유형이 없으면 주택, 모르면 건물. */
 export function dealKind(t) {
+  if (t?.deal_kind === "land") return "토지";
   const s = [t?.building_use, t?.building_kind].filter((x) => typeof x === "string").join(" ");
   for (const [k, label] of DEAL_KIND_RULES) if (s.includes(k)) return label;
+  if (t?.deal_kind === "sh") return "주택";
   if (!t?.building_use && !Number.isFinite(t?.building_area_m2) && Number.isFinite(t?.plottage_area_m2)) return "토지";
   return "건물";
 }
@@ -402,7 +422,9 @@ export function dealValueText(t, mode = "total") {
   const v = unitPrice(t, mode);
   if (v !== null) return mode === "total" ? fmtKrw(v) : `${fmtKrw(Math.round(v))}/평`;
   if (!Number.isFinite(t?.amount_krw)) return "금액 미확인";
-  return t.share_deal ? "지분 거래" : mode === "land" ? "대지 면적 미확인" : "연면적 미확인";
+  if (t.share_deal) return "지분 거래";
+  if (mode === "floor" && t.deal_kind === "land") return "토지 거래 (건물 없음)";
+  return mode === "land" ? (t.deal_kind === "land" ? "토지 면적 미확인" : "대지 면적 미확인") : "연면적 미확인";
 }
 
 const dealDate = (t) => t.deal_date ?? `${t.deal_ymd.slice(0, 4)}-${t.deal_ymd.slice(4, 6)}`;
@@ -452,7 +474,10 @@ export function placeDeals(transactions, features) {
 /** 번지대·주변 거래 목록의 둘째 줄: 대지·연면적과 평당 단가, 건축연도, 지분 거래. 값이 없으면 그 칸을 뺀다. */
 export function dealDetailText(t) {
   const parts = [];
-  if (Number.isFinite(t?.plottage_area_m2)) parts.push(`대지 ${t.plottage_area_m2}㎡ (${dealValueText(t, "land")})`);
+  const land = t?.deal_kind === "land";
+  if (Number.isFinite(t?.plottage_area_m2)) parts.push(`${land ? "토지" : "대지"} ${t.plottage_area_m2}㎡ (${dealValueText(t, "land")})`);
+  if (land && t.land_category) parts.push(`지목 ${t.land_category}`);
+  if (land && t.land_use) parts.push(t.land_use);
   if (Number.isFinite(t?.building_area_m2)) parts.push(`연면적 ${t.building_area_m2}㎡ (${dealValueText(t, "floor")})`);
   if (Number.isInteger(t?.build_year)) parts.push(`${t.build_year}년 건축`);
   if (t?.share_deal) parts.push("지분 거래");

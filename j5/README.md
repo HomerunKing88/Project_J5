@@ -255,8 +255,8 @@ python -m j5 collect br-report [--run-id] [--json]
 
 ```text
 python -m j5 collect rt-fetch --lawd-cd 11110 --from 2021-09 --to 2026-09 [--refresh] [--endpoint URL] [--num-rows] [--max-pages] [--data-home] [--config] [--json]
-python -m j5 db [--db 경로] rt-load --lawd-cd 11110 [--run-id 실행ID] [--data-home 경로] [--json]
-python -m j5 db [--db 경로] rt-coverage --lawd-cd 11110 --from 2006-01 --to 2026-09 [--json]
+python -m j5 db [--db 경로] rt-load [--kind nrg|sh|land] --lawd-cd 11110 [--run-id 실행ID] [--data-home 경로] [--json]
+python -m j5 db [--db 경로] rt-coverage [--kind nrg|sh|land] --lawd-cd 11110 --from 2006-01 --to 2026-09 [--json]
 ```
 
 - `rt-fetch` 는 계약월 범위를 받되 실행 기록 파일(`run-*.json`)에서 이미 complete/empty 인 달을 건너뛴다. `--refresh` 는 취소·정정 점검용으로 다시 받는다. 원본은 `rt-sample` 과 같은 자리에 쌓이고 정본에는 쓰지 않는다.
@@ -290,6 +290,7 @@ python -m j5 db [--db 경로] rt-changes --lawd-cd 11110 --since-run <실행ID> 
 - `rt-recheck` 는 취소·정정 점검용 재수집이다. `--recent N` 은 이번 달 포함 최근 N개월, `--failed` 는 실행 기록상 complete/empty 가 아닌 달을 다시 받는다. 반영은 `rt-load`, 변경은 `rt-changes` 로 본다(새 거래·취소로 바뀜·응답에서 사라짐). 사라짐은 취소 확정이 아니다.
 - `project` 의 파생본에 `transactions.json`(핵심·비교 범위의 취소 확정 아닌 거래, 확정 연결의 `asset_id`)이 들어간다. 범위 규칙이 없으면 파일이 없다. 범위 거래가 0 건이어도 수집 기록이 있으면 빈 목록과 수집 개월을 싣는다. J5-047 부터 `zone_rule`(현재 범위 규칙의 판·핵심·비교 법정동 이름·시군구 `lawd_cd`(J5-048, 없으면 null))과 `coverage`(시군구·연도별 수집 개월: `months_complete` complete/empty 인 달, `months_any` 실행이 있는 달)도 싣는다. 폰 필지 이력의 연도별 요약이 0 건과 미수집·실패·범위 밖을 가르는 근거다. 게시 전 확인이 두 키의 형식을 검사하며, 두 키가 없는 이전 파일은 폰이 "수집 현황 모름" 으로 보인다.
 - 운영 주기(데이터 사전 §7.1): 월 1회 `rt-recheck --recent 6` → `rt-load` → `rt-changes`, 분기 `rt-recheck --failed`, 연 1회 전 기간 `rt-fetch --refresh`.
+- 수집 종류(J5-065, ADR-26): `collect rt-sample/rt-fetch/rt-recheck/rt-report` 와 `db rt-load/rt-coverage` 는 `--kind` 로 종류를 고른다. `nrg` 상업·업무용(기본, 생략 시 이전과 같음, `raw/rt_nrg`), `sh` 단독·다가구(`RTMSDataSvcSHTrade`, `raw/rt_sh`), `land` 토지(`RTMSDataSvcLandTrade`, `raw/rt_land`). `--endpoint` 를 생략하면 종류의 기본 주소다. 종류마다 공공데이터포털 활용신청이 따로 필요하다. 단독·다가구·토지의 주소와 응답 필드(연면적 `totalFloorAr`·주택유형 `houseType`, 거래면적 `dealArea`·지목 `jimok`)는 가정이라 첫 실제 응답의 `rt-sample` 요약(report)으로 확인한다. 필드 이름이 다르면 그 값은 null 과 사유(not_provided)로 들어간다. 정규화: 단독·다가구는 연면적→`building_area_m2`, 대지→`plottage_area_m2`, 주택유형→`building_use_raw`(건물 구분 general), 토지는 거래면적→`plottage_area_m2`, 연면적·건축년도는 null 과 사유 not_applicable, 범위 land_only(지분이면 partial_share). `rt-coverage` 는 그 종류만, `ops-check` 의 반영 대기·최근 수집은 종류마다 따로 본다. 반영 대기 키는 상업·업무용이 이전과 같은 `rt`, 다른 종류는 `rt_sh`·`rt_land`.
 
 ## 목표 매수가·투자판단 기록과 당시 기록 기준 조회 (R4, J5-015A)
 

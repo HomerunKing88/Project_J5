@@ -281,7 +281,7 @@ test("placeDeals: 온전한 지번은 그 필지, 가린 지번은 번지대 묶
   const r = placeDeals(doc.transactions, parcels.features);
   const byPnu = Object.fromEntries(r.parcels.map((p) => [p.pnu, p.txs.map((t) => t.deal_date)]));
   assert.deepEqual(byPnu["9999900100100010000"], ["2024-03-15", "2019-06-20"], "최근 것부터");
-  assert.deepEqual(byPnu["9999900100100040002"], ["2023-11-09"]);
+  assert.deepEqual(byPnu["9999900100100040002"], ["2023-11-09", "2020-04-10"], "토지 매매도 그 필지 (J5-065)");
   assert.equal(r.groups.length, 1);
   assert.equal(r.groups[0].jibun, "1-*");
   assert.deepEqual(r.groups[0].features.map((f) => f.id).sort(), ["9999900100100010000", "9999900100100010001"], "1-* 는 부번 한 자리인 1·1-1 이 후보");
@@ -351,4 +351,43 @@ test("nearbyComps: 같은 시군구·동, 기간, 평당 단가 중간·범위, 
   assert.match(noPrice.reference.missing, /공시지가 자료가 없어/);
   assert.equal(c.comps.find((x) => x.t.transaction_id === ids(1)).mine, false);
   assert.equal(nearbyComps(fs[0], txs, fs, { since: "2020-10-13" }).comps.find((x) => x.t.transaction_id === ids(1)).mine, true, "이 필지의 거래 표시");
+});
+
+// ---- 수집 종류 (J5-065): 상업·업무용·단독·다가구·토지 ----
+import { DEAL_KIND_NAMES } from "../../web/app/view.js";
+
+test("수집 종류: dealKind·단가 사유·상세 글 (토지·단독·다가구)", () => {
+  assert.deepEqual(Object.keys(DEAL_KIND_NAMES), ["nrg", "sh", "land"], "PC j5.collect.rt.KINDS 와 같은 이름");
+  assert.equal(dealKind({ deal_kind: "land", building_use: null, plottage_area_m2: null }), "토지", "면적이 없어도 토지 매매는 토지");
+  assert.equal(dealKind({ deal_kind: "sh", building_use: "다가구" }), "다가구");
+  assert.equal(dealKind({ deal_kind: "sh", building_use: "단독" }), "단독");
+  assert.equal(dealKind({ deal_kind: "sh", building_use: null, building_area_m2: 120 }), "주택", "주택유형이 없으면 주택");
+  assert.equal(dealKind({ deal_kind: "nrg", building_use: "업무" }), "업무");
+  const land = { deal_kind: "land", amount_krw: 1_000_000_000, plottage_area_m2: 100 * PYEONG_M2, building_area_m2: null, land_category: "대", land_use: "일반상업지역" };
+  assert.equal(dealValueText(land, "land"), "1,000만/평");
+  assert.equal(dealValueText(land, "floor"), "토지 거래 (건물 없음)", "토지 거래의 연면적 단가는 미확인이 아니라 해당 없음");
+  assert.equal(dealValueText({ ...land, plottage_area_m2: null }, "land"), "토지 면적 미확인");
+  assert.equal(dealDetailText({ ...land, plottage_area_m2: 330.6 }), "토지 330.6㎡ (1,000만/평) · 지목 대 · 일반상업지역");
+  assert.equal(dealDetailText({ ...land, plottage_area_m2: 330.6, land_category: null, land_use: null }), "토지 330.6㎡ (1,000만/평)");
+});
+
+test("수집 종류: 거래 파일 검사와 연도별 표의 받은 종류", () => {
+  const ok = { j5transactions: "1.0.0", count: 1, transactions: [{ ...T(ID(1), "202608", "1"), deal_kind: "land", land_category: "대" }],
+    coverage: [{ lawd_cd: "99999", year: 2026, months_complete: 8, months_any: 8, kinds: ["nrg", "land"] }] };
+  assert.deepEqual(validateTransactionsDoc(ok), []);
+  assert.deepEqual(validateTransactionsDoc({ ...ok, transactions: [{ ...ok.transactions[0], deal_kind: "apt" }] }), ["transactions[0] deal_kind"]);
+  assert.deepEqual(validateTransactionsDoc({ ...ok, transactions: [{ ...ok.transactions[0], land_category: 3 }] }), ["transactions[0] land_category"]);
+  for (const kinds of [["nrg", "nrg"], ["apt"], "nrg"]) {
+    assert.equal(validateTransactionsDoc({ ...ok, coverage: [{ ...ok.coverage[0], kinds }] }).length, 1, `kinds ${JSON.stringify(kinds)}`);
+  }
+  const feature = { id: "9999900100100010000", properties: { emd_name: "가상동", emd_code: "9999900100", label: "1", bon: 1, bu: 0, mountain: false } };
+  const txDoc = { ...ok, zone_rule: { version: 1, core: ["가상동"], comparison: [] }, transactions: [] , count: 0,
+    coverage: [{ lawd_cd: "99999", year: 2026, months_complete: 8, months_any: 8, kinds: ["nrg"] }, { lawd_cd: "99999", year: 2025, months_complete: 12, months_any: 12, kinds: ["nrg", "sh", "land"] }] };
+  const rows = parcelYearSummary(feature, [], txDoc, []);
+  assert.deepEqual(yearSummaryCells(rows[0]).txNotes, ["수집 8/12개월", "상업·업무만"], "일부 종류만 받은 해의 0건은 그 종류 안의 0건");
+  assert.match(yearSummaryRow(rows[0])[1], /\(수집 8\/12개월, 상업·업무만\)$/);
+  assert.deepEqual(yearSummaryCells(rows[1]).txNotes, ["수집 12/12개월"], "모든 종류를 받은 해는 덧붙이지 않는다");
+  const old = parcelYearSummary(feature, [], { ...txDoc, coverage: txDoc.coverage.map(({ kinds, ...c }) => c) }, []);
+  assert.deepEqual(yearSummaryCells(old[0]).txNotes, ["수집 8/12개월"], "종류 정보가 없는 이전 파일은 그대로");
+  assert.equal("kinds" in old[0], false);
 });

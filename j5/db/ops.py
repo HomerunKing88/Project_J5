@@ -33,7 +33,7 @@ from j5 import APP_VERSION, SUPPORTED_PACKAGE_SCHEMA_VERSIONS
 from j5.db import schema as S
 from j5.db.backup import BACKUP_SCHEMA_VERSION, BackupError, _append_log, _table_counts, _write_atomic, backup_status, check_photos, check_raw_files, resolve_backup_dir, verify_backup_dir
 from j5.collect.br import list_run_ids as list_br_runs
-from j5.collect.rt import RAW_DIR as RT_RAW_DIR
+from j5.collect.rt import KINDS as RT_KINDS
 from j5.db.projection import PROJECTION_SCHEMA_VERSION, projection_status
 from j5.db.transactions import unloaded_run_ids
 from j5.db.store import Db, DbError, default_db_path
@@ -182,16 +182,23 @@ def _check_db(db: Db, data_home: Path, r: dict, now_dt: datetime) -> None:
         if so["phone_parcels"] > so["phone_limit"]:
             r["actions"].append({"code": "phone_scope_over_limit", "text": f"폰에 실릴 필지 {so['phone_parcels']}개가 폰 상한 {so['phone_limit']}개를 넘어 파생본을 만들 수 없다."
                                                                     " `j5 db phone-scope` 로 법정동별 수를 보고 `--emd <코드,…>` 로 범위를 정한다"})
-    # 받아 두고 정본에 반영하지 않은 실거래 수집 실행 (J5-042). 원본은 지우지 않는다
-    rt_root = data_home / RT_RAW_DIR
-    if rt_root.is_dir() and db._has_table("collection_runs"):
-        pending = {d.name: unloaded_run_ids(db, data_home, d.name) for d in sorted(rt_root.iterdir()) if d.is_dir() and d.name.isdigit() and len(d.name) == 5}
-        pending = {k: v for k, v in pending.items() if v}
-        r["collect_pending"] = {"rt": {k: len(v) for k, v in pending.items()}}
-        if pending:
-            r["actions"].append({"code": "rt_unloaded", "text": "받아 두고 정본에 반영하지 않은 실거래 수집 "
-                                 + ", ".join(f"시군구 {k} {len(v)}건" for k, v in pending.items())
-                                 + ". `j5 db rt-load --lawd-cd <시군구>` 로 반영한다 (정본에 넣지 않을 표본이면 그대로 두어도 되며 원본은 지우지 않는다)"})
+    # 받아 두고 정본에 반영하지 않은 실거래 수집 실행 (J5-042). 원본은 지우지 않는다. 종류마다 원본 폴더가 다르다 (J5-065):
+    # 상업·업무용은 이전과 같은 "rt" 키, 다른 종류는 원본 폴더가 있을 때만 "rt_<종류>" 키로 싣는다
+    if db._has_table("collection_runs"):
+        texts = []
+        for k in RT_KINDS.values():
+            rt_root = data_home / k.raw_dir
+            if not rt_root.is_dir():
+                continue
+            pending = {d.name: unloaded_run_ids(db, data_home, d.name, k) for d in sorted(rt_root.iterdir()) if d.is_dir() and d.name.isdigit() and len(d.name) == 5}
+            pending = {lawd: v for lawd, v in pending.items() if v}
+            r["collect_pending"] = r["collect_pending"] or {}
+            r["collect_pending"]["rt" if k.name == "nrg" else f"rt_{k.name}"] = {lawd: len(v) for lawd, v in pending.items()}
+            opt = "" if k.name == "nrg" else f" --kind {k.name}"
+            texts += [f"{'' if k.name == 'nrg' else k.label + ' '}시군구 {lawd} {len(v)}건 (`j5 db rt-load{opt} --lawd-cd {lawd}`)" for lawd, v in pending.items()]
+        if texts:
+            r["actions"].append({"code": "rt_unloaded", "text": "받아 두고 정본에 반영하지 않은 실거래 수집 " + ", ".join(texts)
+                                 + ". 반영한다 (정본에 넣지 않을 표본이면 그대로 두어도 되며 원본은 지우지 않는다)"})
     # 범위 규칙의 시군구 (J5-049): 거래가 여러 시군구에서 들어왔는데 규칙에 시군구가 없으면, 다른 시군구의 같은 이름 법정동 거래가
     # 핵심·비교로 분류된다(J5-048). 규칙을 새 판으로 반영하는 조치라 백업·파생본 조치보다 먼저 낸다
     if db._has_table("zone_rules") and db._has_table("transactions"):
@@ -211,8 +218,9 @@ def _check_db(db: Db, data_home: Path, r: dict, now_dt: datetime) -> None:
             if c["months_behind"] is None or c["months_behind"] >= RECENT_BEHIND_MONTHS:
                 start = _ym_add(c["latest_complete_ym"], 1) if c["latest_complete_ym"] else c["closed_ym"]
                 since = f"계약월 {_ym_dash(c['latest_complete_ym'])} 뒤로" if c["latest_complete_ym"] else "완전히 받은 달이 없고"
-                r["warnings"].append(f"시군구 {c['lawd_cd']} 최근 거래: {since} {_ym_dash(c['closed_ym'])} 까지 받지 않았다 (마지막 성공 수집 {c['last_success_at'] or '없음'})."
-                                     f" 계속 모으는 시군구면 `j5 collect rt-fetch --lawd-cd {c['lawd_cd']} --from {_ym_dash(start)} --to {_ym_dash(c['closed_ym'])}` 뒤 `j5 db rt-load --lawd-cd {c['lawd_cd']}`")
+                kl, opt = ("", "") if c.get("kind") in (None, "nrg") else (f"{RT_KINDS[c['kind']].label} ", f" --kind {c['kind']}")
+                r["warnings"].append(f"{kl}시군구 {c['lawd_cd']} 최근 거래: {since} {_ym_dash(c['closed_ym'])} 까지 받지 않았다 (마지막 성공 수집 {c['last_success_at'] or '없음'})."
+                                     f" 계속 모으는 시군구면 `j5 collect rt-fetch{opt} --lawd-cd {c['lawd_cd']} --from {_ym_dash(start)} --to {_ym_dash(c['closed_ym'])}` 뒤 `j5 db rt-load{opt} --lawd-cd {c['lawd_cd']}`")
     # 거래 응답의 시군구 (J5-050, J5-044 미확인 변수): 지번 대조·범위 규칙은 요청 시군구(lawd_cd)로 본다. 응답 행의 sggCd 가 요청과 다른
     # 거래가 있으면 그 규칙이 맞지 않을 수 있다. 고칠 명령이 없으므로 조치 항목이 아니라 안내로 둔다
     if db._has_table("transactions") and db._has_table("transaction_observations") and counts.get("transactions", 0):
@@ -295,14 +303,17 @@ def recent_collection(db: Db, now_dt: datetime) -> list[dict]:
     완전히 받은 달이 없으면 latest_complete_ym·months_behind 는 None 이다. 정본에 반영한 실행만 본다(받아 두고 반영하지 않은 실행은 rt_unloaded)."""
     closed = _ym_add(f"{now_dt.year:04d}{now_dt.month:02d}", -1)
     out = []
-    rows = db.conn.execute("SELECT lawd_cd, MAX(CASE WHEN outcome IN ('complete', 'empty') THEN deal_ymd END),"
-                           " MAX(CASE WHEN outcome IN ('complete', 'empty') THEN finished_at END) FROM collection_runs GROUP BY lawd_cd ORDER BY lawd_cd")
-    for lawd, latest, last_ok in rows:
+    # 종류(제공자)마다 따로 본다 (J5-065): 상업·업무용을 계속 받아도 토지 수집이 멈춘 것을 가리지 않는다
+    rows = db.conn.execute("SELECT lawd_cd, provider, MAX(CASE WHEN outcome IN ('complete', 'empty') THEN deal_ymd END),"
+                           " MAX(CASE WHEN outcome IN ('complete', 'empty') THEN finished_at END) FROM collection_runs GROUP BY lawd_cd, provider ORDER BY lawd_cd, provider")
+    order = {k.provider: i for i, k in enumerate(RT_KINDS.values())}
+    for lawd, provider, latest, last_ok in sorted(rows, key=lambda x: (x[0], order.get(x[1], len(order)), x[1])):
         behind = None
         if latest:
             behind = max(0, (int(closed[:4]) * 12 + int(closed[4:])) - (int(latest[:4]) * 12 + int(latest[4:])))
-        out.append({"lawd_cd": lawd, "latest_complete_ym": latest, "last_success_at": last_ok, "days_since_success": _days_since(last_ok, now_dt),
-                    "closed_ym": closed, "months_behind": behind})
+        kind = next((k.name for k in RT_KINDS.values() if k.provider == provider), None)
+        out.append({"lawd_cd": lawd, "kind": kind, "provider": provider, "latest_complete_ym": latest, "last_success_at": last_ok,
+                    "days_since_success": _days_since(last_ok, now_dt), "closed_ym": closed, "months_behind": behind})
     return out
 
 
@@ -382,12 +393,15 @@ def ops_text(r: dict) -> str:
     for c in r.get("recent_collection") or []:
         upto = f"계약월 {_ym_dash(c['latest_complete_ym'])} 까지 완전 수집" if c["latest_complete_ym"] else "완전히 받은 달 없음"
         ok = f"마지막 성공 수집 {c['last_success_at']} ({c['days_since_success']}일 전)" if c["last_success_at"] else "성공한 수집 없음"
-        lines.append(f"최근 거래 수집: 시군구 {c['lawd_cd']} · {upto} · {ok}")
+        kl = "" if c.get("kind") in (None, "nrg") else f"{RT_KINDS[c['kind']].label} · "
+        lines.append(f"최근 거래 수집: {kl}시군구 {c['lawd_cd']} · {upto} · {ok}")
     if r.get("transaction_sgg"):
         ts = r["transaction_sgg"]
         lines.append(f"거래 응답 시군구: 요청과 같음 {ts['same']}건 · 다름 {ts['differs']}건 · 응답에 없음 {ts['missing']}건")
-    if r.get("collect_pending") and r["collect_pending"].get("rt"):
-        lines.append("반영 대기 수집: " + ", ".join(f"시군구 {k} {n}건" for k, n in r["collect_pending"]["rt"].items()))
+    for k in RT_KINDS.values():
+        pend = (r.get("collect_pending") or {}).get("rt" if k.name == "nrg" else f"rt_{k.name}")
+        if pend:
+            lines.append("반영 대기 수집: " + ("" if k.name == "nrg" else k.label + " ") + ", ".join(f"시군구 {lawd} {n}건" for lawd, n in pend.items()))
     if r["last_activity"]:
         la = r["last_activity"]
         labels = (("import_applied", "마지막 반영"), ("collection_loaded", "마지막 수집 반영"), ("projection_published", "마지막 파생본 게시"), ("backup", "마지막 백업"))
