@@ -362,6 +362,8 @@ details.disclosure.quiet > summary { color: var(--pencil); font-weight: 600; }
 .deal-seg-btn[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
 .deal-years { width: auto; flex: 0 0 auto; min-height: var(--touch); font-size: var(--t-xs); }
 .deal-count { color: var(--pencil); }
+/* 주변 사례 (J5-064) */
+.comps-scope { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); margin: 0; }
 .layer-pick { pointer-events: none; }   /* 십자는 누르기를 받지 않는다 */
 .pick-ring { fill: none; stroke: var(--blue); stroke-width: 2.5; }
 .pick-line { stroke: var(--blue); stroke-width: 2.5; }

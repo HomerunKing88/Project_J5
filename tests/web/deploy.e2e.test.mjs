@@ -27,7 +27,7 @@ function servePages(dir) {
   });
 }
 
-const appUp = "document.getElementById('status-line')?.textContent.includes('앱 0.2.28')";
+const appUp = "document.getElementById('status-line')?.textContent.includes('앱 0.2.29')";
 
 test("배포 주소: index.html 을 넘기는 서버에서도 서비스 워커가 앱을 연다", { skip: chrome ? false : "Chromium 없음" }, async () => {
   const tmp = mkdtempSync(join(tmpdir(), "j5-deploy-"));
@@ -40,7 +40,7 @@ test("배포 주소: index.html 을 넘기는 서버에서도 서비스 워커�
     await cdp.waitFor(appUp);
     await cdp.waitFor("navigator.serviceWorker.ready.then(() => !!navigator.serviceWorker.controller)", 15000);
     // 설치 때 ./index.html 을 받으며 넘겨받은 응답이 캐시에 들어갔다(서버 흉내가 맞는지 확인).
-    assert.equal(await cdp.eval("caches.open('j5-app-v0.2.28').then((c) => c.match('./index.html')).then((r) => !!r && r.redirected)"), true);
+    assert.equal(await cdp.eval("caches.open('j5-app-v0.2.29').then((c) => c.match('./index.html')).then((r) => !!r && r.redirected)"), true);
 
     // 1. 서비스 워커가 맡은 뒤 index.html 로 직접 열기 (홈 화면 북마크·예전 주소)
     await cdp.navigate(`${base}/index.html`);

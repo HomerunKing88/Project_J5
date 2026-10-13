@@ -15,10 +15,10 @@ import { externalMapLinks, bboxCenter, LINK_ATTRS } from "./extmap.js";
 import { validateBasemap, LAYERS as BASEMAP_LAYERS, LAYER_LABEL as BASEMAP_LAYER_LABEL } from "./basemap.js";
 import { PROVIDERS, resolveTileConfig, prefetchPlan, padBbox, tileUrl, hasKeyLike, TILE_CACHE, PREFETCH_ZOOMS, KEY_PLACEHOLDER } from "./tiles.js";
 import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
-import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummaryInfo, yearSummaryRow, yearSummaryCells, recentDeals, parcelSummaryItems, fmtKrw, placeDeals, dealKind, dealValueText, dealDetailText, dealsSince, dealSince, DEAL_MODES, DEAL_YEARS } from "./view.js";
+import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummaryInfo, yearSummaryRow, yearSummaryCells, recentDeals, parcelSummaryItems, fmtKrw, placeDeals, dealKind, dealValueText, dealDetailText, dealsSince, dealSince, DEAL_MODES, DEAL_YEARS, nearbyComps, COMP_LIST_MAX } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.28";
+export const APP_VERSION = "0.2.29";
 /** 자료가 없을 때 지도가 처음 보이는 곳: 종로5가역 부근 [경도, 위도] (J5-062, 배경 지도만 켠 경우) */
 const FIELD_HOME = [127.0019, 37.5709];
 const PARCEL_CARD_YEARS = 5;   // 필지 카드의 연도별 표에 보이는 최근 연도 수 (J5-055)
@@ -856,6 +856,35 @@ function renderRecentDeals(items) {
   $("parcel-deals-note").hidden = !notes.length;
 }
 
+// ---- 주변 사례 (J5-064): 같은 시군구·법정동의 거래로 단가 중간값·범위와 공시지가 대비 배율, 이 필지의 참고 추정 ----
+function renderComps(feature) {
+  const all = dealTxs();
+  $("parcel-comps").hidden = !all.length;
+  if (!all.length) return;
+  const years = state.dealView.years;
+  $("comps-years").value = String(years);
+  const c = nearbyComps(feature, all, state.parcels?.features ?? [], { since: dealSince(years, localDate()) });
+  const p = feature.properties;
+  text($("comps-scope"), `${p.emd_name ?? "같은 동"}, ${years ? `최근 ${years}년` : "전체 기간"}`);
+  const per = (v) => (Number.isFinite(v) ? `${fmtKrw(Math.round(v))}/평` : "모름");
+  const facts = [["거래", `${c.count}건`]];
+  if (c.count) {
+    facts.push(["대지 평당", c.land.n ? `중간 ${per(c.land.median)} (${per(c.land.min)}~${per(c.land.max)}, ${c.land.n}건)` : "면적이 있는 거래 없음"]);
+    facts.push(["연면적 평당", c.floor.n ? `중간 ${per(c.floor.median)} (${c.floor.n}건)` : "면적이 있는 거래 없음"]);
+    facts.push(["공시지가 대비", c.ratio.n ? `중간 ${c.ratio.median.toFixed(2)}배 (${c.ratio.n}건, 거래 연도의 그 필지 공시지가 기준)` : "견줄 수 있는 사례 없음"]);
+  }
+  $("comps-facts").replaceChildren(...facts.map(([k, v]) => el("li", {}, el("span", { class: "k", text: k }), el("span", { class: "v", text: v }))));
+  const r = c.reference;
+  text($("comps-reference"), !c.count ? "이 기간에 같은 동의 거래가 없습니다." : r.missing ? r.missing :
+    `참고 추정: 이 필지 공시지가 ${Math.round(r.price).toLocaleString("ko-KR")}원/㎡ (${r.priceYear}년) × ${r.ratio.toFixed(2)}배 ≈ ${per(r.unit)} (사례 ${r.n}건, 추정값이며 시세 판단이 아닙니다)`,
+    r.missing || !c.count ? "pencil" : "");
+  $("comps-list").replaceChildren(...c.comps.slice(0, COMP_LIST_MAX).map((x) => el("li", {},
+    el("span", { class: "deal-date num", text: x.t.deal_date ?? x.t.deal_ymd }),
+    el("span", { class: "deal-main" }, el("strong", { class: "num", text: `${dealKind(x.t)} ${fmtKrw(x.t.amount_krw)}` }),
+      ...(x.mine ? [el("span", { class: "badge match-exact", text: "이 필지" })] : []),
+      el("span", { class: "deal-sub", text: [x.where, `대지 ${dealValueText(x.t, "land")}`, x.ratio ? `공시지가의 ${x.ratio.toFixed(2)}배` : null].filter(Boolean).join(", ") })))));
+}
+
 function openParcelHistory(feature, inside) {
   const p = feature.properties;
   const assetsInside = inside.map((x) => x.asset);
@@ -968,6 +997,7 @@ function showParcel(feature) {
   // 연도별 표 (J5-055): 최근 5개 연도. 전체와 기록·거래는 필지 이력에서
   const { rows: years, summary: parcelItems } = parcelYears(feature, inside);
   renderRecentDeals(parcelItems);
+  renderComps(feature);
   renderYearsTable($("parcel-years-table"), years, { limit: PARCEL_CARD_YEARS });
   $("parcel-years").hidden = !years.length;
   $("parcel-years-all").textContent = years.length > PARCEL_CARD_YEARS ? `모든 연도(${years.length}개)와 기록 보기` : "기록·거래 보기";
@@ -1011,6 +1041,7 @@ async function loadDealView() {
 async function setDealView(next) {
   state.dealView = { ...state.dealView, ...next };
   renderDeals();
+  if (state.openParcel && !$("parcel-panel").hidden) renderComps(state.openParcel);   // 주변 사례도 같은 기간 (J5-064)
   try { await state.store.setMeta("deal_view", state.dealView); } catch { /* 저장 실패는 화면을 막지 않는다 */ }
 }
 
@@ -1761,6 +1792,7 @@ async function main() {
   $("basemap-file").addEventListener("change", (e) => loadBasemapFile(e.target));
   $("clear-basemap").addEventListener("click", clearBasemap);
   $("clear-sample").addEventListener("click", clearSample);
+  $("comps-years").addEventListener("change", () => setDealView({ years: Number($("comps-years").value) }));   // 지도가 못 떠도 필지 카드는 열린다
   $("tiles-provider").addEventListener("change", updateTileFields);
   $("tiles-template").addEventListener("input", updateTileFields);
   $("tiles-save").addEventListener("click", saveTileSettings);
