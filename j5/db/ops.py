@@ -202,12 +202,12 @@ def _check_db(db: Db, data_home: Path, r: dict, now_dt: datetime) -> None:
     # 범위 규칙의 시군구 (J5-049): 거래가 여러 시군구에서 들어왔는데 규칙에 시군구가 없으면, 다른 시군구의 같은 이름 법정동 거래가
     # 핵심·비교로 분류된다(J5-048). 규칙을 새 판으로 반영하는 조치라 백업·파생본 조치보다 먼저 낸다
     if db._has_table("zone_rules") and db._has_table("transactions"):
-        from j5.db.zones import current_rules  # 순환 import 방지
+        from j5.db.zones import current_rules, has_plain_entries  # 순환 import 방지
         zr = current_rules(db)
         sggs = [row[0] for row in db.conn.execute("SELECT DISTINCT lawd_cd FROM transactions ORDER BY lawd_cd")]
         if zr is not None:
             r["zone_rule"] = {"version": zr["version"], "lawd_cd": zr.get("lawd_cd"), "transaction_sggs": sggs}
-            if not zr.get("lawd_cd") and len(sggs) > 1:
+            if not zr.get("lawd_cd") and has_plain_entries(zr) and len(sggs) > 1:   # 모든 법정동에 시군구를 붙였으면 다른 시군구의 같은 이름 동이 섞이지 않는다 (J5-068)
                 r["actions"].append({"code": "zone_rule_sgg_missing", "text": f"거래가 시군구 {', '.join(sggs)} 에서 들어왔는데 범위 규칙 v{zr['version']} 에 시군구가 없다."
                                      " 다른 시군구의 같은 이름 법정동 거래가 핵심·비교로 분류될 수 있다. 규칙 파일에 \"lawd_cd\" 를 넣어 `j5 db rt-zones apply <규칙.json>` 으로 반영한다"})
     # 최근 거래 수집 (J5-052, 릴리스 계획 §11 "월별 최근 거래", "PC 가 꺼져 있으면 수집이 진행되지 않는다는 사실을 마지막 성공일로 표시"):

@@ -99,6 +99,20 @@ export function validateTransactionsDoc(doc) {
   return errs;
 }
 
+/** 범위 규칙(transactions.json 의 zone_rule)으로 법정동의 범위 → "core"·"comparison"·"outside" (PC j5.db.zones.classify 와 같은 규칙, J5-068).
+ *  `11140:을지로4가` 처럼 시군구를 붙인 항목이 먼저 맞고, 이름만 쓴 항목은 규칙의 lawd_cd 시군구(없으면 모든 시군구)에만 맞는다. */
+export function zoneOfRule(zr, emdName, sgg) {
+  if (sgg && emdName) {
+    const key = `${sgg}:${emdName}`;
+    if (zr.core.includes(key)) return "core";
+    if (zr.comparison.includes(key)) return "comparison";
+  }
+  if (zr.lawd_cd && zr.lawd_cd !== sgg) return "outside";
+  if (zr.core.includes(emdName)) return "core";
+  if (zr.comparison.includes(emdName)) return "comparison";
+  return "outside";
+}
+
 /** 파생본 안의 파일들이 같은 정본 버전에서 나왔는지 manifest 와 대조한다 (PC 검증기와 같은 규칙, 리뷰 반영). */
 export function checkProjectionConsistency(manifest, { transactions = null, parcels = null } = {}) {
   const errs = [];
@@ -272,8 +286,8 @@ export function parcelYearSummaryInfo(feature, items, txDoc, prices = [], { maxY
   const hasCoverage = !!txDoc && Array.isArray(txDoc.coverage);
   if (hasCoverage) for (const c of txDoc.coverage) if (c.lawd_cd === sgg) cov.set(c.year, c);
   const zr = txDoc?.zone_rule;
-  // 규칙에 시군구가 있으면 다른 시군구의 같은 이름 법정동은 범위 밖이다 (J5-048, PC zones.classify 와 같다)
-  const inRange = zr ? (!zr.lawd_cd || zr.lawd_cd === sgg) && (zr.core.includes(props.emd_name) || zr.comparison.includes(props.emd_name)) : null;
+  // 규칙에 시군구가 있으면 다른 시군구의 같은 이름 법정동은 범위 밖이다 (J5-048), 시군구를 붙인 항목이 먼저 맞는다 (J5-068). PC zones.classify 와 같다
+  const inRange = zr ? zoneOfRule(zr, props.emd_name, sgg) !== "outside" : null;
   const txByYear = new Map();
   for (const it of items) {
     if (it.kind !== "transaction" || !/^\d{4}$/.test(it.year)) continue;

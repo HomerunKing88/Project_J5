@@ -10,17 +10,17 @@
     "kind": { "const": "zone_rules" },
     "name": { "type": "string", "minLength": 1, "maxLength": 200 },
     "core": {
-      "description": "핵심 범위의 법정동 이름 (API 의 umdNm 과 같은 표기, 예: 종로5가)",
+      "description": "핵심 범위의 법정동 이름 (API 의 umdNm 과 같은 표기, 예: 종로5가). 시군구 5자리를 붙이면(예: 11140:을지로4가) 그 시군구의 그 법정동만 뜻한다 (J5-068)",
       "type": "array", "minItems": 1, "maxItems": 200, "uniqueItems": true,
-      "items": { "type": "string", "minLength": 1, "maxLength": 50 }
+      "items": { "type": "string", "minLength": 1, "maxLength": 60 }
     },
     "comparison": {
-      "description": "비교 블록의 법정동 이름. 비워도 된다",
+      "description": "비교 블록의 법정동 이름. 비워도 된다. 시군구를 붙이는 방식은 core 와 같다",
       "type": "array", "maxItems": 500, "uniqueItems": true,
-      "items": { "type": "string", "minLength": 1, "maxLength": 50 }
+      "items": { "type": "string", "minLength": 1, "maxLength": 60 }
     },
     "lawd_cd": {
-      "description": "규칙을 적용할 시군구 코드 5자리 (J5-048, 선택). 주면 이 시군구의 거래만 핵심·비교로 분류하고 다른 시군구의 같은 이름 법정동은 범위 밖으로 둔다. 없으면 시군구와 무관하게 이름으로만 본다(이전 규칙)",
+      "description": "규칙을 적용할 시군구 코드 5자리 (J5-048, 선택). 주면 이름만 쓴 법정동은 이 시군구의 거래에만 맞고 다른 시군구의 같은 이름 법정동은 범위 밖으로 둔다. 없으면 이름만 쓴 법정동은 시군구와 무관하게 이름으로 본다(이전 규칙). 시군구를 붙인 항목은 이 값과 무관하다",
       "type": ["string", "null"], "pattern": "^[0-9]{5}$"
     },
     "note": { "type": ["string", "null"], "maxLength": 2000 }
