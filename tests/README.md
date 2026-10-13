@@ -44,6 +44,7 @@
 - `test_j5_011_projection.py`: 조회 파생본. 전량 생성·검증·게시·포인터, 반영 후 구본 표시·내보내기 차단, 파생본 실패 시 이전본 유지·부분 산출물 격리, 사진 포함/누락, 생성 중 버전 변경, 검증기, CLI.
 - `test_j5_010_import.py`: 단방향 반영. 정상·같은 파일 두 번·재내보내기·일부 겹침·같은 ID 다른 내용(패키지 안·정본)·거절·정정 대상·사진 복사 후 DB 실패(정리대기)·파일 실패·CLI.
 - `test_j5_009_db.py`: 정본 SQLite. 생성·열기·마이그레이션, 시드 승계(멱등·전체 거절), 복합 외래키·STRICT 타입·열거값, 시점(오프셋·정밀도·UTC), JSON payload·스키마, records 불변·정정 연결, 근거·첨부, fixture 이벤트 → 기록 매핑, CLI.
+- `test_j5_072_parcel_comps.py`: PC `db parcels-comps` 와 폰 주변 사례·연도별 시세(`nearbyComps`·`compsByYear`, Node 실행)를 가상 파생본 정본으로 필지·기간(1·3·5년·전체)·종류마다 대조(단가·범위·배율·참고 추정·사례 순서·연도별 줄·변동, 갈래마다 한 번 이상), 지분·면적 없음·취소 확정·거래 연도 이하 공시지가·받지 않은 해·기간 시작일, 입력 오류, CLI.
 - `test_j5_069_app_cache_lock.py`: 캐시 목록(`web/sw.js` APP_FILES) 파일들의 해시와 캐시 이름을 고정값(`tests/fixtures/app_cache.lock.json`)과 대조한다. 파일이 바뀌었는데 이름이 그대로면 실패하고, 이름을 올렸으면 `python tests/test_j5_069_app_cache_lock.py --write` 로 고정값을 갱신하라고 알린다. `APP_VERSION` 과 캐시 이름이 같은지도 본다.
 - `test_web_static.py`: web/ 정적 앱 규칙(외부 URL·인라인 스크립트·네트워크 API 금지, CSP).
 - `test_web_publish.py`: 게시 폴더 web/ 에 코드·문서·가상자료와 배포 설정(`_headers`)만 있는지, 응답 헤더가 앱 권한(현재 위치)을 막지 않는지, 루트의 `wrangler.jsonc` 가 web/ 만 올리고 서버 코드·환경 값을 두지 않는지 검사한다(J5-059·060, ADR-24).
