@@ -1,16 +1,18 @@
-"""공개 배포 대상 검사 (J5-059, ADR-24).
+"""공개 배포 대상 검사 (J5-059·060, ADR-24).
 
 정적 호스팅은 web/ 폴더를 그대로 올린다. 그 안에는 앱 코드·문서와 가상자료만 있어야 한다(AGENTS "공개 앱에는 코드·가상자료만").
 허용한 확장자·이름 밖의 파일, 가상자료가 아닌 data/ 파일, 실데이터 형식(사진·ZIP·DB·번들)이 web/ 에 생기면 실패한다.
-배포 헤더(web/_headers)가 앱이 쓰는 권한을 막지 않는지도 본다.
+배포 헤더(web/_headers)가 앱이 쓰는 권한을 막지 않는지, 배포 설정(wrangler.jsonc)이 web/ 만 올리고 서버 코드·비밀값을 두지 않는지도 본다.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
-WEB = Path(__file__).resolve().parent.parent / "web"
+ROOT = Path(__file__).resolve().parent.parent
+WEB = ROOT / "web"
 CODE_SUFFIXES = {".html", ".js", ".css", ".svg", ".md"}
 CONFIG_FILES = {"_headers"}
 SYNTHETIC_DATA = re.compile(r"^data/[a-z0-9_.-]+\.synthetic(\.[a-z0-9_]+)?\.json$")
@@ -52,3 +54,17 @@ def test_headers_keep_app_permissions():
     assert csp == ["Content-Security-Policy: frame-ancestors 'none'"], "헤더 CSP 는 frame-ancestors 만 (나머지는 페이지 meta)"
     assert "/sw.js" in rules and "Cache-Control: no-cache" in rules, "서비스 워커는 매번 새로 확인"
     assert not re.search(r"https?://", text), "헤더 파일에 외부 주소를 두지 않는다"
+
+
+def test_wrangler_config_publishes_only_web():
+    """Cloudflare 의 배포 명령(wrangler deploy)이 읽는 설정. 저장소 전체가 아니라 web/ 만 정적 자산으로 올린다(J5-060).
+    서버 코드(main)·환경 값(vars)·저장소 연결(bindings)을 두지 않는다. 설정은 주석 없는 JSON 으로 둔다(여기서 그대로 읽는다)."""
+    cfg = json.loads((ROOT / "wrangler.jsonc").read_text(encoding="utf-8"))
+    assert set(cfg) == {"name", "compatibility_date", "assets"}, f"정적 자산 밖의 설정: {sorted(set(cfg) - {'name', 'compatibility_date', 'assets'})}"
+    assert cfg["name"] == "project-j5", "Cloudflare 의 Worker 이름과 같아야 빌드가 이 설정을 쓴다"
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", cfg["compatibility_date"])
+    assets = cfg["assets"]
+    assert (ROOT / assets["directory"]).resolve() == WEB, "올리는 폴더는 web/ 하나"
+    assert "binding" not in assets and "run_worker_first" not in assets, "서버 코드 없이 파일만 내준다"
+    assert assets.get("not_found_handling") == "none", "없는 주소는 404 (index.html 로 바꿔 내주지 않는다)"
+    assert assets.get("html_handling") == "auto-trailing-slash", "index.html 넘김은 서비스 워커가 처리한다(J5-059)"
