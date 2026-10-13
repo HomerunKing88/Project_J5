@@ -102,7 +102,7 @@ def test_phone_year_rows_match_pc(tmp_path):
     assert res.returncode == 0, res.stderr
     phone = json.loads(res.stdout)
 
-    compared = {"price": 0, "counted": 0, "missing": 0, "owner": 0, "delta": 0, "linked": 0, "not_collected": 0, "incomplete": 0}
+    compared = {"kinds": 0, "price": 0, "counted": 0, "missing": 0, "owner": 0, "delta": 0, "linked": 0, "not_collected": 0, "incomplete": 0}
     for pnu, rows in phone.items():
         assert rows, f"{pnu}: 폰 연도별 줄이 없다"
         for r in rows:
@@ -120,6 +120,8 @@ def test_phone_year_rows_match_pc(tmp_path):
                 assert row["tx_missing_reason"] is None, (key, row)
                 assert [r["exact"], r["prefix"], r["linked"]] == [row["tx_exact"], row["tx_prefix"], row["tx_linked"]], (key, r, row)
                 assert r["monthsComplete"] == row["rt_months_complete"], (key, r, row)
+                assert r.get("kindMonths", {}) == row["rt_kind_months"], (key, r, row)   # 종류별 수집 개월 (J5-070)
+                compared["kinds"] += bool(row["rt_kind_months"])
                 compared["counted"] += 1
                 compared["linked"] += r["linked"] > 0
             elif r["tx"] in ("not_collected", "incomplete"):
@@ -133,6 +135,6 @@ def test_phone_year_rows_match_pc(tmp_path):
             assert r["owner"]["dates"] == row["ownership_changed_on"], (key, r, row)
             compared["owner"] += 1
     # 대조가 실제로 일어났는지 (빈 비교로 통과하지 않게): 갈래마다 한 줄 이상
-    for k in ("counted", "owner", "price", "delta", "linked", "not_collected", "incomplete"):
+    for k in ("counted", "kinds", "owner", "price", "delta", "linked", "not_collected", "incomplete"):
         assert compared[k] >= 1, (k, compared)
     assert any(r["tx_exact"] for r in pc.values() if r["tx_exact"]) and any(r["tx_prefix"] for r in pc.values() if r["tx_prefix"])

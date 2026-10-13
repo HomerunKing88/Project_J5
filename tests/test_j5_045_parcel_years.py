@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+from pathlib import Path
 
 import pytest
 
@@ -68,7 +69,7 @@ def test_text_csv_and_rejections(db, home, server):
     t = years_text(r)
     assert t.index("  2027:") < t.index("  2026:") < t.index("  2021:"), "최근 먼저"
     assert "  2027: 공시지가 13,000,000원/㎡ (+5.3%) · 거래 미수집" in t
-    assert "  2026: 공시지가 12,340,000원/㎡ · 거래 수집 1/12개월 · 같은 필지 1 (10억, 2026-08-01) · 번지대 1 · 연결 0" in t
+    assert "  2026: 공시지가 12,340,000원/㎡ · 거래 수집 1/12개월 (상업·업무만) · 같은 필지 1 (10억, 2026-08-01) · 번지대 1 · 연결 0" in t
     assert "  2024: 공시지가 자료 없음 · 거래 미수집" in t and "0 건이 아니다" in t
     # 실패한 수집만 있는 연도는 0 건이 아니라 수집 실패로 둔다
     _Handler.scenarios = {"202208": {"kind": "http_error"}}
@@ -126,3 +127,21 @@ def test_review_fixes_latest_deal_and_text_order(db, home, server, monkeypatch):
     monkeypatch.setattr(PY, "parcels_transactions", real)
     t = years_text(parcel_years(db, [P11, P1], on_date=TODAY))
     assert t.index(f"(PNU {P11})") < t.index(f"(PNU {P1})"), "입력 순서 (CSV·JSON 과 같다)"
+
+
+def test_kind_months_and_note(db, home, server):
+    """J5-070: 종류별 수집 개월(rt_kind_months)과 글의 메모. 규칙은 폰 kindsOnlyText 와 같다 (이름표는 폰 DEAL_KIND_NAMES 와 같아야 한다)."""
+    import re
+    from j5.db.parcel_years import KIND_SHORT, kinds_note
+    view_js = (Path(__file__).resolve().parent.parent / "web" / "app" / "view.js").read_text(encoding="utf-8")
+    m = re.search(r"export const DEAL_KIND_NAMES = \{ nrg: \"([^\"]+)\", sh: \"([^\"]+)\", land: \"([^\"]+)\" \}", view_js)
+    assert m and list(m.groups()) == [KIND_SHORT["nrg"], KIND_SHORT["sh"], KIND_SHORT["land"]], "폰과 같은 이름표"
+    assert kinds_note({}, 0) == "" and kinds_note({"nrg": 12, "sh": 12, "land": 12}, 12) == ""
+    assert kinds_note({"nrg": 8}, 8) == "상업·업무만" and kinds_note({"nrg": 12, "land": 12}, 12) == "상업·업무·토지만"
+    assert kinds_note({"nrg": 12, "sh": 1, "land": 1}, 12) == "상업·업무 12 · 단독·다가구 1 · 토지 1개월"
+    loaded(db, home, server)
+    r = parcel_years(db, [P1], on_date=TODAY)
+    y = {row["year"]: row for row in r["rows"]}
+    assert y[2026]["rt_kind_months"] == {"nrg": 1} and y[2024]["rt_kind_months"] == {}
+    rows = list(csv.DictReader(io.StringIO(years_csv(r))))
+    assert next(x for x in rows if x["year"] == "2026")["rt_kind_months"] == "nrg:1" and next(x for x in rows if x["year"] == "2024")["rt_kind_months"] == ""
