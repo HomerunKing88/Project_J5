@@ -26,7 +26,7 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
       const origAdd = IDBObjectStore.prototype.add;
       IDBObjectStore.prototype.add = function (v, k) { if (this.name === 'events' && window.__failSave) throw new DOMException('저장 공간 부족 (e2e)', 'QuotaExceededError'); return origAdd.call(this, v, k); };` });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor(`${txt("status-line")}.includes('앱 0.2.30')`);
+    await cdp.waitFor(`${txt("status-line")}.includes('앱 0.2.31')`);
 
     // 1. 처음 실행: 현장 화면, 시트가 펼쳐져 시작하기(PC 자료 파일·연습용 자료)가 보인다, 기술 용어 없음
     assert.ok(await cdp.eval(visible("view-map")) && await cdp.eval("document.getElementById('view-records').hidden"), "첫 화면은 현장");
@@ -357,15 +357,15 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     // 펼친 시트·위 덮개 아래의 꼬리표는 보이지 않는다 (리뷰 반영 PR #110)
     assert.equal(await cdp.eval(`(() => { const top = document.getElementById('deal-legend').getBoundingClientRect().bottom, bottom = document.getElementById('field-sheet').getBoundingClientRect().top;
       return Array.from(document.querySelectorAll('#map-svg g.deal')).filter((g) => g.getAttribute('visibility') === 'visible').filter((g) => { const b = g.querySelector('.deal-bg').getBoundingClientRect(); return b.top < top - 1 || b.bottom > bottom + 1; }).length; })()`), 0);
-    // 지도를 끌어 보이던 꼬리표 하나를 펼친 시트 아래로 보내면 감춘다 (리뷰 반영 PR #110)
+    // 지도를 끌어 보이던 꼬리표 하나를 펼친 시트 경계에 걸치게 보내면 감춘다 (리뷰 반영 PR #110, 걸침은 PR #113: 일부가 가려지면 누르기 어렵다)
     const under = await cdp.eval(`(() => { const sheetTop = document.getElementById('field-sheet').getBoundingClientRect().top; const top = document.getElementById('deal-legend').getBoundingClientRect().bottom;
       const g = Array.from(document.querySelectorAll('#map-svg g.deal')).find((x) => x.getAttribute('visibility') === 'visible');
-      const b = g.querySelector('.deal-bg').getBoundingClientRect(); return { id: g.dataset.dealId, dy: sheetTop - b.top + 12, x: 12, y: top + 12 }; })()`);
+      const b = g.querySelector('.deal-bg').getBoundingClientRect(); return { id: g.dataset.dealId, dy: sheetTop - b.top - 12, x: 12, y: top + 12 }; })()`);
     await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: under.x, y: under.y });
     await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: under.x, y: under.y, button: "left", clickCount: 1 });
     for (let i = 1; i <= 8; i++) await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: under.x, y: under.y + (under.dy * i) / 8, button: "left", buttons: 1 });
     await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: under.x, y: under.y + under.dy, button: "left", clickCount: 1 });
-    assert.equal(await cdp.eval(`document.querySelector('#map-svg g.deal[data-deal-id="${under.id}"]').getAttribute('visibility')`), "hidden", "시트 아래로 간 꼬리표는 감춘다");
+    assert.equal(await cdp.eval(`document.querySelector('#map-svg g.deal[data-deal-id="${under.id}"]').getAttribute('visibility')`), "hidden", "시트 경계에 걸친 꼬리표는 감춘다");
     // 기간을 바꿔 그 번지대 거래가 없어지면 열린 카드를 닫는다 (리뷰 반영 PR #110: 1년 안에는 1-* 거래가 없다)
     await cdp.eval("(() => { const y = document.getElementById('deal-years'); y.value = '1'; y.dispatchEvent(new Event('change')); return 'ok'; })()");
     await cdp.waitFor("document.getElementById('deal-panel').hidden");
@@ -373,6 +373,19 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     await cdp.waitFor(`${txt("deal-count")} === '대지 평당, 거래 11건, 번지대 1곳, 지도 밖 1건'`);   // 전체 기간은 날짜와 무관
     if (await cdp.eval("document.getElementById('field-sheet').dataset.state === 'open'")) await cdp.eval("document.getElementById('sheet-toggle').click(); 'ok'");
     await cdp.waitFor("document.getElementById('field-sheet').dataset.state === 'peek'");
+    await cdp.clickRect("#map-fit");
+    await new Promise((r) => setTimeout(r, 400));
+    // 가로로 지도 왼쪽 끝에 걸친 꼬리표도 감춘다 (리뷰 반영 PR #113: 전체가 덮이지 않은 영역에 들어야 보인다)
+    const edge = await cdp.eval(`(() => { const top = document.getElementById('deal-legend').getBoundingClientRect().bottom;
+      const gs = Array.from(document.querySelectorAll('#map-svg g.deal')).filter((x) => x.getAttribute('visibility') === 'visible');
+      const g = gs.sort((a, b) => a.querySelector('.deal-bg').getBoundingClientRect().left - b.querySelector('.deal-bg').getBoundingClientRect().left)[0];
+      if (!g) return null; const b = g.querySelector('.deal-bg').getBoundingClientRect(); return { id: g.dataset.dealId, dx: -(b.left + b.width / 2), x: 250, y: top + 12 }; })()`);
+    assert.ok(edge && edge.x + edge.dx >= 0, JSON.stringify(edge));
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: edge.x, y: edge.y });
+    await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: edge.x, y: edge.y, button: "left", clickCount: 1 });
+    for (let i = 1; i <= 8; i++) await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: edge.x + (edge.dx * i) / 8, y: edge.y, button: "left", buttons: 1 });
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: edge.x + edge.dx, y: edge.y, button: "left", clickCount: 1 });
+    assert.equal(await cdp.eval(`document.querySelector('#map-svg g.deal[data-deal-id="${edge.id}"]').getAttribute('visibility')`), "hidden", "왼쪽 끝에 반쯤 걸친 꼬리표는 감춘다");
     await cdp.clickRect("#map-fit");
     await new Promise((r) => setTimeout(r, 400));
     // 펼친 시트·위 덮개에 가리지 않은 필지 꼬리표를 누른다
@@ -394,9 +407,19 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     await cdp.waitFor(`document.querySelector('#comps-facts li .v').textContent === '${expectDeals(3).n}건' && document.getElementById('deal-years').value === '3'`);   // 지도 실거래 기간도 같이
     await cdp.eval("(() => { const y = document.getElementById('comps-years'); y.value = '0'; y.dispatchEvent(new Event('change')); return 'ok'; })()");
     await cdp.waitFor("document.querySelector('#comps-facts li .v').textContent === '11건'");
+    // 거래 종류 거르기 (J5-066): 주변 사례에서 토지만 고르면 지도 실거래도 토지만 (같은 선택)
+    assert.ok(await cdp.eval(visible("comps-kind")) && await cdp.eval(visible("deal-kind")), "세 종류가 든 거래 파일이면 종류 고르기가 보인다");
+    await cdp.eval("(() => { const k = document.getElementById('comps-kind'); k.value = 'land'; k.dispatchEvent(new Event('change')); return 'ok'; })()");
+    await cdp.waitFor("document.querySelector('#comps-facts li .v').textContent === '1건' && document.getElementById('deal-kind').value === 'land'");
+    assert.match(await cdp.eval(txt("comps-scope")), /, 전체 기간, 토지$/);
+    assert.equal(await cdp.eval("document.querySelectorAll('#comps-facts li')[2].textContent"), "연면적 평당면적이 있는 거래 없음", "토지 거래에는 연면적이 없다");
+    assert.equal(await cdp.eval(txt("deal-count")), "대지 평당, 토지, 거래 1건");
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.deal').length"), 1, "토지 매매가 있는 필지 4-2 하나");
     await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
-    // 켬·값·기간은 이 폰에 남는다
+    // 켬·값·기간·종류는 이 폰에 남는다
     await cdp.navigate(`${base}/index.html?reload=deals`);
+    await cdp.waitFor(`document.querySelectorAll('#map-svg g.deal').length === 1 && ${txt("deal-count")} === '대지 평당, 토지, 거래 1건' && document.getElementById('deal-kind').value === 'land'`);
+    await cdp.eval("(() => { const k = document.getElementById('deal-kind'); k.value = 'all'; k.dispatchEvent(new Event('change')); return 'ok'; })()");
     await cdp.waitFor(`document.querySelectorAll('#map-svg g.deal').length === 5 && ${txt("deal-count")}.startsWith('대지 평당, 거래 11건')`);
     await cdp.eval("document.getElementById('map-deals').click(); 'ok'");
     await cdp.waitFor("document.querySelectorAll('#map-svg g.deal').length === 0 && document.getElementById('deal-legend').hidden");
@@ -410,6 +433,7 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     await cdp.waitFor(`${visible("parcel-panel")} && ${visible("parcel-comps")}`);
     assert.equal(await cdp.eval("document.querySelector('#comps-facts li .v').textContent"), "0건");
     assert.equal(await cdp.eval(txt("comps-reference")), "이 기간에 같은 동의 거래가 없습니다.");
+    assert.ok(await cdp.eval("document.getElementById('comps-kind').hidden"), "종류가 둘 미만이면 종류 고르기를 감춘다");
     await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
     // 연습용 자료 지우기에 거래도 들어간다
     await go(cdp, "settings");

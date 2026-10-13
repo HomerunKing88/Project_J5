@@ -402,6 +402,23 @@ export function viewSummary(rec) {
 export const PYEONG_M2 = 3.305785;
 export const DEAL_MODES = Object.freeze({ total: "총액", land: "대지 평당", floor: "연면적 평당" });
 export const DEAL_YEARS = Object.freeze([1, 3, 5, 0]);   // 0 = 전체
+
+/** 거래의 수집 종류 (J5-066). 종류 칸이 없는 이전 파일은 상업·업무용만 담았다 (J5-065 전 수집기는 상업·업무용뿐). */
+export const dealKindOf = (t) => (knownKind(t?.deal_kind) ? t.deal_kind : "nrg");
+
+/** 고를 수 있는 종류 거르기: all 은 전체, 나머지는 DEAL_KIND_NAMES 의 이름 */
+export const DEAL_KIND_FILTERS = Object.freeze(["all", ...Object.keys(DEAL_KIND_NAMES)]);
+
+/** kind 종류의 거래만 (all 이면 전부) */
+export function dealsOfKind(transactions, kind = "all") {
+  return kind === "all" ? (transactions ?? []) : (transactions ?? []).filter((t) => dealKindOf(t) === kind);
+}
+
+/** 거래 목록에 든 종류 (DEAL_KIND_NAMES 순). 둘 이상일 때만 화면에 종류 고르기를 보인다 */
+export function dealKindsPresent(transactions) {
+  const seen = new Set((transactions ?? []).map(dealKindOf));
+  return Object.keys(DEAL_KIND_NAMES).filter((k) => seen.has(k));
+}
 const DEAL_KIND_RULES = [["근린", "근린"], ["업무", "업무"], ["숙박", "숙박"], ["판매", "판매"], ["의료", "의료"], ["교육", "교육"], ["공장", "공장"], ["창고", "창고"],
   ["다가구", "다가구"], ["단독", "단독"], ["주택", "주택"]];
 
