@@ -36,21 +36,21 @@ python -m http.server 8000 --directory web
 ```
 
 - `http://<PC IP>:8000/`은 비보안 컨텍스트라 `crypto.subtle`·서비스 워커가 없다. 해시는 순수 JS 폴백으로 계산하고, 앱 캐시(오프라인 실행)는 HTTPS 에서만 동작한다.
-- 해시·오프라인·현재 위치까지 쓰려면 HTTPS가 필요하다. 아래 "배포" 의 Cloudflare Pages 주소로 연다(ADR-24). 실데이터는 어떤 경우에도 올리지 않는다.
+- 해시·오프라인·현재 위치까지 쓰려면 HTTPS가 필요하다. 아래 "배포" 의 Cloudflare 주소로 연다(ADR-24). 실데이터는 어떤 경우에도 올리지 않는다.
 
-## 배포 (Cloudflare Pages, ADR-24)
+## 배포 (Cloudflare, ADR-24)
 
 폰에서는 `https://j5.<도메인>/`(이 프로젝트는 `https://j5.dooduk.com/`) 으로 연다. 게시되는 것은 `web/` 폴더(코드·문서·가상자료)뿐이고 실데이터는 올리지 않는다. 처음 한 번은 사용자가 계정에서 설정한다.
 
 1. Cloudflare 계정을 만든다(무료).
-2. Workers & Pages → 만들기 → Pages → Git 에 연결 → GitHub 에서 `HomerunKing88/Project_J5` 만 접근 허용.
-3. 빌드 설정: 프레임워크 없음, 빌드 명령 비움, 빌드 출력 디렉터리 `web`, 운영 브랜치 `main`. 저장하면 첫 게시가 끝나고 `<프로젝트>.pages.dev` 주소가 생긴다. 폰에서 이 주소가 열리는지 먼저 본다.
-4. 프로젝트 → 사용자 지정 도메인 → `j5.<도메인>` 추가. 도메인 루트(`dooduk.com`·`www`)의 연결은 그대로 두거나 따로 바꿔도 된다. 이 앱은 `j5` 한 줄만 쓴다. 도메인의 DNS 가 Cloudflare 에 없으면 도메인을 산 곳(DNS 관리처)에 안내된 CNAME(`j5` → `<프로젝트>.pages.dev`)을 넣는다. HTTPS 는 자동으로 붙는다.
+2. Workers & Pages → 만들기 → GitHub 연결 → `HomerunKing88/Project_J5` 만 접근 허용. 프로젝트 이름은 `project-j5`(저장소의 `wrangler.jsonc` 의 `name` 과 같아야 한다).
+3. 빌드 설정: 빌드 명령 없음, 배포 명령 `npx wrangler deploy`, 루트 디렉터리 `/`, 운영 브랜치 `main`. 배포 명령은 저장소 루트의 `wrangler.jsonc` 를 읽어 `web/` 만 올린다. 빌드 기록에 `Read 34 files from the assets directory …/web` 처럼 `web` 폴더가 보이면 맞다(파일 수는 앱 판마다 다르다). 배포가 끝나면 `project-j5.<계정>.workers.dev` 주소가 생기니 폰에서 먼저 열어 본다.
+4. 사용자 지정 도메인: 프로젝트 → 설정 → 도메인 및 경로 → 추가 → 사용자 지정 도메인 `j5.<도메인>`. Workers 는 도메인이 Cloudflare 의 DNS 영역이어야 한다. 도메인 추가(사이트 추가)로 `dooduk.com` 을 Cloudflare 에 넣고, 도메인을 산 곳에서 네임서버를 Cloudflare 가 알려 준 두 개로 바꾼다. 바꾸기 전에 기존 DNS 기록(루트·`www`·메일 MX 등)이 Cloudflare 로 옮겨졌는지 확인한다. DNS 를 옮기지 않으려면 Workers 대신 Pages 프로젝트(Git 연결, 빌드 출력 `web`)를 만들고 바깥 DNS 에 CNAME(`j5` → `<프로젝트>.pages.dev`)을 넣는다. HTTPS 는 어느 쪽이든 자동으로 붙는다. 이 앱은 `j5` 한 줄만 쓰므로 루트·`www` 의 연결은 따로 정리해도 된다.
 5. (선택) 접속을 본인으로 제한: Zero Trust → Access → 애플리케이션 추가 → `j5.<도메인>` 에 본인 메일만 허용.
 6. 옮기기 전에 예전 주소(`http://<PC 주소>:8000`)에서 남은 기록을 모두 PC 로 보내고 PC 반영을 확인한다. 새 주소에서 설정의 작업 공간 이름을 저장하고 PC 자료 파일을 다시 가져온다.
 7. 배경 지도(VWorld) 키를 쓰면 VWorld 에 `https://j5.<도메인>` 을 서비스 URL 로 등록한다.
 
-이후에는 `main` 에 머지할 때마다 자동으로 다시 게시된다. 응답 헤더는 `web/_headers`, 게시 대상 검사는 `tests/test_web_publish.py`, 공급자의 `index.html` 넘김은 `tests/web/deploy.e2e.test.mjs` 가 흉내 내어 확인한다.
+이후에는 `main` 에 머지할 때마다 자동으로 다시 게시된다. 배포 설정은 `wrangler.jsonc`, 응답 헤더는 `web/_headers`, 게시 대상 검사는 `tests/test_web_publish.py`, 공급자의 `index.html` 넘김은 `tests/web/deploy.e2e.test.mjs` 가 흉내 내어 확인한다.
 
 ## 테스트
 

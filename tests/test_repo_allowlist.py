@@ -32,7 +32,7 @@ SECRET_CONTENT_PATTERNS = [
     re.compile(r"-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     re.compile(r"(?i)(serviceKey|api_key|apikey|secret)\s*[=:]\s*['\"]?[A-Za-z0-9+/%_\-]{32,}"),
 ]
-TEXT_SUFFIXES = {".md", ".py", ".js", ".html", ".css", ".json", ".jsonl", ".sql",
+TEXT_SUFFIXES = {".md", ".py", ".js", ".html", ".css", ".json", ".jsonc", ".jsonl", ".sql",
                  ".toml", ".yml", ".yaml", ".env", ".txt", ".cfg", ".ini"}
 
 
