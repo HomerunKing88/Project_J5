@@ -104,8 +104,8 @@ self.addEventListener("message", (e) => {
   }
 });
 
-// 배포 주소(ADR-24, Cloudflare Pages)는 ./index.html 을 ./ 로 넘긴다. 설치 때 받은 그 응답은 "넘겨받음" 표시가 붙어 있어
-// 탐색 요청에 그대로 돌려주면 브라우저가 페이지를 열지 않는다. 표시가 있으면 같은 본문·머리글로 새 응답을 만든다.
+// 배포 주소(ADR-24, Cloudflare Pages)는 ./index.html 을 ./ 로, devtest.html 을 devtest 로 넘긴다. 설치 때 받은 응답이나 네트워크 응답에
+// "넘겨받음" 표시가 붙어 있으면 탐색 요청에 그대로 돌려줄 때 브라우저(Safari 포함)가 페이지를 열지 않는다. 표시가 있으면 같은 본문·머리글로 새 응답을 만든다.
 function unredirected(res) {
   if (!res.redirected) return res;
   return new Response(res.body, { status: res.status, statusText: res.statusText, headers: res.headers });
@@ -122,5 +122,5 @@ self.addEventListener("fetch", (e) => {
   if (!sameOrigin) return;
   const path = url.pathname.replace(/^.*\//, "./").replace(/^\.\/app\//, "./app/");
   // 앱 파일만 캐시 우선. 그 밖(시드·데이터 등)은 네트워크로 보내고 캐시하지 않는다.
-  e.respondWith(caches.match(e.request).then((hit) => (hit ? unredirected(hit) : fetch(e.request))));
+  e.respondWith(caches.match(e.request).then((hit) => hit || fetch(e.request)).then(unredirected));
 });
