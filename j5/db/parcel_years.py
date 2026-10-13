@@ -23,6 +23,7 @@ from j5.db.parcel_timeline import fmt_krw, parcels_transactions
 from j5.db.parcels import active_links, attribute_history
 from j5.db.schema import WATCHLIST_STATUSES
 from j5.db.store import Db, DbError
+from j5.collect.rt import KINDS as RT_KINDS
 from j5.db.transactions import coverage_by_year
 
 MAX_PARCELS = 500
@@ -30,7 +31,23 @@ MAX_YEARS = 40
 PNU_RE = re.compile(r"^\d{19}$")
 CSV_FIELDS = ("pnu", "parcel", "sgg_code", "year", "price_krw_m2", "price_delta_pct", "price_as_of", "price_corrected", "price_missing_reason",
               "rt_months_complete", "rt_months_any", "tx_exact", "tx_prefix", "tx_linked", "tx_missing_reason", "tx_exact_last_date", "tx_exact_last_amount_krw",
-              "ownership_snapshot", "ownership_changed_on")
+              "ownership_snapshot", "ownership_changed_on", "rt_kind_months")
+# 수집 종류의 짧은 이름 (폰 web/app/view.js 의 DEAL_KIND_NAMES 와 같다, J5-070)
+KIND_SHORT = {"nrg": "상업·업무", "sh": "단독·다가구", "land": "토지"}
+
+
+def kinds_note(kind_months: dict, months_complete: int) -> str:
+    """그해 종류별로 받은 개월이 고르지 않으면 적는 글 (폰 kindsOnlyText 와 같은 규칙, J5-070).
+    모든 종류를 같은 개월만큼 받았으면 "", 받은 종류는 모두 같은 개월이면 "상업·업무만", 종류마다 개월이 다르면 "상업·업무 12 · 토지 1개월"."""
+    kinds = [k for k in KIND_SHORT if kind_months.get(k, 0) > 0]
+    if not kinds:
+        return ""
+    even = all(kind_months[k] == months_complete for k in kinds)
+    if even and len(kinds) == len(KIND_SHORT):
+        return ""
+    if even:
+        return "·".join(KIND_SHORT[k] for k in kinds) + "만"
+    return " · ".join(f"{KIND_SHORT[k]} {kind_months[k]}" for k in kinds) + "개월"
 
 
 def watchlist_pnus(db: Db, on_date: str) -> list[str]:
@@ -85,6 +102,7 @@ def parcel_years(db: Db, pnus: list[str], *, year_from: int | None = None, year_
     per = []
     data_years: set[int] = set()
     cov_cache: dict[str, dict] = {}
+    kind_cache: dict[str, dict] = {}   # 시군구 → {종류: 연도별 수집 개월} (J5-070)
     txs_all = parcels_transactions(db, pnus, on_date=on_date)   # 법정동마다 한 번 읽는다 (J5-046: 필지마다 읽으면 500필지에 수십 초)
     for pnu in pnus:
         h = attribute_history(db, pnu)
@@ -92,6 +110,7 @@ def parcel_years(db: Db, pnus: list[str], *, year_from: int | None = None, year_
         sgg = rows[pnu]["emd_code"][:5]
         if sgg not in cov_cache:
             cov_cache[sgg] = coverage_by_year(db, sgg)
+            kind_cache[sgg] = {k: coverage_by_year(db, sgg, k) for k in RT_KINDS}
         prices = _prices_by_year(h["price_series"])
         own = _ownership_dates(h["snapshots"])
         own_known = _ownership_known(h["snapshots"])
@@ -124,6 +143,8 @@ def parcel_years(db: Db, pnus: list[str], *, year_from: int | None = None, year_
                 "price_krw_m2": price, "price_delta_pct": round((price - prev_price) / prev_price * 100, 2) if price is not None and prev_price else None,
                 "price_as_of": p["as_of"] if p else None, "price_corrected": bool(p and p["corrected"]), "price_missing_reason": None if p else "no_snapshot",
                 "rt_months_complete": cov["complete"], "rt_months_any": cov["any"],
+                # 종류마다 그해 완전히 받은 개월 (1 이상만, 파생본 coverage 의 kind_months 와 같다)
+                "rt_kind_months": {k: c[str(y)]["complete"] for k, c in kind_cache[sgg].items() if c.get(str(y), {}).get("complete")},
                 # 완전 수집한 달이 없는 연도의 거래 수는 모름이다. 다만 그해 거래가 정본에 있으면(부분 수집·연결 거래 등) 센 값을 그대로 둔다
                 "tx_exact": len(exact) if collected or txs else None, "tx_prefix": sum(t["match"] == "prefix" for t in txs) if collected or txs else None,
                 "tx_linked": sum(t["match"] == "linked" for t in txs) if collected or txs else None,
@@ -142,6 +163,8 @@ def _cell(v) -> str:
         return "1" if v else "0"
     if isinstance(v, list):
         return ";".join(v)
+    if isinstance(v, dict):
+        return ";".join(f"{k}:{n}" for k, n in v.items())
     return str(v)
 
 
@@ -169,7 +192,8 @@ def years_text(r: dict) -> str:
         if row["tx_missing_reason"]:
             tx = "거래 미수집" if row["tx_missing_reason"] == "not_collected" else f"거래 수집 실패·부분만 ({row['rt_months_any']}개월 시도)"
         else:
-            tx = f"거래 수집 {row['rt_months_complete']}/12개월 · 같은 필지 {row['tx_exact']}" + (f" ({fmt_krw(row['tx_exact_last_amount_krw'])}, {row['tx_exact_last_date']})" if row["tx_exact_last_date"] else "") + f" · 번지대 {row['tx_prefix']} · 연결 {row['tx_linked']}"
+            note = kinds_note(row["rt_kind_months"], row["rt_months_complete"])
+            tx = f"거래 수집 {row['rt_months_complete']}/12개월" + (f" ({note})" if note else "") + f" · 같은 필지 {row['tx_exact']}" + (f" ({fmt_krw(row['tx_exact_last_amount_krw'])}, {row['tx_exact_last_date']})" if row["tx_exact_last_date"] else "") + f" · 번지대 {row['tx_prefix']} · 연결 {row['tx_linked']}"
         own = (" · 소유 변동 " + ", ".join(row["ownership_changed_on"])) if row["ownership_changed_on"] else ("" if row["ownership_snapshot"] else " · 소유 자료 없음")
         lines.append(f"  {row['year']}: {price} · {tx}{own}")
     lines.append("거래 미수집 연도의 빈 칸은 0 건이 아니다. 번지대 거래는 이 필지의 거래로 확정하지 않는다.")
