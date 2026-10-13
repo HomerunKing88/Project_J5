@@ -26,7 +26,7 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
       const origAdd = IDBObjectStore.prototype.add;
       IDBObjectStore.prototype.add = function (v, k) { if (this.name === 'events' && window.__failSave) throw new DOMException('저장 공간 부족 (e2e)', 'QuotaExceededError'); return origAdd.call(this, v, k); };` });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor(`${txt("status-line")}.includes('앱 0.2.26')`);
+    await cdp.waitFor(`${txt("status-line")}.includes('앱 0.2.27')`);
 
     // 1. 처음 실행: 현장 화면, 시트가 펼쳐져 시작하기(PC 자료 파일·연습용 자료)가 보인다, 기술 용어 없음
     assert.ok(await cdp.eval(visible("view-map")) && await cdp.eval("document.getElementById('view-records').hidden"), "첫 화면은 현장");
@@ -270,11 +270,58 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     assert.deepEqual(await cdp.eval("caches.open('j5-tiles-v1').then((c) => c.keys()).then((ks) => ks.map((r) => new URL(r.url).pathname))"), ["/tiles/15/1/2.png"]);
     assert.equal(await cdp.eval(`new Promise((res) => { const q = indexedDB.open('j5'); q.onsuccess = () => { const g = q.result.transaction('meta').objectStore('meta').get('tiles_template'); g.onsuccess = () => { res(g.result ?? null); q.result.close(); }; }; })`), null);
     await cdp.eval("caches.delete('j5-tiles-v1').then(() => 'ok')");
+    // 13e. 자리 고르기 (J5-062): 지도 가운데 십자를 필지 위에 맞추면 그 필지 카드, 필지 밖이면 필지 번호 없는 이 폰의 대상을 만들고 바로 기록
+    await cdp.eval("document.getElementById('load-synthetic-parcels').click(); 'ok'");
+    await go(cdp, "map");
+    await cdp.waitFor("document.querySelectorAll('#map-svg path.parcel').length === 6");
+    const PICK_AT = `(() => { const s = document.getElementById('map-svg').getBoundingClientRect(); const m = /translate\\(([-\\d.]+),([-\\d.]+)\\)/.exec(document.querySelector('#map-svg .layer-pick').getAttribute('transform') || ''); return m ? { x: s.left + Number(m[1]), y: s.top + Number(m[2]) } : null; })()`;
+    const drag = async (from, to) => {
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: from.x, y: from.y });
+      await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: from.x, y: from.y, button: "left", clickCount: 1 });
+      for (let i = 1; i <= 8; i++) await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: from.x + ((to.x - from.x) * i) / 8, y: from.y + ((to.y - from.y) * i) / 8, button: "left", buttons: 1 });
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: to.x, y: to.y, button: "left", clickCount: 1 });
+    };
+    await cdp.eval("document.getElementById('map-pick').click(); 'ok'");
+    await cdp.waitFor(`${visible("pick-bar")} && document.getElementById('map-pick').getAttribute('aria-pressed') === 'true' && document.querySelector('#map-svg .layer-pick').getAttribute('visibility') === 'visible'`);
+    assert.equal(await cdp.eval("document.getElementById('field-sheet').dataset.state"), "peek", "고르는 동안 시트는 접힌다");
+    let cross = await cdp.eval(PICK_AT);
+    const pTarget = await cdp.eval("(() => { const p = document.querySelector('#map-svg path.parcel'); const b = p.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2, pnu: p.dataset.pnu }; })()");
+    const pickBarBottom = await cdp.eval("document.getElementById('pick-bar').getBoundingClientRect().bottom");
+    assert.ok(cross.y > pickBarBottom, "십자는 막대에 가리지 않는다");
+    // 누르는 곳은 비어 있는 지도(십자 자리)에서 시작한다(필지가 위 막대 아래에 있을 수 있다). 끌기는 평행 이동이라 같은 거리만큼 끌면 필지가 십자로 온다
+    await drag(cross, { x: cross.x + (cross.x - pTarget.x), y: cross.y + (cross.y - pTarget.y) });
+    await cdp.eval("document.getElementById('pick-ok').click(); 'ok'");
+    await cdp.waitFor(`${visible("parcel-panel")} && ${visible("pick-bar")} === false`);
+    assert.equal(await cdp.eval("document.querySelector('#map-svg .layer-pick').getAttribute('visibility')"), "hidden");
+    assert.equal(await cdp.eval("document.getElementById('parcel-pnu').textContent"), pTarget.pnu, "필지 안이면 그 필지 카드");
+    await cdp.eval("document.getElementById('map-pick').click(); 'ok'");
+    await cdp.waitFor(`${visible("pick-bar")} && document.getElementById('parcel-panel').hidden`);
+    // 고르는 중에는 필지·점을 눌러도 카드가 열리지 않고 고르기가 이어진다 (리뷰 반영 PR #109)
+    const tapSel = await cdp.eval(`(() => { const top = document.getElementById('pick-bar').getBoundingClientRect().bottom + 30, bottom = document.getElementById('field-sheet').getBoundingClientRect().top - 30;
+      const s = document.getElementById('map-svg').getBoundingClientRect(); const m = /translate\\(([-\\d.]+),([-\\d.]+)\\)/.exec(document.querySelector('#map-svg .layer-pick').getAttribute('transform')); const cx = s.left + Number(m[1]), cy = s.top + Number(m[2]);
+      const p = Array.from(document.querySelectorAll('#map-svg path.parcel')).find((el) => { const b = el.getBoundingClientRect(); const x = b.left + b.width / 2, y = b.top + b.height / 2; return y > top && y < bottom && b.width > 8 && Math.hypot(x - cx, y - cy) > 60; });
+      return p ? '#map-svg path.parcel[data-pnu="' + p.dataset.pnu + '"]' : null; })()`);
+    assert.ok(tapSel, "누를 수 있는 필지가 보인다");
+    await cdp.clickRect(tapSel);
+    await new Promise((r) => setTimeout(r, 300));
+    assert.ok(await cdp.eval("document.getElementById('parcel-panel').hidden && !document.getElementById('pick-bar').hidden"), "고르는 중 누르기는 무시");
+    cross = await cdp.eval(PICK_AT);
+    for (let i = 0; i < 3; i++) await drag({ x: cross.x, y: cross.y + 150 }, { x: cross.x, y: cross.y - 150 });   // 필지 묶음에서 멀리
+    await cdp.eval("document.getElementById('pick-name').value = '  세운상가 옆 3층  '; document.getElementById('pick-ok').click(); 'ok'");
+    await cdp.waitFor(`${visible("sec-observe")} && ${txt("target-label")} === '세운상가 옆 3층'`);
+    const picked = await cdp.eval(`new Promise((res) => { const q = indexedDB.open('j5'); q.onsuccess = () => { const g = q.result.transaction('device_assets').objectStore('device_assets').getAll(); g.onsuccess = () => { res(g.result.filter((a) => a.label === '세운상가 옆 3층')); q.result.close(); }; }; })`);
+    assert.equal(picked.length, 1);
+    assert.equal(picked[0].pnu, null, "필지 밖이면 필지 번호를 채우지 않는다 (PC 에서 확인)");
+    assert.equal(picked[0].origin, "device");
+    const [plon, plat] = picked[0].location_point;
+    assert.ok(plon > 126 && plon < 128 && plat > 37 && plat < 38, "위치점은 지도 가운데의 경도·위도");
+    await cdp.eval("document.getElementById('cancel-observation').click(); 'ok'");
+    await cdp.waitFor("document.getElementById('sec-observe').hidden");
     // 14. 접근성 속성: 입력마다 label, 아이콘 버튼 aria-label, 상태 메시지 live, 제목 순서
     const a11y = await cdp.eval(`(() => {
       const unlabeled = Array.from(document.querySelectorAll('input:not([type=hidden]), select, textarea')).filter(i => !(i.labels && i.labels.length) && !i.getAttribute('aria-label') && !i.getAttribute('aria-labelledby')).map(i => i.id || i.name);
       const iconNoLabel = Array.from(document.querySelectorAll('button.icon')).filter(b => !b.getAttribute('aria-label')).map(b => b.id);
-      const live = ['observe-note', 'export-note', 'settings-note', 'seed-note', 'parcels-note', 'basemap-note', 'view-note', 'tiles-note', 'tiles-prefetch-note', 'map-note', 'sample-note'].filter(id => !document.getElementById(id).getAttribute('role') && !document.getElementById(id).getAttribute('aria-live'));
+      const live = ['observe-note', 'export-note', 'settings-note', 'seed-note', 'parcels-note', 'basemap-note', 'view-note', 'tiles-note', 'tiles-prefetch-note', 'map-note', 'sample-note', 'pick-note'].filter(id => !document.getElementById(id).getAttribute('role') && !document.getElementById(id).getAttribute('aria-live'));
       const heads = Array.from(document.querySelectorAll('h1, h2, h3')).map(h => Number(h.tagName[1]));
       let bad = false; for (let i = 1; i < heads.length; i++) if (heads[i] - heads[i - 1] > 1) bad = true;
       return { unlabeled, iconNoLabel, live, headingJump: bad, navLabel: document.querySelector('nav').getAttribute('aria-label') };

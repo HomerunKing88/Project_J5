@@ -26,7 +26,7 @@
   <h2 id="map-title" class="sr-only">현장</h2>
   <div class="field-map map-wrap">
     <svg id="map-svg" role="img" aria-label="대상 위치와 필지 경계 지도"></svg>
-    <div id="map-empty" class="map-empty"><div><strong>지도에 표시할 위치가 없습니다</strong>자료를 가져오면 대상과 필지가 여기에 그려집니다.</div></div>
+    <div id="map-empty" class="map-empty"><div><strong>지도에 표시할 위치가 없습니다</strong>자료를 가져오면 대상과 필지가 여기에 그려집니다. 설정에서 배경 지도를 켜면 지도에서 자리를 골라 바로 기록할 수 있습니다.</div></div>
     <div id="map-top" class="map-top">
       <form id="parcel-search-form" class="map-search" role="search" hidden>
         <label for="parcel-search" class="sr-only">지번으로 필지 찾기</label>
@@ -38,11 +38,19 @@
         <button id="map-fit" class="chip">전체 보기</button>
         <button id="map-zones" class="chip" aria-pressed="false" disabled>용도지역</button>
       </div>
+      <div id="pick-bar" class="pick-bar" role="group" aria-labelledby="pick-help" hidden>
+        <p id="pick-help" class="pick-help">지도를 움직여 가운데 십자를 기록할 곳에 맞춥니다. 필지 안이면 그 필지 카드가 열립니다.</p>
+        <label for="pick-name" class="sr-only">이름 (선택)</label>
+        <input id="pick-name" type="text" autocomplete="off" maxlength="60" enterkeyhint="done" placeholder="이름 (선택, 예: 세운상가 옆 3층)">
+        <div class="card-actions"><button id="pick-ok" class="primary">이 자리를 대상으로 기록</button><button id="pick-cancel" class="secondary">취소</button></div>
+        <p id="pick-note" class="note" role="status"></p>
+      </div>
       <p id="zone-legend" class="map-legend zone-legend" hidden></p>
     </div>
-    <div class="map-tools" role="group" aria-label="확대·축소">
+    <div class="map-tools" role="group" aria-label="확대·축소·자리 고르기">
       <button id="map-zoom-in" class="tool" aria-label="확대">+</button>
       <button id="map-zoom-out" class="tool" aria-label="축소">−</button>
+      <button id="map-pick" class="tool pick-tool" aria-label="자리 고르기" title="자리 고르기: 지도에서 한 곳을 골라 기록" aria-pressed="false" aria-controls="pick-bar"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="6" /><line x1="12" y1="1" x2="12" y2="7" /><line x1="12" y1="17" x2="12" y2="23" /><line x1="1" y1="12" x2="7" y2="12" /><line x1="17" y1="12" x2="23" y2="12" /></svg></button>
     </div>
   </div>
 

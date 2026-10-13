@@ -10,7 +10,7 @@ import { validateSeed, filterAssets, hasTracking, isWatchlist, TRACKING_LABEL, A
 import { validateParcels, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, attrLines, attrsSummary, ZONE_LABELS, findParcels, parcelAt, interiorPoint, priceTrend, priceTrendRow, ownershipKinds, ownershipChanges, parseFilter, hasCriteria, filterParcels, filterRowText, FILTER_LIMIT } from "./parcels.js";
 import { selectRecords, planBatches, buildPackage, hasRemainingBatches, studyIdError } from "./export.js";
 import { migrationReadiness, migrationText, persistenceText } from "./migrate.js";
-import { createNavigator, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, MODE_LABEL, MODE_SHORT } from "./ui.js";
+import { createNavigator, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, pickLabel, pickPoint, MODE_LABEL, MODE_SHORT } from "./ui.js";
 import { externalMapLinks, bboxCenter, LINK_ATTRS } from "./extmap.js";
 import { validateBasemap, LAYERS as BASEMAP_LAYERS, LAYER_LABEL as BASEMAP_LAYER_LABEL } from "./basemap.js";
 import { PROVIDERS, resolveTileConfig, prefetchPlan, padBbox, tileUrl, hasKeyLike, TILE_CACHE, PREFETCH_ZOOMS, KEY_PLACEHOLDER } from "./tiles.js";
@@ -18,12 +18,14 @@ import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
 import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummaryInfo, yearSummaryRow, yearSummaryCells, recentDeals, parcelSummaryItems } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.26";
+export const APP_VERSION = "0.2.27";
+/** 자료가 없을 때 지도가 처음 보이는 곳: 종로5가역 부근 [경도, 위도] (J5-062, 배경 지도만 켠 경우) */
+const FIELD_HOME = [127.0019, 37.5709];
 const PARCEL_CARD_YEARS = 5;   // 필지 카드의 연도별 표에 보이는 최근 연도 수 (J5-055)
 const PARCEL_CARD_DEALS = 3;   // 필지 카드의 최근 거래 수 (J5-057)
 const $ = (id) => document.getElementById(id);
 const state = { store: null, parcelFilter: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, zoneColors: false, seedLoadedAt: null, seedSource: null, openParcel: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
-                nav: null, returnFocus: null, mapSelected: null, assetFilter: "all" };
+                nav: null, returnFocus: null, mapSelected: null, assetFilter: "all", picking: false };
 
 // 대상 목록은 synthetic·private_real, 필지·배경 번들은 synthetic·real 을 쓴다 (리뷰 반영 PR #103)
 const DATA_MODE_TEXT = { synthetic: "연습용 자료", private_real: "실제 자료", real: "실제 자료" };
@@ -987,6 +989,54 @@ async function createAssetFromParcel(feature) {
   startObservation(asset);
 }
 
+// ---- 자리 고르기 (J5-062, ADR-21 의 확장): 필지 파일이 없어도 지도 가운데 십자로 한 자리를 골라 이 폰의 대상으로 만들고 바로 기록한다 ----
+// 필지가 있고 그 자리가 필지 안이면 필지 카드를 연다(필지에서 대상 만들기·기존 대상 기록). 밖이면 PNU 없이(null) 위치점만 있는 임시 대상을 만든다.
+// PC 는 assets.new.json 의 pnu 가 null 이면 '필지 미지정' pending 물건으로 받는다(데이터 사전 §2: 대상 미확인 기록에 실제 PNU 를 채우지 않는다).
+function startPick() {
+  if (!state.map) return;
+  if (state.mapSelected) clearMapSelection();
+  closeParcelPanel();
+  setSheet(false);
+  state.picking = true;
+  $("pick-bar").hidden = false;
+  $("map-pick").setAttribute("aria-pressed", "true");
+  text($("pick-note"), "", "");
+  updateMapInset();
+  mapCall((m) => m.setPick(true));
+}
+
+function endPick() {
+  state.picking = false;
+  $("pick-bar").hidden = true;
+  $("map-pick").setAttribute("aria-pressed", "false");
+  $("pick-name").value = "";
+  mapCall((m) => m.setPick(false));
+  updateMapInset();
+}
+
+async function pickHere() {
+  const c = state.map?.visibleCenter?.();
+  if (!c || !c.every(Number.isFinite)) return text($("pick-note"), "지도 가운데 자리를 읽지 못했습니다. 지도를 조금 움직인 뒤 다시 누릅니다.", "warn");
+  const pt = pickPoint(c);
+  if (!pt) return text($("pick-note"), "이 자리의 위치를 쓸 수 없습니다. 지도를 조금 움직인 뒤 다시 누릅니다.", "warn");
+  const feature = state.parcels ? parcelAt(state.parcels.features, pt) : null;
+  if (feature) {   // 필지 안: 그 필지 카드에서 필지로 대상을 만들거나 기존 대상을 기록한다
+    endPick();
+    return showParcel(feature);
+  }
+  const dataMode = (await state.store.getMeta("data_mode")) ?? "synthetic";
+  const asset = { asset_id: uuid4(), label: pickLabel($("pick-name").value), location_point: pt, data_mode: dataMode, created_at: isoWithOffset(), notes: null, pnu: null, origin: "device" };
+  try {
+    await state.store.addDeviceAsset(asset);
+  } catch (e) {
+    return text($("pick-note"), "대상을 저장하지 못했습니다: " + (e?.message || e), "bad");
+  }
+  endPick();
+  await renderAssets();
+  text($("parcel-search-note"), `${asset.label} 을 이 폰의 대상으로 만들었습니다. 필지 번호는 PC 에서 확인합니다.`, "ok");
+  startObservation(asset);
+}
+
 async function deleteDeviceAsset(asset) {
   try {
     await state.store.deleteDeviceAsset(asset.asset_id);
@@ -1010,11 +1060,15 @@ function closeParcelPanel() {
 async function initMap() {
   try {
     const { createMap } = await import("./map.js");
-    state.map = createMap($("map-svg"), { onSelect: selectOnMap, onSelectParcel: showParcel, onTileStatus });
+    // 자리 고르기 중에는 점·필지 누르기로 카드를 열지 않는다 (고르기 상태가 남지 않게, 리뷰 반영 PR #109). 고르기는 지도를 끌어 맞춘다
+    state.map = createMap($("map-svg"), { onSelect: (a) => { if (!state.picking) selectOnMap(a); }, onSelectParcel: (f) => { if (!state.picking) showParcel(f); }, onTileStatus, home: FIELD_HOME });
     $("map-zoom-in").addEventListener("click", () => mapCall((m) => m.zoomBy(2)));
     $("map-zoom-out").addEventListener("click", () => mapCall((m) => m.zoomBy(0.5)));
     $("map-fit").addEventListener("click", () => mapCall((m) => m.fit()));
     $("map-zones").addEventListener("click", toggleZoneColors);
+    $("map-pick").addEventListener("click", () => (state.picking ? endPick() : startPick()));
+    $("pick-ok").addEventListener("click", pickHere);
+    $("pick-cancel").addEventListener("click", endPick);
   } catch (e) {
     mapFailed(e);
   }
@@ -1535,8 +1589,8 @@ function updateMapInset() {
   const map = $("map-svg").getBoundingClientRect();
   if (!map.height) return;
   const sheet = $("field-sheet").getBoundingClientRect();
-  // 위 덮개는 찾기 칸·지도 버튼 줄까지. 용도지역 범례는 지도 위에 겹쳐 두고 덮개로 치지 않는다 (켜면 화면이 좁아지지 않게)
-  const tops = [$("parcel-search-form"), $("map-top").querySelector(".map-chips")].map((e) => e.getBoundingClientRect()).filter((r) => r.height > 0);
+  // 위 덮개는 찾기 칸·지도 버튼 줄·자리 고르기 막대까지. 용도지역 범례는 지도 위에 겹쳐 두고 덮개로 치지 않는다 (켜면 화면이 좁아지지 않게)
+  const tops = [$("parcel-search-form"), $("map-top").querySelector(".map-chips"), $("pick-bar")].map((e) => e.getBoundingClientRect()).filter((r) => r.height > 0);
   const top = tops.length ? Math.max(...tops.map((r) => r.bottom)) - map.top : 0;
   const bottom = sheet.left <= map.left + 1 && sheet.top < map.bottom ? map.bottom - sheet.top : 0;
   mapCall((m) => m.setInset({ top, bottom }));

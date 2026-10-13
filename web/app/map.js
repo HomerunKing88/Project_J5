@@ -13,6 +13,8 @@ import { tileZoom, tilesFor, tileRect, tileUrl } from "./tiles.js";
 export const WORLD_METERS = 40075016.686; // WGS84 적도 둘레
 export const MIN_SCALE = 256; // z0: 세계 전체 = 256px
 export const MAX_SCALE = 256 * 2 ** 22; // z22
+/** 자료가 없을 때 처음 보이는 곳(home)의 축척 (z16, 37.6° 에서 약 1.9 m/px). J5-062 */
+export const HOME_SCALE = 256 * 2 ** 16;
 export const FIT_MAX_SCALE = 256 * 2 ** 17; // 점 하나·극소 범위일 때의 기본 확대 (37.6° 에서 약 0.95 m/px)
 export const FOCUS_MAX_SCALE = 256 * 2 ** 19; // 필지 하나로 맞출 때의 상한 (약 0.24 m/px, J5-027)
 export const FIT_PAD = 40; // 전체 보기 여백(px). 라벨이 오른쪽으로 뻗는다.
@@ -124,7 +126,7 @@ export function parcelLabelVisible(wb, label, view, w, h) {
  * SVG 점 지도. svgEl 은 index.html 의 정적 <svg>. onSelect(asset) 는 점을 탭했을 때.
  * 실패(예외)는 호출자가 잡아 목록만으로 동작하게 한다.
  */
-export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}) {
+export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus, home = null } = {}) {
   if (!svgEl || svgEl.namespaceURI == null || svgEl.tagName?.toLowerCase() !== "svg") throw new Error("SVG 요소가 아님");
   const NS = svgEl.namespaceURI;
   const node = (tag, attrs = {}) => {
@@ -147,12 +149,16 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}
   const locateDot = node("circle", { class: "locate-dot", r: 6 });
   layerLocate.append(locateRing, locateDot);
   layerLocate.setAttribute("visibility", "hidden");
+  // 자리 고르기 (J5-062): 덮이지 않은 영역 가운데의 십자. 지도를 움직여 기록할 곳에 맞춘다. 탭 대상 아님
+  const layerPick = node("g", { class: "layer-pick", visibility: "hidden" });
+  layerPick.append(node("circle", { class: "pick-ring", r: 14 }), node("line", { class: "pick-line", x1: -22, y1: 0, x2: 22, y2: 0 }), node("line", { class: "pick-line", x1: 0, y1: -22, x2: 0, y2: 22 }));
+  let pickOn = false;
   const layerScale = node("g", { class: "layer-scale" });
   const scaleLine = node("line", { x1: 10, y1: 0, x2: 10, y2: 0 });
   const scaleText = node("text", { x: 10, y: 0 });
   layerScale.append(scaleLine, scaleText);
   const attribText = node("text", { class: "map-attrib", "text-anchor": "end" });
-  svgEl.replaceChildren(layerTiles, layerBase, layerRoadLabels, layerShapes, layerLabels, layerPts, layerLocate, layerScale, attribText);
+  svgEl.replaceChildren(layerTiles, layerBase, layerRoadLabels, layerShapes, layerLabels, layerPts, layerLocate, layerPick, layerScale, attribText);
 
   let view = fitView([], 320, 280);
   let size = { w: 320, h: 280 };
@@ -216,6 +222,7 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}
   const render = () => {
     renderTiles();
     const vr = visibleRect();
+    if (pickOn) layerPick.setAttribute("transform", `translate(${(vr.x + vr.w / 2).toFixed(1)},${(vr.y + vr.h / 2).toFixed(1)})`);
     attribText.setAttribute("x", vr.x + vr.w - 6); attribText.setAttribute("y", vr.y + vr.h - 6);
     if (baseCount) {
       const o = toScreen(baseOrigin, view);
@@ -453,6 +460,8 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}
     fit() {
       measure();
       const vr = visibleRect();
+      // 그릴 자료가 없으면 처음 보이는 곳(home)으로 (배경 타일만 켠 경우, J5-062). 없으면 세계 전체
+      if (!fitPoints().length && home) { view = centerAt(mercator(home), HOME_SCALE); render(); return; }
       // 보이는 영역이 낮으면(시트를 펼친 작은 화면) 여백을 줄여 점들이 너무 작게 모이지 않게 한다
       const v = fitView(fitPoints(), vr.w, vr.h, Math.min(FIT_PAD, Math.max(12, Math.min(vr.w, vr.h) * 0.12)));
       view = { scale: v.scale, tx: v.tx + vr.x, ty: v.ty + vr.y };
@@ -479,6 +488,17 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onTileStatus } = {}
       render();
     },
     getView() { return { ...view }; },
+    /** 자리 고르기의 십자를 켜고 끈다 (J5-062). */
+    setPick(on) {
+      pickOn = !!on;
+      layerPick.setAttribute("visibility", pickOn ? "visible" : "hidden");
+      render();
+    },
+    /** 덮이지 않은 영역 가운데의 경도·위도 (자리 고르기의 십자가 가리키는 곳). */
+    visibleCenter() {
+      const vr = visibleRect();
+      return unmercator(toWorld(vr.x + vr.w / 2, vr.y + vr.h / 2, view));
+    },
     destroy() {
       for (const [type, fn, opts] of listeners) svgEl.removeEventListener(type, fn, opts);
       window.removeEventListener("resize", api.resize);
