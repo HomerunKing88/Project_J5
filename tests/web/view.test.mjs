@@ -291,3 +291,64 @@ test("placeDeals: 온전한 지번은 그 필지, 가린 지번은 번지대 묶
   const other = placeDeals([{ ...doc.transactions[0], lawd_cd: "11110" }], parcels.features);
   assert.deepEqual([other.parcels.length, other.groups.length, other.outside], [0, 0, 1]);
 });
+
+// ---- 주변 사례 (J5-064) ----
+import { nearbyComps, priceForYear, median, COMP_MIN_RATIOS } from "../../web/app/view.js";
+
+const compParcel = (id, bon, prices) => ({ id, type: "Feature", geometry: null, properties: { emd_name: "가상동", emd_code: "9999900100", bon, bu: 0, mountain: false,
+  attrs: { official_land_price_krw_m2: prices.at(-1)[1], price_base_year: prices.at(-1)[0], as_of: `${prices.at(-1)[0]}-06-01` },
+  attrs_history: prices.map(([y, v], i) => ({ kind: "land_feature", as_of: `${y}-06-01`, first: i === 0, changes: i === 0 ? {} : { official_land_price_krw_m2: { from: prices[i - 1][1], to: v }, price_base_year: { from: prices[i - 1][0], to: y } } })) } });
+const compTx = (id, date, jibun, amount, plottage, extra = {}) => ({ transaction_id: id, lawd_cd: "99999", deal_ymd: date.slice(0, 4) + date.slice(5, 7), deal_date: date, emd_name: "가상동",
+  jibun, jibun_masked: jibun.includes("*"), amount_krw: amount, plottage_area_m2: plottage, building_area_m2: plottage * 3, share_deal: false, building_use: "제2종근린생활", ...extra });
+
+test("median·priceForYear: 중간값, 거래 연도 이하 기준연도의 공시지가만 (늦은 해 값으로 거슬러 쓰지 않음)", () => {
+  assert.equal(median([3, 1, 2]), 2);
+  assert.equal(median([4, 1, 2, 3]), 2.5);
+  assert.equal(median([]), null);
+  const f = compParcel("p1", 1, [[2020, 1_000_000], [2023, 1_200_000], [2025, 1_500_000]]);
+  assert.deepEqual(priceForYear(f, 2024), { price: 1_200_000, year: 2023 });
+  assert.deepEqual(priceForYear(f, 2025), { price: 1_500_000, year: 2025 });
+  assert.equal(priceForYear(f, 2019), null);
+});
+
+test("nearbyComps: 같은 시군구·동, 기간, 평당 단가 중간·범위, 거래 연도 공시지가 배율, 사례 3건부터 참고 추정", () => {
+  const fs = [compParcel("p1", 1, [[2020, 1_000_000], [2024, 1_250_000]]), compParcel("p2", 2, [[2020, 2_000_000], [2024, 2_500_000]]),
+    compParcel("p3", 3, [[2020, 500_000], [2024, 600_000]]), compParcel("p4", 4, [[2024, 800_000]])];
+  const ids = (n) => `00000000-0000-4000-8000-00000000000${n}`;
+  const txs = [
+    compTx(ids(1), "2024-05-01", "1", 2_500_000_000, 1000),   // 250만/㎡ ÷ 125만 = 2배 (2024 공시지가)
+    compTx(ids(2), "2021-03-01", "2", 5_000_000_000, 1000),   // 500만/㎡ ÷ 200만(2020) = 2.5배
+    compTx(ids(3), "2023-07-01", "3", 1_500_000_000, 1000),   // 150만/㎡ ÷ 50만(2020) = 3배
+    compTx(ids(4), "2022-01-01", "1**", 9_000_000_000, 1000),  // 번지대: 배율 없음
+    compTx(ids(5), "2024-02-01", "2", 1_000_000_000, 100, { share_deal: true }),   // 지분: 단가·배율 없음
+    compTx(ids(6), "2024-02-01", "1", 7_000_000_000, 1000, { emd_name: "다른동" }),   // 다른 동
+    compTx(ids(7), "2024-02-01", "1", 7_000_000_000, 1000, { lawd_cd: "11110" }),   // 다른 시군구
+    compTx(ids(8), "2015-02-01", "1", 7_000_000_000, 1000),   // 기간 밖
+  ];
+  const c = nearbyComps(fs[3], txs, fs, { since: "2020-10-13" });
+  assert.equal(c.count, 5, "같은 시군구·동·기간 안 5건");
+  assert.deepEqual(c.comps.map((x) => x.t.transaction_id), [ids(1), ids(5), ids(3), ids(4), ids(2)], "최근 것부터");
+  assert.equal(c.land.n, 4, "지분 거래는 단가에서 뺀다");
+  assert.equal(Math.round(c.land.median / PYEONG_M2), 3_750_000, "㎡당 150만·250만·500만·900만의 중간 375만을 평당으로");
+  assert.equal(Math.round(c.land.min / PYEONG_M2), 1_500_000);
+  assert.equal(Math.round(c.land.max / PYEONG_M2), 9_000_000);
+  assert.deepEqual(c.comps.map((x) => x.ratio === null ? null : Number(x.ratio.toFixed(2))), [2, null, 3, null, 2.5]);
+  assert.deepEqual(c.comps.map((x) => x.priceYear), [2024, null, 2020, null, 2020], "배율에 쓴 공시지가의 실제 기준연도 (2023 거래는 2020 값)");
+  assert.equal(c.floor.n, 4);
+  assert.equal(Math.round(c.floor.min / PYEONG_M2), 500_000, "연면적 평당 범위 (연면적은 대지의 3배)");
+  assert.equal(Math.round(c.floor.max / PYEONG_M2), 3_000_000);
+  assert.equal(c.ratio.n, 3);
+  assert.equal(c.ratio.median, 2.5);
+  assert.equal(c.reference.ratio, 2.5);
+  assert.equal(c.reference.price, 800_000);
+  assert.equal(Math.round(c.reference.perM2), 2_000_000, "이 필지 공시지가 80만 × 2.5배");
+  assert.equal(c.comps.find((x) => x.t.transaction_id === ids(4)).where, "가상동 1** 번지대");
+  // 사례가 모자라면 참고값을 내지 않는다
+  const few = nearbyComps(fs[3], txs.slice(0, 2), fs, { since: "2020-10-13" });
+  assert.match(few.reference.missing, new RegExp(`2건이라 참고값을 내지 않습니다 \\(${COMP_MIN_RATIOS}건부터\\)`));
+  // 이 필지의 공시지가가 없으면 참고값을 내지 않는다
+  const noPrice = nearbyComps({ id: "x", properties: { emd_name: "가상동", emd_code: "9999900100", bon: 9, bu: 0 } }, txs, fs, { since: "2020-10-13" });
+  assert.match(noPrice.reference.missing, /공시지가 자료가 없어/);
+  assert.equal(c.comps.find((x) => x.t.transaction_id === ids(1)).mine, false);
+  assert.equal(nearbyComps(fs[0], txs, fs, { since: "2020-10-13" }).comps.find((x) => x.t.transaction_id === ids(1)).mine, true, "이 필지의 거래 표시");
+});

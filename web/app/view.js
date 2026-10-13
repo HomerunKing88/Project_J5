@@ -2,7 +2,7 @@
 // 파생본은 PC 정본의 고정 버전에서 만든 읽기 전용 자료다. 폰은 표시만 하고 정본을 편집하지 않으며, 최신 여부는 파일만으로 알 수 없다.
 
 import { CHANGE_STATUS_LABEL } from "./event.js";
-import { ATTR_KIND_LABELS, attrChangeText } from "./parcels.js";
+import { ATTR_KIND_LABELS, attrChangeText, priceTrend } from "./parcels.js";
 
 export const VIEW_FORMAT = "j5view";
 export const VIEW_SCHEMA_VERSIONS = ["1.0.0"];
@@ -457,4 +457,70 @@ export function dealDetailText(t) {
   if (Number.isInteger(t?.build_year)) parts.push(`${t.build_year}년 건축`);
   if (t?.share_deal) parts.push("지분 거래");
   return parts.join(" · ");
+}
+
+// ---- 주변 사례와 가격 적정성 (J5-064) ----
+// 같은 시군구·같은 법정동의 거래를 기간 안에서 모아 평당 단가의 중간값·범위를 보이고, 지번이 온전해 필지가 정해지는 거래는
+// 그 거래 연도의 그 필지 공시지가로 "대지 ㎡당 거래가 ÷ 공시지가" 배율을 구한다. 이 필지의 공시지가에 배율 중간값을 곱한 값은 참고 추정이다
+// (사례 수·기간을 함께 적고 감정평가가 아니라고 밝힌다. AGENTS: 실거래·추정을 분리하고 근거·시점을 잇는다).
+
+/** 참고 추정을 내는 데 필요한 배율 사례 수 (데이터 사전에 없어 정한 값). */
+export const COMP_MIN_RATIOS = 3;
+/** 필지 카드에 보이는 주변 사례 수. */
+export const COMP_LIST_MAX = 5;
+
+export function median(values) {
+  const v = values.filter(Number.isFinite).slice().sort((a, b) => a - b);
+  if (!v.length) return null;
+  const m = Math.floor(v.length / 2);
+  return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
+}
+
+/** 그 연도의 공시지가(원/㎡)와 기준연도: 기준연도가 year 이하인 값 가운데 가장 늦은 것. 더 늦은 해의 값으로 거슬러 쓰지 않는다. 없으면 null. */
+export function priceForYear(feature, year) {
+  const p = feature?.properties ?? {};
+  const pts = priceTrend(p.attrs, p.attrs_history).filter((q) => Number.isInteger(q.year) && q.year <= year);
+  if (!pts.length) return null;
+  const q = pts.reduce((a, b) => (b.year > a.year || (b.year === a.year && (b.month ?? 0) >= (a.month ?? 0)) ? b : a));
+  return { price: q.price, year: q.year };
+}
+
+/** 가장 최근 기준연도의 공시지가. 없으면 null. */
+export function latestPrice(feature) {
+  return priceForYear(feature, 9999);
+}
+
+const dealYear = (t) => Number(String(t.deal_date ?? t.deal_ymd).slice(0, 4));
+
+/**
+ * 이 필지의 주변 사례. feature 의 시군구(emd_code 앞 5자리)·법정동 이름과 같은 거래만, since 이후.
+ * { comps: [{t, where, landUnit, floorUnit, ratio, priceYear, mine}], count, land: {n, median, min, max}, floor: {n, median, min, max}, ratio: {n, median}, reference }.
+ * priceYear 는 배율에 쓴 공시지가의 실제 기준연도(거래 연도와 다를 수 있다, 리뷰 반영 PR #111).
+ * landUnit·floorUnit 은 평당 원(지분 거래·면적 없음은 null). ratio 는 지번이 온전히 닿는 필지의 그 거래 연도 공시지가가 있을 때만.
+ * reference: { unit(평당 원), perM2, price, priceYear, ratio, n } 또는 { missing: 사유 }.
+ */
+export function nearbyComps(feature, transactions, features, { since = null } = {}) {
+  const p = feature?.properties ?? {};
+  const lawd = typeof p.emd_code === "string" ? p.emd_code.slice(0, 5) : null;
+  const same = dealsSince(transactions, since).filter((t) => t.emd_name === p.emd_name && (!lawd || !t.lawd_cd || t.lawd_cd === lawd)).sort(byDealDesc);
+  const comps = same.map((t) => {
+    let exact = null;
+    for (const f of features ?? []) if (jibunMatch(t, f.properties) === "exact") { exact = f; break; }
+    const pr = exact ? priceForYear(exact, dealYear(t)) : null;
+    const perM2 = !t.share_deal && Number.isFinite(t.amount_krw) && Number.isFinite(t.plottage_area_m2) && t.plottage_area_m2 > 0 ? t.amount_krw / t.plottage_area_m2 : null;
+    const ok = perM2 !== null && pr && pr.price > 0;
+    return { t, where: `${t.emd_name ?? ""} ${t.jibun ?? "지번 미공개"}${t.jibun_masked ? " 번지대" : ""}`.trim(), landUnit: unitPrice(t, "land"), floorUnit: unitPrice(t, "floor"),
+             ratio: ok ? perM2 / pr.price : null, priceYear: ok ? pr.year : null, mine: exact?.id === feature?.id };
+  });
+  const lands = comps.map((c) => c.landUnit).filter(Number.isFinite);
+  const floors = comps.map((c) => c.floorUnit).filter(Number.isFinite);
+  const ratios = comps.map((c) => c.ratio).filter(Number.isFinite);
+  const r = median(ratios);
+  const own = latestPrice(feature);
+  let reference;
+  if (ratios.length < COMP_MIN_RATIOS) reference = { missing: `공시지가와 견줄 수 있는 사례가 ${ratios.length}건이라 참고값을 내지 않습니다 (${COMP_MIN_RATIOS}건부터)` };
+  else if (!own) reference = { missing: "이 필지의 공시지가 자료가 없어 참고값을 내지 않습니다" };
+  else reference = { perM2: own.price * r, unit: own.price * r * PYEONG_M2, price: own.price, priceYear: own.year, ratio: r, n: ratios.length };
+  return { comps, count: comps.length, land: { n: lands.length, median: median(lands), min: lands.length ? Math.min(...lands) : null, max: lands.length ? Math.max(...lands) : null },
+           floor: { n: floors.length, median: median(floors), min: floors.length ? Math.min(...floors) : null, max: floors.length ? Math.max(...floors) : null }, ratio: { n: ratios.length, median: r }, reference };
 }
