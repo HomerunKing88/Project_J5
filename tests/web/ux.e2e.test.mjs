@@ -427,7 +427,9 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.deal').length"), 1, "토지 매매가 있는 필지 4-2 하나");
     assert.equal(await cdp.eval("document.querySelectorAll('#comps-chart g.chart-pt').length"), 1, "그래프도 같은 종류 (J5-067)");
     await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
-    // 켬·값·기간·종류는 이 폰에 남는다
+    // 켬·값·기간·종류는 이 폰에 남는다. 저장(IndexedDB)은 비동기라 끝난 것을 확인한 뒤 다시 연다 (CI 에서 저장 전에 다시 열려 종류가 남지 않은 적이 있다, PR #115)
+    await cdp.waitFor(`new Promise((res) => { const q = indexedDB.open('j5'); q.onsuccess = () => { const g = q.result.transaction('meta').objectStore('meta').get('deal_view');
+      g.onsuccess = () => { res(g.result?.kind === 'land' && g.result?.years === 0); q.result.close(); }; }; })`);
     await cdp.navigate(`${base}/index.html?reload=deals`);
     await cdp.waitFor(`document.querySelectorAll('#map-svg g.deal').length === 1 && ${txt("deal-count")} === '대지 평당, 토지, 거래 1건' && document.getElementById('deal-kind').value === 'land'`);
     await cdp.eval("(() => { const k = document.getElementById('deal-kind'); k.value = 'all'; k.dispatchEvent(new Event('change')); return 'ok'; })()");
