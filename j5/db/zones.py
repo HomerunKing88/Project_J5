@@ -57,6 +57,9 @@ def load_rules(path: Path) -> dict:
     comp = [_norm_entry(c) for c in doc["comparison"]]
     if any(not c or c.endswith(":") for c in core + comp):
         raise ValidationError(["법정동 이름이 비어 있다"])
+    bad = [c for c in core + comp if ":" in c and not QUALIFIED_RE.match(c)]
+    if bad:
+        raise ValidationError([f"시군구를 붙인 법정동은 '시군구 5자리:법정동' 형식이다 (예: 11140:을지로4가): {bad[:5]}"])
     overlap = sorted(set(core) & set(comp))
     if overlap:
         raise ValidationError([f"같은 법정동이 핵심과 비교 둘 다에 있다: {overlap}"])
