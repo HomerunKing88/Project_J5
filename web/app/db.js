@@ -7,6 +7,8 @@ export const DB_VERSION = 5; // v3: basemap, v4: view, v5: device_assets 스토�
 const PARCELS_KEY = "active";
 const BASEMAP_KEY = "active";
 const VIEW_KEY = "active";
+/** 앱에 든 연습용 파일에서 가져온 자료의 가져온 자리 (main.js 의 sourceText 와 같은 값). */
+export const SAMPLE_SOURCE = "bundled_synthetic";
 
 function req(r) {
   return new Promise((resolve, reject) => {
@@ -119,6 +121,25 @@ export class Store {
     const tx = this.db.transaction("parcels", "readwrite");
     tx.objectStore("parcels").delete(PARCELS_KEY);
     await done(tx);
+  }
+
+  /** 앱에 든 연습용 자료(가져온 자리가 bundled_synthetic 인 대상 목록·필지·윤곽)만 한 트랜잭션으로 지운다 (J5-061).
+   *  기록·사진·이 폰이 만든 대상·PC 자료 파일(view)·다른 파일에서 가져온 자료는 건드리지 않는다. 지운 종류를 돌려준다. */
+  async clearSample() {
+    const tx = this.db.transaction(["meta", "assets", "parcels", "basemap"], "readwrite");
+    const meta = tx.objectStore("meta");
+    const [seedSource, parcels, basemap] = await Promise.all([req(meta.get("seed_source")), req(tx.objectStore("parcels").get(PARCELS_KEY)), req(tx.objectStore("basemap").get(BASEMAP_KEY))]);
+    const cleared = { assets: false, parcels: false, basemap: false };
+    if (seedSource === SAMPLE_SOURCE) {
+      tx.objectStore("assets").clear();
+      meta.delete("seed_source");
+      meta.delete("seed_loaded_at");   // 연습용 목록에 맞춘 필지 연결(asset_ids)을 더 믿지 않게 한다
+      cleared.assets = true;
+    }
+    if (parcels?.source === SAMPLE_SOURCE) { tx.objectStore("parcels").delete(PARCELS_KEY); cleared.parcels = true; }
+    if (basemap?.source === SAMPLE_SOURCE) { tx.objectStore("basemap").delete(BASEMAP_KEY); cleared.basemap = true; }
+    await done(tx);
+    return cleared;
   }
 
   /** 배경 도형 번들을 통째로 교체한다 (한 벌만 둔다). 다른 스토어는 건드리지 않는다. */

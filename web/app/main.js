@@ -1,6 +1,6 @@
 // 앱 진입점 (R1a). 화면: 현장(지도 + 아래 시트의 대상 목록) · 기록(PC 로 보내기 + 이 폰의 기록) · 설정 (J5-054). 기록하기는 전체 화면 작업 패널(sheet)에서 한다 (J5-020).
 // 저장 형식·이벤트 바이트·해시·ZIP·IndexedDB 계약은 그대로다. 외부 통신 없음.
-import { Store } from "./db.js";
+import { SAMPLE_SOURCE, Store } from "./db.js";
 import { sniffImage, SUPPORTED } from "./sniff.js";
 import { sha256Hex } from "./hash.js";
 import { uuid4, isUuid } from "./uuid.js";
@@ -18,7 +18,7 @@ import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
 import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummaryInfo, yearSummaryRow, yearSummaryCells, recentDeals, parcelSummaryItems } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.25";
+export const APP_VERSION = "0.2.26";
 const PARCEL_CARD_YEARS = 5;   // 필지 카드의 연도별 표에 보이는 최근 연도 수 (J5-055)
 const PARCEL_CARD_DEALS = 3;   // 필지 카드의 최근 거래 수 (J5-057)
 const $ = (id) => document.getElementById(id);
@@ -288,6 +288,28 @@ async function loadSyntheticAll() {
   showFieldAfterLoad();
 }
 
+// ---- 연습용 자료 지우기 (J5-061): 앱에 든 가상 대상·필지·윤곽만 지운다. 기록·사진·PC 자료 파일·이 폰이 만든 대상은 그대로 ----
+function renderSampleItem() {
+  $("sample-item").hidden = !(state.seedSource === SAMPLE_SOURCE || state.parcelsRec?.source === SAMPLE_SOURCE || state.basemapRec?.source === SAMPLE_SOURCE);
+}
+
+async function clearSample() {
+  try {
+    const c = await state.store.clearSample();
+    if (c.parcels) applyParcels(null);
+    if (c.basemap) applyBasemap(null);
+    await renderAssets();
+    await renderRecords();
+    const parts = [c.assets && "대상 목록", c.parcels && "필지", c.basemap && "건물·도로 윤곽"].filter(Boolean);
+    if (!parts.length) return text($("sample-note"), "지울 연습용 자료가 없습니다.", "pencil");
+    const mode = await state.store.getMeta("data_mode");
+    text($("sample-note"), `연습용 자료(${parts.join("·")})를 지웠습니다. 저장한 기록은 그대로입니다.` +
+      ((mode ?? "synthetic") === "synthetic" ? " 실제 임장 기록을 남기려면 아래 작업 공간에서 자료 종류를 실제 자료로 바꾸고 저장합니다." : ""), "ok");
+  } catch (e) {
+    text($("sample-note"), "연습용 자료를 지우지 못했습니다: " + (e?.message || e), "bad");
+  }
+}
+
 async function loadSeedFile(input) {
   const file = input.files?.[0];
   if (!file) return;
@@ -308,6 +330,7 @@ async function renderAssets() {
   state.events = await state.store.listEvents();
   state.seedLoadedAt = (await state.store.getMeta("seed_loaded_at")) ?? null;
   state.seedSource = (await state.store.getMeta("seed_source")) ?? null;
+  renderSampleItem();
   if (state.parcelsRec) parcelsNote(state.parcelsRec);
   applyAssetFilterUi();
   const visible = visibleAssets();
@@ -412,6 +435,7 @@ function applyParcels(rec) {
   applyZoneColors();
   applySearchUi();
   parcelsNote(rec);
+  renderSampleItem();
   updateMapInset();
   mapCall((m) => mapNote(m.setAssets(visibleAssets())));
 }
@@ -835,6 +859,7 @@ function applyBasemap(rec) {
   updateMapInset();
   mapCall((m) => m.setBasemap(rec?.bundle ?? null));
   basemapNote(rec);
+  renderSampleItem();
   updateMapInset();
   mapCall((m) => mapNote(m.setAssets(visibleAssets())));
 }
@@ -1540,6 +1565,7 @@ async function main() {
   $("load-synthetic-basemap").addEventListener("click", loadSyntheticBasemap);
   $("basemap-file").addEventListener("change", (e) => loadBasemapFile(e.target));
   $("clear-basemap").addEventListener("click", clearBasemap);
+  $("clear-sample").addEventListener("click", clearSample);
   $("tiles-provider").addEventListener("change", updateTileFields);
   $("tiles-template").addEventListener("input", updateTileFields);
   $("tiles-save").addEventListener("click", saveTileSettings);

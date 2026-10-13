@@ -1,7 +1,7 @@
 // tiles.js (J5-024, ADR-18): 타일 설정 해석·템플릿 검사·확대 단계·화면 타일 목록·미리 받기 계획. DOM·통신 없음.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { PROVIDERS, TILE_HOSTS, resolveTileConfig, validateTemplate, maskUrl, tileUrl, tileZoom, tilesFor, tileRect, prefetchPlan, padBbox, PREFETCH_MAX_TILES } from "../../web/app/tiles.js";
+import { KEY_IN_TEMPLATE_ERROR, PROVIDERS, TILE_HOSTS, resolveTileConfig, validateTemplate, maskUrl, tileUrl, tileZoom, tilesFor, tileRect, prefetchPlan, padBbox, PREFETCH_MAX_TILES } from "../../web/app/tiles.js";
 
 test("resolveTileConfig: 미검증 제공자는 선택 불가, 키는 자리표로만, 템플릿 규칙", () => {
   assert.deepEqual(TILE_HOSTS, ["api.vworld.kr"]);
@@ -29,6 +29,14 @@ test("validateTemplate: 자리표·경로 탈출·스킴", () => {
   assert.ok(validateTemplate("//evil/{z}/{x}/{y}.png").some((e) => e.includes("//")));
   assert.ok(validateTemplate("http://api.vworld.kr/{z}/{x}/{y}.png").some((e) => e.includes("https://")));
   assert.ok(validateTemplate("./t/{z}/{x}/{y}.png\n").some((e) => e.includes("제어문자")));
+  // 인증키를 주소 칸에 넣은 경우 (J5-061, 실기기에서 있었던 실수): 키 자리에 키를 중괄호째 넣거나 그대로 넣으면 거절하고 인증키 칸을 안내한다
+  const uuid = "0A1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D";   // 가상 값
+  for (const t of [`https://api.vworld.kr/req/wmts/1.0.0/{${uuid}}/Base/{z}/{y}/{x}.png`, `https://api.vworld.kr/req/wmts/1.0.0/${uuid}/Base/{z}/{y}/{x}.png`,
+    `./t/${"a1".repeat(16)}/{z}/{x}/{y}.png`, "./t/{zoom}/{x}/{y}.png"]) {
+    assert.deepEqual(validateTemplate(t), [KEY_IN_TEMPLATE_ERROR], t);
+  }
+  assert.ok(KEY_IN_TEMPLATE_ERROR.includes("인증키 칸") && !KEY_IN_TEMPLATE_ERROR.includes(uuid));
+  assert.deepEqual(resolveTileConfig({ provider: "custom", template: `https://api.vworld.kr/req/wmts/1.0.0/{${uuid}}/Base/{z}/{y}/{x}.png` }).errors, [KEY_IN_TEMPLATE_ERROR], "자리표가 없어 인증키를 묻기 전에 주소부터 바로잡는다");
   assert.equal(maskUrl("https://api.vworld.kr/req/k%2Fey/{z}", "k/ey"), "https://api.vworld.kr/req/****/{z}");
   assert.equal(tileUrl("./t/{key}/{z}/{x}/{y}.png", 1, 2, 3), "./t/{key}/1/2/3.png", "자리표는 남는다");
   assert.equal(tileUrl("./t/{z}/{x}/{y}.png", 15, 27943, 12707), "./t/15/27943/12707.png");
