@@ -35,9 +35,9 @@
       </form>
       <div class="map-chips" role="group" aria-label="지도 보기">
         <button id="map-locate" class="chip" disabled>내 위치</button>
-        <button id="map-fit" class="chip">전체 보기</button>
+        <button id="map-fit" class="chip" aria-label="전체 보기">전체</button>
         <button id="map-zones" class="chip" aria-pressed="false" disabled>용도지역</button>
-        <button id="map-deals" class="chip" aria-pressed="false" aria-controls="deal-legend" disabled>실거래</button>
+        <button id="map-deals" class="chip" aria-pressed="false" aria-controls="deal-legend" hidden>실거래</button>
       </div>
       <div id="pick-bar" class="pick-bar" role="group" aria-labelledby="pick-help" hidden>
         <p id="pick-help" class="pick-help">지도를 움직여 가운데 십자를 기록할 곳에 맞춥니다. 필지 안이면 그 필지 카드가 열립니다.</p>
@@ -48,8 +48,8 @@
       </div>
       <p id="zone-legend" class="map-legend zone-legend" hidden></p>
       <div id="deal-legend" class="deal-legend" role="group" aria-label="실거래 보기" hidden>
-        <span class="seg" role="group" aria-label="값">
-          <button class="seg-btn" data-deal-mode="total" aria-pressed="true">총액</button><button class="seg-btn" data-deal-mode="land" aria-pressed="false">대지 평당</button><button class="seg-btn" data-deal-mode="floor" aria-pressed="false">연면적 평당</button>
+        <span class="deal-seg" role="group" aria-label="값">
+          <button class="deal-seg-btn" data-deal-mode="total" aria-pressed="true">총액</button><button class="deal-seg-btn" data-deal-mode="land" aria-pressed="false">대지 평당</button><button class="deal-seg-btn" data-deal-mode="floor" aria-pressed="false">연면적 평당</button>
         </span>
         <label for="deal-years" class="sr-only">기간</label>
         <select id="deal-years" class="deal-years"><option value="1">1년</option><option value="3">3년</option><option value="5">5년</option><option value="0">전체</option></select>

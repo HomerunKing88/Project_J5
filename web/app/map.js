@@ -143,7 +143,7 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onSelectDeal, onTil
   const layerRoadLabels = node("g", { class: "layer-road-labels" });
   const layerShapes = node("g", { class: "layer-parcels" });
   const layerLabels = node("g", { class: "layer-parcel-labels" });
-  const layerDeals = node("g", { class: "layer-deals" });       // 실거래 (J5-063): 필지·번지대 위의 종류+금액 꼬리표. 위치점 아래
+  const layerDeals = node("g", { class: "layer-deals" });       // 실거래 (J5-063): 필지·번지대 위의 종류+금액 꼬리표. 켰을 때는 가격을 보려는 것이라 위치점 위에 둔다(가린 대상은 필지 카드의 "이 필지의 대상" 에서 기록)
   const layerPts = node("g", { class: "layer-pts" });
   const layerLocate = node("g", { class: "layer-locate" });   // 현재 위치 (J5-027): 정확도 원 + 점. 저장하지 않는다
   const locateRing = node("circle", { class: "locate-ring", r: 0 });
@@ -159,7 +159,7 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onSelectDeal, onTil
   const scaleText = node("text", { x: 10, y: 0 });
   layerScale.append(scaleLine, scaleText);
   const attribText = node("text", { class: "map-attrib", "text-anchor": "end" });
-  svgEl.replaceChildren(layerTiles, layerBase, layerRoadLabels, layerShapes, layerLabels, layerDeals, layerPts, layerLocate, layerPick, layerScale, attribText);
+  svgEl.replaceChildren(layerTiles, layerBase, layerRoadLabels, layerShapes, layerLabels, layerPts, layerDeals, layerLocate, layerPick, layerScale, attribText);
 
   let view = fitView([], 320, 280);
   let size = { w: 320, h: 280 };

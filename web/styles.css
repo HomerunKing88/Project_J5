@@ -357,10 +357,10 @@ details.disclosure.quiet > summary { color: var(--pencil); font-weight: 600; }
 .deal.masked .deal-bg { stroke-dasharray: 4 3; }
 .deal.masked .deal-kind-bg { fill: var(--pencil); }
 .deal-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 8px; background: var(--sheet); border: 1px solid var(--rule); border-radius: 12px; box-shadow: var(--shadow-float); font-size: var(--t-xs); }
-.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: var(--r-pill); overflow: hidden; }
-.seg-btn { min-height: var(--touch); padding: 0 10px; border: none; background: transparent; color: var(--ink); font-size: var(--t-xs); font-weight: 700; }
-.seg-btn[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
-.deal-years { min-height: var(--touch); font-size: var(--t-xs); }
+.deal-seg { display: inline-flex; border: 1px solid var(--rule); border-radius: var(--r-pill); overflow: hidden; }
+.deal-seg-btn { min-height: var(--touch); padding: 0 10px; border: none; background: transparent; color: var(--ink); font-size: var(--t-xs); font-weight: 700; }
+.deal-seg-btn[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.deal-years { width: auto; flex: 0 0 auto; min-height: var(--touch); font-size: var(--t-xs); }
 .deal-count { color: var(--pencil); }
 .layer-pick { pointer-events: none; }   /* 십자는 누르기를 받지 않는다 */
 .pick-ring { fill: none; stroke: var(--blue); stroke-width: 2.5; }

@@ -1017,10 +1017,10 @@ async function setDealView(next) {
 function renderDeals() {
   const all = dealTxs();
   const can = all.length > 0 && state.parcelsCount > 0;
-  $("map-deals").disabled = !can;
+  $("map-deals").hidden = !can;   // 거래 자료가 없으면 감춘다 (폰 폭에서 버튼 줄이 두 줄로 넘어가 지도가 좁아지지 않게)
   const on = can && state.dealView.on;
   $("map-deals").setAttribute("aria-pressed", String(on));
-  $("deal-legend").hidden = !on;
+  if ($("deal-legend").hidden === on) { $("deal-legend").hidden = !on; updateMapInset(); }
   for (const b of document.querySelectorAll("[data-deal-mode]")) b.setAttribute("aria-pressed", String(b.dataset.dealMode === state.dealView.mode));
   $("deal-years").value = String(state.dealView.years);
   state.dealGroups = new Map();
@@ -1081,7 +1081,7 @@ async function loadSyntheticDeals() {
     state.view = await state.store.getView();
     renderViewStatus();
     renderSampleItem();
-    await setDealView({ on: true });
+    renderDeals();   // 켬은 사용자가 "실거래" 로 고른다 (꼬리표가 대상 점을 덮으므로 저절로 켜지 않는다)
   } catch (e) {
     text($("view-note"), "연습용 거래를 읽지 못했습니다: " + (e?.message || e), "bad");
   }
@@ -1694,8 +1694,8 @@ function updateMapInset() {
   const map = $("map-svg").getBoundingClientRect();
   if (!map.height) return;
   const sheet = $("field-sheet").getBoundingClientRect();
-  // 위 덮개는 찾기 칸·지도 버튼 줄·자리 고르기 막대까지. 용도지역 범례는 지도 위에 겹쳐 두고 덮개로 치지 않는다 (켜면 화면이 좁아지지 않게)
-  const tops = [$("parcel-search-form"), $("map-top").querySelector(".map-chips"), $("pick-bar")].map((e) => e.getBoundingClientRect()).filter((r) => r.height > 0);
+  // 위 덮개는 찾기 칸·지도 버튼 줄·자리 고르기 막대·실거래 보기 줄까지 (실거래 줄은 버튼이라 꼬리표가 그 아래에 있으면 누를 수 없다, J5-063). 용도지역 범례는 지도 위에 겹쳐 두고 덮개로 치지 않는다 (켜면 화면이 좁아지지 않게)
+  const tops = [$("parcel-search-form"), $("map-top").querySelector(".map-chips"), $("pick-bar"), $("deal-legend")].map((e) => e.getBoundingClientRect()).filter((r) => r.height > 0);
   const top = tops.length ? Math.max(...tops.map((r) => r.bottom)) - map.top : 0;
   const bottom = sheet.left <= map.left + 1 && sheet.top < map.bottom ? map.bottom - sheet.top : 0;
   mapCall((m) => m.setInset({ top, bottom }));
