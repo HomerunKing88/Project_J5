@@ -16,6 +16,16 @@ export function viewFromHash(hash) {
   return VIEWS.includes(name) ? name : DEFAULT_VIEW;
 }
 
+export const PICK_NAME_MAX = 60;
+
+/** 자리 고르기로 만든 대상의 이름 (J5-062): 넣은 이름(앞뒤 공백 제거, 60자까지), 없으면 "지도에서 고른 곳 (월-일 시:분)". */
+export function pickLabel(name, now = new Date()) {
+  const n = String(name ?? "").trim().slice(0, PICK_NAME_MAX);
+  if (n) return n;
+  const p2 = (v) => String(v).padStart(2, "0");
+  return `지도에서 고른 곳 (${p2(now.getMonth() + 1)}-${p2(now.getDate())} ${p2(now.getHours())}:${p2(now.getMinutes())})`;
+}
+
 /** 저장 시각(ISO)을 "오늘 14:05" / "9월 25일 14:05" 처럼 짧게. 값이 없으면 null. */
 export function shortWhen(iso, now = new Date()) {
   if (!iso) return null;

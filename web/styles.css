@@ -217,6 +217,7 @@ ul.plain li.empty { color: var(--pencil); }
 .chip:disabled { opacity: .5; }
 .map-tools { position: absolute; top: var(--s-3); right: var(--s-3); display: grid; gap: var(--s-2); }
 .map-tools .tool { width: var(--touch); }
+.pick-tool svg { display: block; margin: auto; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 .zone-legend { max-width: 100%; background: var(--sheet); padding: 6px 10px; border-radius: 10px; box-shadow: var(--shadow-float); }
 .field-sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 5; background: var(--sheet); border-radius: var(--r-sheet) var(--r-sheet) 0 0; box-shadow: var(--shadow-sheet); display: flex; flex-direction: column; max-height: 62%; transition: max-height .22s ease; }
 .field-sheet[data-state="peek"] .sheet-body { display: none; }
@@ -346,6 +347,11 @@ details.disclosure.quiet > summary { color: var(--pencil); font-weight: 600; }
 .layer-locate { pointer-events: none; }
 .locate-ring { fill: var(--blue); fill-opacity: .12; stroke: var(--blue); stroke-opacity: .5; stroke-width: 1; }
 .locate-dot { fill: var(--blue); stroke: #fff; stroke-width: 2.5; }
+/* 자리 고르기 (J5-062): 가운데 십자와 위 막대 */
+.pick-ring { fill: none; stroke: var(--blue); stroke-width: 2.5; }
+.pick-line { stroke: var(--blue); stroke-width: 2.5; }
+.pick-bar { width: 100%; max-width: 480px; display: grid; gap: var(--s-2); padding: var(--s-3); background: var(--sheet); border: 1px solid var(--rule); border-radius: 12px; box-shadow: var(--shadow-float); }
+.pick-help { margin: 0; color: var(--pencil); font-size: var(--t-xs); }
 
 /* ---- 기록·설정 화면 ---- */
 .view-page { max-width: var(--content-max); margin-inline: auto; padding: var(--s-5) var(--s-4) var(--s-6); display: grid; gap: var(--s-5); align-content: start; }

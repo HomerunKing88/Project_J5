@@ -34,14 +34,14 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     // 지도 모듈 로드 실패: map.js 요청을 막고 첫 접속 (서비스 워커가 아직 없을 때). 목록·설정은 그대로 동작하고 지도 절만 안내를 낸다.
     await cdp.send("Network.setBlockedURLs", { urls: ["*/app/map.js"] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.26')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.27')");
     await cdp.waitFor("document.getElementById('map-note').textContent.includes('지도를 그리지 못했습니다')");
     assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li').length"), 1, "지도 모듈 없이도 목록 절이 그려진다");
     const blockedLogs = cdp.errors.splice(0);
     assert.ok(blockedLogs.every((e) => e.includes("ERR_BLOCKED_BY_CLIENT") || e.includes("Failed to load resource") || e.includes("map.js")), blockedLogs.join("; "));
     await cdp.send("Network.setBlockedURLs", { urls: [] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.26')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.27')");
     await cdp.waitFor("document.getElementById('map-note').textContent === ''");
     // 설정
     await cdp.eval("document.getElementById('study-id').value = 'e2e-study'; document.getElementById('save-settings').click(); 'ok'");
@@ -586,6 +586,8 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     await cdp.clickRect("#map-zoom-in");
     await new Promise((r) => setTimeout(r, 300));
     assert.ok(tileReqs.length > reqBefore, "확대하면 다음 단계 타일을 받는다");
+    // 확대로 시작한 타일 요청이 다 닿을 때까지 기다린다(요청 수가 0.25초 동안 그대로). 부하가 크면 300ms 뒤에도 요청이 이어져 아래 '위치를 읽어도 늘지 않는다' 가 잘못 실패했다 (J5-062)
+    for (let n = -1, i = 0; i < 40 && n !== tileReqs.length; i++) { n = tileReqs.length; await new Promise((r) => setTimeout(r, 250)); }
     // 현재 위치 + 타일 켜짐 (J5-027 리뷰 반영): 화면을 옮기지 않아 현재 위치 주변 타일을 요청하지 않는다. 점·패널은 열린다
     await cdp.send("Browser.grantPermissions", { origin: base, permissions: ["geolocation"] });
     await cdp.send("Emulation.setGeolocationOverride", { latitude: 37.5705, longitude: 126.9996, accuracy: 9 });
@@ -642,7 +644,8 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.pt').length"), 0);
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg path.parcel').length"), 0);
     assert.match(await cdp.eval("document.getElementById('parcels-note').textContent"), /필지 6개/, "지도 실패해도 필지 안내는 남는다");
-    assert.equal(await cdp.eval("document.querySelectorAll('#record-list li').length"), 1, "지도 실패해도 기록 목록 유지");
+    // 기록 목록은 대상 목록 다음에 그려진다. 부하가 크면 바로 세면 0 이라 기다린다 (J5-062)
+    await cdp.waitFor("document.querySelectorAll('#record-list li').length === 1");   // 지도 실패해도 기록 목록 유지
     // 지도가 못 떠도 지번 찾기는 페이지 이동 없이 필지 패널을 연다 (J5-027 리뷰 반영)
     await cdp.eval("document.getElementById('nav-map').click(); 'ok'");
     assert.equal(await cdp.eval("document.getElementById('parcel-search-form').hidden"), false);
