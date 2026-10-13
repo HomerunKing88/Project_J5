@@ -255,12 +255,12 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onSelectDeal, onTil
       const p = toScreen(m.world, view);
       m.g.setAttribute("transform", `translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`);
     }
-    // 실거래 꼬리표: 점 위쪽에 둔다. 앞(최근)의 것과 겹치거나 화면 밖이면 감춘다
+    // 실거래 꼬리표: 점 위쪽에 둔다. 앞(최근)의 것과 겹치거나, 덮이지 않은 영역(위 버튼 줄·아래 시트 밖) 밖으로 나가면 감춘다 (리뷰 반영 PR #110: 덮개 아래에서는 읽거나 누를 수 없다)
     const placed = [];
     for (const d of deals) {
       const p = toScreen(d.world, view);
       const r = { x0: p.x - d.w / 2, y0: p.y - d.h - 6, x1: p.x + d.w / 2, y1: p.y - 6 };
-      const off = r.x1 < 0 || r.x0 > size.w || r.y1 < 0 || r.y0 > size.h;
+      const off = r.x1 < vr.x || r.x0 > vr.x + vr.w || r.y0 < vr.y || r.y1 > vr.y + vr.h;
       const vis = !off && !placed.some((q) => r.x0 < q.x1 && r.x1 > q.x0 && r.y0 < q.y1 && r.y1 > q.y0);
       if (vis) { placed.push(r); d.g.setAttribute("transform", `translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`); }
       if (vis !== d.visible) { d.visible = vis; d.g.setAttribute("visibility", vis ? "visible" : "hidden"); }
@@ -475,8 +475,10 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onSelectDeal, onTil
       // 그릴 자료가 없으면 처음 보이는 곳(home)으로 (배경 타일만 켠 경우, J5-062). 없으면 세계 전체
       if (!fitPoints().length && home) { view = centerAt(mercator(home), HOME_SCALE); render(); return; }
       // 보이는 영역이 낮으면(시트를 펼친 작은 화면) 여백을 줄여 점들이 너무 작게 모이지 않게 한다
-      const v = fitView(fitPoints(), vr.w, vr.h, Math.min(FIT_PAD, Math.max(12, Math.min(vr.w, vr.h) * 0.12)));
-      view = { scale: v.scale, tx: v.tx + vr.x, ty: v.ty + vr.y };
+      // 실거래 꼬리표가 있으면 점 위로 꼬리표 높이(30px)만큼 더 비워 맨 위 필지의 꼬리표가 덮개 밖으로 나가지 않게 한다 (J5-063)
+      const top = deals.length ? Math.min(30, vr.h / 4) : 0;
+      const v = fitView(fitPoints(), vr.w, vr.h - top, Math.min(FIT_PAD, Math.max(12, Math.min(vr.w, vr.h) * 0.12)));
+      view = { scale: v.scale, tx: v.tx + vr.x, ty: v.ty + vr.y + top };
       render();
     },
     zoomBy(factor) {

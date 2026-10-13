@@ -335,14 +335,35 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     await cdp.eval("const s = document.getElementById('deal-years'); s.value = '0'; s.dispatchEvent(new Event('change')); 'ok'");
     await cdp.waitFor(`${txt("deal-count")} === '대지 평당, 거래 9건, 번지대 1곳, 지도 밖 1건'`);
     const groupSel = '#map-svg g.deal.masked .deal-bg';
-    for (let i = 0; i < 3 && await cdp.eval("document.querySelector('#map-svg g.deal.masked').getAttribute('visibility') !== 'visible'"); i++) await cdp.clickRect("#map-zoom-in");   // 겹쳐 감춰졌으면 확대해 벌린다
+    // 앞 단계의 먼 대상(세운상가 옆 3층) 때문에 필지 묶음이 작게 모여 꼬리표가 겹친다. 필지 묶음 위에서 휠로 확대해 벌린다
+    for (let i = 0; i < 4 && await cdp.eval("document.querySelector('#map-svg g.deal.masked').getAttribute('visibility') !== 'visible'"); i++) {
+      const c = await cdp.eval("(() => { const b = document.querySelector('#map-svg path.parcel[data-pnu=\"9999900100100010001\"]').getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; })()");
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: c.x, y: c.y, deltaX: 0, deltaY: -120 });
+      await new Promise((r) => setTimeout(r, 150));
+    }
     assert.equal(await cdp.eval("document.querySelector('#map-svg g.deal.masked').getAttribute('visibility')"), "visible");
     await cdp.clickRect(groupSel);
     await cdp.waitFor(`${visible("deal-panel")} && ${txt("deal-title")} === '가상동 1-*'`);
     assert.equal(await cdp.eval("document.querySelectorAll('#deal-list li').length"), 2);
     assert.match(await cdp.eval(txt("deal-note")), /필지 2곳 가운데 어느 필지의 거래인지 확정하지 않습니다/);
     assert.ok(await cdp.eval("document.getElementById('parcel-panel').hidden"), "카드는 하나만");
-    await cdp.eval("document.getElementById('deal-close').click(); 'ok'");
+    // 펼친 시트·위 덮개 아래의 꼬리표는 보이지 않는다 (리뷰 반영 PR #110)
+    assert.equal(await cdp.eval(`(() => { const top = document.getElementById('deal-legend').getBoundingClientRect().bottom, bottom = document.getElementById('field-sheet').getBoundingClientRect().top;
+      return Array.from(document.querySelectorAll('#map-svg g.deal')).filter((g) => g.getAttribute('visibility') === 'visible').filter((g) => { const b = g.querySelector('.deal-bg').getBoundingClientRect(); return b.top < top - 1 || b.bottom > bottom + 1; }).length; })()`), 0);
+    // 지도를 끌어 보이던 꼬리표 하나를 펼친 시트 아래로 보내면 감춘다 (리뷰 반영 PR #110)
+    const under = await cdp.eval(`(() => { const sheetTop = document.getElementById('field-sheet').getBoundingClientRect().top; const top = document.getElementById('deal-legend').getBoundingClientRect().bottom;
+      const g = Array.from(document.querySelectorAll('#map-svg g.deal')).find((x) => x.getAttribute('visibility') === 'visible');
+      const b = g.querySelector('.deal-bg').getBoundingClientRect(); return { id: g.dataset.dealId, dy: sheetTop - b.top + 12, x: 12, y: top + 12 }; })()`);
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: under.x, y: under.y });
+    await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: under.x, y: under.y, button: "left", clickCount: 1 });
+    for (let i = 1; i <= 8; i++) await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: under.x, y: under.y + (under.dy * i) / 8, button: "left", buttons: 1 });
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: under.x, y: under.y + under.dy, button: "left", clickCount: 1 });
+    assert.equal(await cdp.eval(`document.querySelector('#map-svg g.deal[data-deal-id="${under.id}"]').getAttribute('visibility')`), "hidden", "시트 아래로 간 꼬리표는 감춘다");
+    // 기간을 바꿔 그 번지대 거래가 없어지면 열린 카드를 닫는다 (리뷰 반영 PR #110: 1년 안에는 1-* 거래가 없다)
+    await cdp.eval("(() => { const y = document.getElementById('deal-years'); y.value = '1'; y.dispatchEvent(new Event('change')); return 'ok'; })()");
+    await cdp.waitFor("document.getElementById('deal-panel').hidden");
+    await cdp.eval("(() => { const y = document.getElementById('deal-years'); y.value = '0'; y.dispatchEvent(new Event('change')); return 'ok'; })()");
+    await cdp.waitFor(`${txt("deal-count")} === '대지 평당, 거래 9건, 번지대 1곳, 지도 밖 1건'`);
     if (await cdp.eval("document.getElementById('field-sheet').dataset.state === 'open'")) await cdp.eval("document.getElementById('sheet-toggle').click(); 'ok'");
     await cdp.waitFor("document.getElementById('field-sheet').dataset.state === 'peek'");
     await cdp.clickRect("#map-fit");

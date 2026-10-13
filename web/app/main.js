@@ -26,7 +26,7 @@ const PARCEL_CARD_DEALS = 3;   // 필지 카드의 최근 거래 수 (J5-057)
 const $ = (id) => document.getElementById(id);
 const state = { store: null, parcelFilter: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, zoneColors: false, seedLoadedAt: null, seedSource: null, openParcel: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
                 nav: null, returnFocus: null, mapSelected: null, assetFilter: "all", picking: false,
-                dealView: { on: false, mode: "total", years: 5 }, dealGroups: new Map() };
+                dealView: { on: false, mode: "total", years: 5 }, dealGroups: new Map(), openDealKey: null };
 
 // 대상 목록은 synthetic·private_real, 필지·배경 번들은 synthetic·real 을 쓴다 (리뷰 반영 PR #103)
 const DATA_MODE_TEXT = { synthetic: "연습용 자료", private_real: "실제 자료", real: "실제 자료" };
@@ -1024,7 +1024,7 @@ function renderDeals() {
   for (const b of document.querySelectorAll("[data-deal-mode]")) b.setAttribute("aria-pressed", String(b.dataset.dealMode === state.dealView.mode));
   $("deal-years").value = String(state.dealView.years);
   state.dealGroups = new Map();
-  if (!on) { mapCall((m) => m.setDeals([])); text($("deal-count"), ""); return; }
+  if (!on) { mapCall((m) => m.setDeals([])); text($("deal-count"), ""); refreshDealPanel(); return; }
   const txs = dealsSince(all, dealSince(state.dealView.years, localDate()));
   const placed = placeDeals(txs, state.parcels?.features ?? []);
   const mode = state.dealView.mode;
@@ -1039,6 +1039,7 @@ function renderDeals() {
   }
   items.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));   // 최근 거래의 꼬리표가 겹침에서 이긴다
   mapCall((m) => m.setDeals(items));
+  refreshDealPanel();
   text($("deal-count"), `${DEAL_MODES[mode]}, 거래 ${txs.length}건` + (placed.groups.length ? `, 번지대 ${placed.groups.length}곳` : "") + (placed.outside ? `, 지도 밖 ${placed.outside}건` : ""));
 }
 
@@ -1052,19 +1053,32 @@ function selectDeal(id) {
   if (g) showDealGroup(g);
 }
 
+/** 거래·기간이 바뀌면 열린 번지대 카드를 새 묶음으로 다시 그리고, 묶음이 없어졌으면 닫는다 (리뷰 반영 PR #110: 지난 목록이 남지 않게). */
+function refreshDealPanel() {
+  if ($("deal-panel").hidden || !state.openDealKey) return;
+  const g = state.dealGroups.get(state.openDealKey);
+  if (g) fillDealGroup(g); else closeDealPanel();
+}
+
 function showDealGroup(g) {
   if (state.mapSelected) clearMapSelection();
   closeParcelPanel();
+  fillDealGroup(g);
+  $("deal-panel").hidden = false;
+  openSheet();
+}
+
+function fillDealGroup(g) {
+  state.openDealKey = g.key;
   $("deal-title").textContent = `${g.emd} ${g.jibun}`;
   text($("deal-note"), `지번 일부가 가려진 거래 ${g.txs.length}건입니다. 이 지도의 필지 ${g.features.length}곳 가운데 어느 필지의 거래인지 확정하지 않습니다.`);
   $("deal-list").replaceChildren(...g.txs.map((t) => el("li", {},
     el("span", { class: "title", text: `${t.deal_date ?? t.deal_ymd} · ${dealKind(t)} · ${fmtKrw(t.amount_krw)}` }),
     el("span", { class: "pencil small", text: dealDetailText(t) }))));
-  $("deal-panel").hidden = false;
-  openSheet();
 }
 
 function closeDealPanel() {
+  state.openDealKey = null;
   $("deal-panel").hidden = true;
 }
 
