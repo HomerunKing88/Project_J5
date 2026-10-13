@@ -1,7 +1,7 @@
 // 최소 앱 캐시 (ADR-01: 서비스 워커에는 앱 실행 파일만 캐시한다). 사진·관측·시드 파일은 캐시하지 않는다.
 // 버전을 올리면 이전 캐시를 지운다. 네트워크 없이도 아래 파일로 앱이 뜬다.
 const CACHE_PREFIX = "j5-app-";
-const CACHE = CACHE_PREFIX + "v0.2.24"; // 캐시한 앱 파일이 바뀌면 올린다 (J5-057: 필지 카드의 최근 거래)
+const CACHE = CACHE_PREFIX + "v0.2.25"; // 캐시한 앱 파일이 바뀌면 올린다 (J5-059: 넘겨받은 응답을 탐색에 돌려주지 않음)
 const APP_FILES = [
   "./",
   "./index.html",
@@ -104,6 +104,13 @@ self.addEventListener("message", (e) => {
   }
 });
 
+// 배포 주소(ADR-24, Cloudflare Pages)는 ./index.html 을 ./ 로 넘긴다. 설치 때 받은 그 응답은 "넘겨받음" 표시가 붙어 있어
+// 탐색 요청에 그대로 돌려주면 브라우저가 페이지를 열지 않는다. 표시가 있으면 같은 본문·머리글로 새 응답을 만든다.
+function unredirected(res) {
+  if (!res.redirected) return res;
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers: res.headers });
+}
+
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== "GET") return;
@@ -115,5 +122,5 @@ self.addEventListener("fetch", (e) => {
   if (!sameOrigin) return;
   const path = url.pathname.replace(/^.*\//, "./").replace(/^\.\/app\//, "./app/");
   // 앱 파일만 캐시 우선. 그 밖(시드·데이터 등)은 네트워크로 보내고 캐시하지 않는다.
-  e.respondWith(caches.match(e.request).then((hit) => hit || fetch(e.request)));
+  e.respondWith(caches.match(e.request).then((hit) => (hit ? unredirected(hit) : fetch(e.request))));
 });
