@@ -444,6 +444,51 @@ test("주변 사례 추이: 점(대지 평당)·공시지가 계단선(평당 �
   assert.equal(compsChartData(nearbyComps(mine, [txs[2], txs[3]], [mine]), mine), null, "대지 평당이 있는 사례가 없으면 그래프 없음");
 });
 
+// ---- 같은 동 연도별 시세 (J5-071) ----
+import { compsByYear, TREND_MIN_CASES } from "../../web/app/view.js";
+
+test("연도별 시세: 달력 연도별 대지 평당 중간값·거래 수·수집 개월, 사례가 충분한 해끼리만 변동", () => {
+  assert.equal(TREND_MIN_CASES, 3);
+  const mine = compParcel("p1", 1, [[2019, 1_000_000]]);
+  const T2 = (n, date, unit, extra = {}) => compTx(ID(n), date, "9", unit * 100, 100 * PYEONG_M2, extra);   // 대지 100평
+  const deals = [T2(1, "2021-02-01", 10e6), T2(2, "2021-05-01", 12e6), T2(3, "2021-09-01", 14e6),
+    T2(4, "2022-04-01", 20e6), T2(5, "2022-06-01", 9e6, { share_deal: true }),
+    T2(6, "2024-01-10", 11e6), T2(7, "2024-03-10", 13e6), T2(8, "2024-07-10", 15e6), T2(9, "2024-08-10", 17e6),
+    T2(10, "2026-02-01", 30e6), { ...T2(11, "2026-03-01", 1e6), plottage_area_m2: null }];
+  const txDoc = { coverage: [2021, 2022, 2023, 2024, 2025].map((y) => ({ lawd_cd: "99999", year: y, months_complete: 12, months_any: 12, kind_months: { nrg: 12, sh: 12, land: y === 2022 ? 3 : 12 } }))
+    .concat([{ lawd_cd: "99999", year: 2026, months_complete: 9, months_any: 9, kind_months: { nrg: 9 } }, { lawd_cd: "11110", year: 2023, months_complete: 1, months_any: 1 }]) };
+  const c = nearbyComps(mine, deals, [mine], { since: "2021-01-01" });
+  const d = compsByYear(c, txDoc, mine, { from: 2021, today: "2026-10-13" });
+  assert.deepEqual(d.years.map((r) => r.year), [2021, 2022, 2023, 2024, 2025, 2026], "첫해부터 오늘의 해까지, 거래 없는 해도 줄이 있다");
+  assert.deepEqual(d.years.map((r) => r.count), [3, 2, 0, 4, 0, 2], "거래 수는 지분·면적 없음도 센다");
+  assert.deepEqual(d.years.map((r) => r.n), [3, 1, 0, 4, 0, 1], "대지 평당 사례는 지분·면적 없음을 뺀다");
+  const near = (a, b) => Math.abs(a - b) < 1e-3;
+  assert.ok(near(d.years[0].median, 12e6) && near(d.years[3].median, 14e6) && near(d.years[3].min, 11e6) && near(d.years[3].max, 17e6));
+  assert.equal(d.years[2].median, null);
+  assert.deepEqual(d.years.map((r) => r.months), [12, 12, 12, 12, 12, 9], "이 시군구의 수집 개월만 (다른 시군구 줄은 보지 않는다)");
+  assert.deepEqual(d.years.map((r) => r.kinds), ["", "상업·업무 12 · 단독·다가구 12 · 토지 3개월", "", "", "", "상업·업무만"], "모든 종류일 때 일부 종류만 받은 해의 메모");
+  assert.deepEqual(d.years.map((r) => r.partial), [false, false, false, false, false, true], "오늘의 해는 오늘까지");
+  assert.deepEqual(d.years.map((r) => r.counted), Array(6).fill("counted"), "받은 달이 있거나 거래가 있으면 센 값 (2023 년 0 건은 받은 해의 0 건)");
+  assert.equal(d.change.from.year, 2021, "사례 3건 이상인 가장 이른 해");
+  assert.equal(d.change.to.year, 2024, "2026 년은 1건이라 최근 해가 아니다");
+  assert.ok(near(d.change.pct, ((14e6 - 12e6) / 12e6) * 100));
+  const land = compsByYear(c, txDoc, mine, { from: 2021, today: "2026-10-13", kind: "land" });
+  assert.deepEqual(land.years.map((r) => r.months), [12, 3, 12, 12, 12, 0], "종류를 고르면 그 종류의 수집 개월");
+  assert.deepEqual(land.years.map((r) => r.kinds), ["", "", "", "", "", ""]);
+  const one = compsByYear(nearbyComps(mine, deals.slice(0, 5), [mine]), txDoc, mine, { today: "2022-12-31" });
+  assert.deepEqual(one.years.map((r) => r.year), [2021, 2022], "첫해를 주지 않으면 가장 이른 거래의 해");
+  assert.match(one.change.missing, /^대지 평당 사례가 3건 이상인 해가 1개라 시작·최근 변동을 적지 않습니다/);
+  const noCov = compsByYear(c, {}, mine, { from: 2021, today: "2026-10-13" });
+  assert.ok(noCov.years.every((r) => r.months === null), "수집 현황이 없는 파일이면 모름");
+  assert.deepEqual(noCov.years.map((r) => r.counted), ["counted", "counted", "unknown", "counted", "unknown", "counted"], "리뷰 반영(PR #118): 거래가 없고 수집 현황도 없으면 0 건이 아니라 모름");
+  const missingYear = compsByYear(c, { coverage: [] }, mine, { from: 2021, today: "2026-10-13" });
+  assert.ok(missingYear.years.every((r) => r.months === 0), "수집 현황에 그해가 없으면 받지 않은 해");
+  assert.deepEqual(missingYear.years.map((r) => r.counted), ["counted", "counted", "not_collected", "counted", "not_collected", "counted"], "받지 않았고 거래도 없는 해는 미수집");
+  assert.equal(compsByYear(nearbyComps(mine, [], [mine]), txDoc, mine, { today: "2026-10-13" }), null, "거래가 없으면 없음");
+  const early = compsByYear(nearbyComps(mine, deals, [mine]), txDoc, mine, { from: 2023, today: "2026-10-13" });
+  assert.equal(early.years[0].year, 2021, "주어진 첫해보다 이른 거래가 있으면 그 해부터 (빠뜨리지 않는다)");
+});
+
 // ---- 여러 시군구의 범위 규칙 (J5-068): PC j5.db.zones.classify 와 같은 진리표 ----
 import { zoneOfRule } from "../../web/app/view.js";
 

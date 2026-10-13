@@ -135,9 +135,24 @@
               <table id="comps-chart-table" class="chart-table"><thead><tr><th scope="col">계약일</th><th scope="col">종류</th><th scope="col">대지 평당</th><th scope="col">지번</th></tr></thead><tbody></tbody></table>
             </details>
           </figure>
+          <figure id="comps-years-wrap" class="comps-chart" aria-labelledby="comps-years-h" hidden>
+            <h5 id="comps-years-h" class="sub-title">연도별 시세 (같은 동)</h5>
+            <p class="comps-scope"><span id="comps-years-scope" class="pencil small"></span><label for="comps-trend-mode" class="sr-only">연도별 막대의 값</label><select id="comps-trend-mode" class="deal-years"><option value="price">대지 평당</option><option value="count">거래 수</option></select></p>
+            <p id="comps-trend-summary" class="note" role="status"></p>
+            <svg id="comps-years-chart" class="chart" role="group" aria-labelledby="comps-years-title"></svg>
+            <figcaption>
+              <span id="comps-years-title" class="sr-only"></span>
+              <span class="chart-legend"><span class="chart-key"><span class="key-bar" aria-hidden="true"></span><span id="comps-years-key"></span></span><span class="chart-key"><span class="key-bar few" aria-hidden="true"></span><span id="comps-years-few"></span></span></span>
+              <span id="comps-years-note" class="pencil small" role="status"></span>
+            </figcaption>
+            <details class="disclosure quiet">
+              <summary>연도별 값 표</summary>
+              <table id="comps-years-table" class="chart-table"><thead><tr><th scope="col">연도</th><th scope="col">거래</th><th scope="col">대지 평당 중간 (사례)</th><th scope="col">수집</th></tr></thead><tbody></tbody></table>
+            </details>
+          </figure>
           <p id="comps-reference" class="note" role="status"></p>
           <ul id="comps-list" class="rows deal-list"></ul>
-          <p class="pencil small">실거래 신고 자료에서 계산한 단가와 배율이며 감정평가가 아닙니다. 지분 거래는 단가에서 뺍니다. 기간은 지도의 실거래 기간과 같습니다.</p>
+          <p class="pencil small">실거래 신고 자료에서 계산한 단가와 배율이며 감정평가가 아닙니다. 지분 거래는 단가에서 뺍니다. 기간은 지도의 실거래 기간과 같고, 연도별 시세는 기간이 시작하는 해의 1월부터 셉니다.</p>
         </section>
         <details id="parcel-price" class="disclosure quiet" hidden>
           <summary>공시지가가 바뀐 지점</summary>

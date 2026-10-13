@@ -26,7 +26,7 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
       const origAdd = IDBObjectStore.prototype.add;
       IDBObjectStore.prototype.add = function (v, k) { if (this.name === 'events' && window.__failSave) throw new DOMException('저장 공간 부족 (e2e)', 'QuotaExceededError'); return origAdd.call(this, v, k); };` });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor(`${txt("status-line")}.includes('앱 0.2.33')`);
+    await cdp.waitFor(`${txt("status-line")}.includes('앱 0.2.34')`);
 
     // 1. 처음 실행: 현장 화면, 시트가 펼쳐져 시작하기(PC 자료 파일·연습용 자료)가 보인다, 기술 용어 없음
     assert.ok(await cdp.eval(visible("view-map")) && await cdp.eval("document.getElementById('view-records').hidden"), "첫 화면은 현장");
@@ -413,6 +413,30 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     await cdp.clickRect("#comps-chart g.chart-pt:last-of-type .hit");
     await cdp.waitFor("document.querySelector('#comps-chart g.chart-pt.on') !== null");
     assert.match(await cdp.eval(txt("comps-chart-note")), /^\d{4}-\d{2}-\d{2} · \S+ · 대지 평당 [0-9,.억만]+\/평 · 가상동 /, "누른 점의 날짜·종류·대지 평당·지번");
+    // 같은 동 연도별 시세 (J5-071): 2019년(가장 이른 거래)부터 올해까지 막대 하나씩, 연습용 거래는 해마다 대지 평당 사례가 3건 미만이라 변동을 적지 않고 막대는 테두리만
+    const thisYear = Number(today().slice(0, 4)), nYears = thisYear - 2019 + 1;
+    assert.ok(await cdp.eval(visible("comps-years-wrap")));
+    assert.equal(await cdp.eval(txt("comps-years-scope")), `가상동, 2019~${thisYear}년 (${thisYear}년은 오늘까지)`);
+    assert.equal(await cdp.eval("document.querySelectorAll('#comps-years-chart g.chart-bar').length"), nYears, "거래가 없는 해도 칸이 있다");
+    assert.equal(await cdp.eval("document.querySelectorAll('#comps-years-chart g.chart-bar.few').length"), nYears, "대지 평당 사례 3건 미만인 해는 테두리만");
+    assert.match(await cdp.eval(txt("comps-trend-summary")), /^대지 평당 사례가 3건 이상인 해가 0개라 시작·최근 변동을 적지 않습니다/);
+    assert.equal(await cdp.eval("document.querySelectorAll('#comps-years-table tbody tr').length"), nYears);
+    assert.deepEqual(JSON.parse(await cdp.eval("JSON.stringify(Array.from(document.querySelectorAll('#comps-years-table tbody tr:last-child td'), (x) => x.textContent))")).map((v, k) => (k === 2 ? v.replace(/^[0-9,.억만]+\/평/, "_") : v)),
+      ["2019", "1건", "_ (1건)", "수집 12/12개월"], "오래된 해가 표의 끝");
+    assert.equal(await cdp.eval("document.querySelectorAll('#comps-years-chart [style]').length"), 0, "SVG 에 style 속성 없음 (CSP)");
+    await cdp.clickRect("#comps-years-chart g.chart-bar[data-year='2024'] .hit");
+    await cdp.waitFor("document.querySelector('#comps-years-chart g.chart-bar.on') !== null");
+    assert.match(await cdp.eval(txt("comps-years-note")), /^2024년 · 거래 3건 · 대지 평당 중간 [0-9,.억만]+\/평 \(2건, [0-9,.억만]+\/평~[0-9,.억만]+\/평\) · 수집 12\/12개월$/, "지분 거래는 거래 수에 들고 단가에서 빠진다");
+    await cdp.eval("(() => { const m = document.getElementById('comps-trend-mode'); m.value = 'count'; m.dispatchEvent(new Event('change')); return 'ok'; })()");
+    await cdp.waitFor(`${txt("comps-years-key")} === '그해 거래 수'`);
+    assert.equal(await cdp.eval("document.querySelectorAll('#comps-years-chart g.chart-bar.few').length"), thisYear - 2025, "거래 수는 덜 받은 해·올해만 테두리 (연습용 거래는 2025년까지 받았다)");
+    assert.equal(await cdp.eval("document.querySelectorAll('#comps-years-chart g.chart-bar rect.bar').length"), 7, "2019~2025년은 해마다 거래가 있고 받지 않은 해에는 막대가 없다");
+    assert.deepEqual(JSON.parse(await cdp.eval("JSON.stringify(Array.from(document.querySelectorAll('#comps-years-table tbody tr:first-child td'), (x) => x.textContent))")).slice(1),
+      ["미수집", "사례 없음", "미수집"], "리뷰 반영(PR #118): 받지 않은 올해는 거래 0건이 아니라 미수집");
+    await cdp.clickRect(`#comps-years-chart g.chart-bar[data-year='${thisYear}'] .hit`);
+    await cdp.waitFor(`${txt("comps-years-note")}.startsWith('${thisYear}년 (오늘까지) · 거래 미수집 · ')`);
+    await cdp.eval("(() => { const m = document.getElementById('comps-trend-mode'); m.value = 'price'; m.dispatchEvent(new Event('change')); return 'ok'; })()");
+    await cdp.waitFor(`${txt("comps-years-key")} === '그해 대지 평당 중간값'`);
     await cdp.eval("(() => { const y = document.getElementById('comps-years'); y.value = '3'; y.dispatchEvent(new Event('change')); return 'ok'; })()");
     await cdp.waitFor(`document.querySelector('#comps-facts li .v').textContent === '${expectDeals(3).n}건' && document.getElementById('deal-years').value === '3'`);   // 지도 실거래 기간도 같이
     await cdp.eval("(() => { const y = document.getElementById('comps-years'); y.value = '0'; y.dispatchEvent(new Event('change')); return 'ok'; })()");
@@ -426,6 +450,8 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     assert.equal(await cdp.eval(txt("deal-count")), "대지 평당, 토지, 거래 1건");
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.deal').length"), 1, "토지 매매가 있는 필지 4-2 하나");
     assert.equal(await cdp.eval("document.querySelectorAll('#comps-chart g.chart-pt').length"), 1, "그래프도 같은 종류 (J5-067)");
+    assert.match(await cdp.eval(txt("comps-years-scope")), /, 토지$/, "연도별 시세도 같은 종류 (J5-071)");
+    assert.equal(await cdp.eval("document.querySelectorAll('#comps-years-chart g.chart-bar').length"), thisYear - 2020 + 1, "토지 거래는 2020년 1건");
     await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
     // 켬·값·기간·종류는 이 폰에 남는다. 저장(IndexedDB)은 비동기라 끝난 것을 확인한 뒤 다시 연다 (CI 에서 저장 전에 다시 열려 종류가 남지 않은 적이 있다, PR #115)
     await cdp.waitFor(`new Promise((res) => { const q = indexedDB.open('j5'); q.onsuccess = () => { const g = q.result.transaction('meta').objectStore('meta').get('deal_view');
