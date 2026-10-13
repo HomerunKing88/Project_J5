@@ -166,12 +166,17 @@ def transactions_for_projection(db: Db, *, generated_at: str, study_id: str, sou
     if not db._has_table("zone_rules") or current_rules(db) is None:
         return None
     rows = db.conn.execute(
-        "SELECT t.*, l.asset_id AS linked_asset_id, l.status AS link_state, l.basis_kind FROM transactions t"
+        "SELECT t.*, l.asset_id AS linked_asset_id, l.status AS link_state, l.basis_kind, json_extract(o.content_json, '$.jimok') AS jimok_raw FROM transactions t"
         " LEFT JOIN transaction_links l ON l.transaction_id = t.transaction_id AND l.status <> 'withdrawn'"
+        " LEFT JOIN transaction_observations o ON o.observation_id = t.latest_observation_id"
         " WHERE t.zone IN ('core', 'comparison') AND t.cancel_status <> 'cancelled' ORDER BY t.deal_ymd, t.emd_name, t.jibun_raw, t.ordinal").fetchall()
+    from j5.collect.rt import kind_of_provider  # 순환 import 방지
     items = []
     for t in rows:
-        items.append({"transaction_id": t["transaction_id"], "zone": t["zone"], "lawd_cd": t["lawd_cd"], "deal_ymd": t["deal_ymd"], "deal_date": t["deal_date"],
+        # J5-065: 수집 종류(nrg 상업·업무용·sh 단독·다가구·land 토지)와 토지 거래의 지목(제공자 jimok 그대로, 없으면 null)
+        kind = kind_of_provider(t["provider"])
+        jimok = t["jimok_raw"].strip() if kind is not None and kind.name == "land" and isinstance(t["jimok_raw"], str) and t["jimok_raw"].strip() else None
+        items.append({"transaction_id": t["transaction_id"], "deal_kind": kind.name if kind else None, "land_category": jimok, "zone": t["zone"], "lawd_cd": t["lawd_cd"], "deal_ymd": t["deal_ymd"], "deal_date": t["deal_date"],
                       "emd_name": t["emd_name"], "jibun": t["jibun_raw"], "jibun_masked": bool(t["jibun_masked"]), "building_kind": t["building_kind"],
                       "building_use": t["building_use_raw"], "land_use": t["land_use_raw"], "building_area_m2": t["building_area_m2"], "plottage_area_m2": t["plottage_area_m2"],
                       "build_year": t["build_year"], "amount_krw": t["amount_krw"], "missing_reasons": json.loads(t["missing_reasons_json"]), "share_deal": bool(t["share_deal"]),

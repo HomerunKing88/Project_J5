@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from j5.collect.rt import KINDS as RT_KINDS
 from j5.db.parcels import parcels_bundle_from_db
 from j5.parcels.convert import MAX_FEATURES as PARCELS_PHONE_LIMIT
 from j5.db.store import Db
@@ -267,6 +268,12 @@ def _verify_tx_extras(tx: dict) -> None:
             ok = False
             break
         seen.add((c["lawd_cd"], c["year"]))
+        # J5-065: 종류마다 그해 완전히 받은 개월 수 (없으면 이전 형식). 종류를 가리지 않은 개월 수보다 클 수 없다
+        km = c.get("kind_months")
+        if km is not None and not (isinstance(km, dict) and all(k in RT_KINDS and isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= c["months_complete"]
+                                                                for k, v in km.items())):
+            ok = False
+            break
     if not ok:
         raise ProjectionError("verify_transactions_coverage", "transactions.json 의 coverage 형식이 맞지 않는다 (시군구 5자리·연도·수집 개월 0~12, 완전 ≤ 전체, 중복 없음)")
 
@@ -349,6 +356,8 @@ def verify_projection_dir(out: Path, *, expected_version: int | None = None, exp
         for t in tx["transactions"]:
             if t.get("zone") not in ("core", "comparison") or t.get("transaction_id") is None:
                 raise ProjectionError("verify_transaction_zone", "범위 밖 거래 또는 ID 없는 거래가 파생본에 있다")
+            if t.get("deal_kind") is not None and t["deal_kind"] not in RT_KINDS:
+                raise ProjectionError("verify_transaction_kind", f"거래 {t['transaction_id']} 의 deal_kind {t['deal_kind']!r} 를 모른다")
             if t.get("asset_id") is not None and t["asset_id"] not in ids:
                 raise ProjectionError("verify_transaction_link", f"거래 {t['transaction_id']} 의 연결 물건이 물건 목록에 없다")
     if expected_counts is not None:

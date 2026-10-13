@@ -26,7 +26,7 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
       const origAdd = IDBObjectStore.prototype.add;
       IDBObjectStore.prototype.add = function (v, k) { if (this.name === 'events' && window.__failSave) throw new DOMException('저장 공간 부족 (e2e)', 'QuotaExceededError'); return origAdd.call(this, v, k); };` });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor(`${txt("status-line")}.includes('앱 0.2.29')`);
+    await cdp.waitFor(`${txt("status-line")}.includes('앱 0.2.30')`);
 
     // 1. 처음 실행: 현장 화면, 시트가 펼쳐져 시작하기(PC 자료 파일·연습용 자료)가 보인다, 기술 용어 없음
     assert.ok(await cdp.eval(visible("view-map")) && await cdp.eval("document.getElementById('view-records').hidden"), "첫 화면은 현장");
@@ -339,7 +339,7 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     await cdp.waitFor(`${txt("deal-count")}.startsWith('대지 평당')`);
     assert.match(await cdp.eval("document.querySelector('#map-svg g.deal[data-deal-id^=\"p:9999900100100020000\"] .deal-value').textContent"), /^1\.9억\/평$|만\/평$/, "대지 평당 단가");
     await cdp.eval("const s = document.getElementById('deal-years'); s.value = '0'; s.dispatchEvent(new Event('change')); 'ok'");
-    await cdp.waitFor(`${txt("deal-count")} === '대지 평당, 거래 9건, 번지대 1곳, 지도 밖 1건'`);   // 전체 기간은 날짜와 무관
+    await cdp.waitFor(`${txt("deal-count")} === '대지 평당, 거래 11건, 번지대 1곳, 지도 밖 1건'`);   // 전체 기간은 날짜와 무관
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg g.deal.masked').length"), 1, "번지대는 점선 꼬리표 하나");
     const groupSel = '#map-svg g.deal.masked .deal-bg';
     // 앞 단계의 먼 대상(세운상가 옆 3층) 때문에 필지 묶음이 작게 모여 꼬리표가 겹친다. 필지 묶음 위에서 휠로 확대해 벌린다
@@ -370,7 +370,7 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     await cdp.eval("(() => { const y = document.getElementById('deal-years'); y.value = '1'; y.dispatchEvent(new Event('change')); return 'ok'; })()");
     await cdp.waitFor("document.getElementById('deal-panel').hidden");
     await cdp.eval("(() => { const y = document.getElementById('deal-years'); y.value = '0'; y.dispatchEvent(new Event('change')); return 'ok'; })()");
-    await cdp.waitFor(`${txt("deal-count")} === '대지 평당, 거래 9건, 번지대 1곳, 지도 밖 1건'`);   // 전체 기간은 날짜와 무관
+    await cdp.waitFor(`${txt("deal-count")} === '대지 평당, 거래 11건, 번지대 1곳, 지도 밖 1건'`);   // 전체 기간은 날짜와 무관
     if (await cdp.eval("document.getElementById('field-sheet').dataset.state === 'open'")) await cdp.eval("document.getElementById('sheet-toggle').click(); 'ok'");
     await cdp.waitFor("document.getElementById('field-sheet').dataset.state === 'peek'");
     await cdp.clickRect("#map-fit");
@@ -385,19 +385,19 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     assert.ok(await cdp.eval("document.getElementById('deal-panel').hidden"));
     // 주변 사례 (J5-064): 같은 동의 거래 수·평당 단가, 연습용 필지에는 공시지가가 없어 참고 추정을 내지 않는다. 기간은 지도 실거래와 같다
     assert.ok(await cdp.eval(visible("parcel-comps")));
-    assert.equal(await cdp.eval("document.querySelector('#comps-facts li .v').textContent"), "9건", "전체 기간의 가상동 거래 9건");
-    assert.match(await cdp.eval("document.querySelectorAll('#comps-facts li')[1].textContent"), /^대지 평당중간 [0-9,.억만]+\/평 \([0-9,.억만]+\/평~[0-9,.억만]+\/평, 8건\)$/, "지분 거래 1건은 단가에서 뺀다");
+    assert.equal(await cdp.eval("document.querySelector('#comps-facts li .v').textContent"), "11건", "전체 기간의 가상동 거래 11건 (토지·단독·다가구 포함)");
+    assert.match(await cdp.eval("document.querySelectorAll('#comps-facts li')[1].textContent"), /^대지 평당중간 [0-9,.억만]+\/평 \([0-9,.억만]+\/평~[0-9,.억만]+\/평, 10건\)$/, "지분 거래 1건은 단가에서 뺀다 (토지 거래는 토지 면적으로 든다)");
     assert.match(await cdp.eval(txt("comps-reference")), /견줄 수 있는 사례가 0건이라 참고값을 내지 않습니다/);
-    assert.match(await cdp.eval("document.querySelectorAll('#comps-facts li')[2].textContent"), /^연면적 평당중간 [0-9,.억만]+\/평 \([0-9,.억만]+\/평~[0-9,.억만]+\/평, 8건\)$/, "연면적 평당도 범위");
+    assert.match(await cdp.eval("document.querySelectorAll('#comps-facts li')[2].textContent"), /^연면적 평당중간 [0-9,.억만]+\/평 \([0-9,.억만]+\/평~[0-9,.억만]+\/평, 9건\)$/, "연면적 평당도 범위 (토지 거래는 빠진다)");
     assert.equal(await cdp.eval("document.querySelectorAll('#comps-list li').length"), 5);
     await cdp.eval("(() => { const y = document.getElementById('comps-years'); y.value = '3'; y.dispatchEvent(new Event('change')); return 'ok'; })()");
     await cdp.waitFor(`document.querySelector('#comps-facts li .v').textContent === '${expectDeals(3).n}건' && document.getElementById('deal-years').value === '3'`);   // 지도 실거래 기간도 같이
     await cdp.eval("(() => { const y = document.getElementById('comps-years'); y.value = '0'; y.dispatchEvent(new Event('change')); return 'ok'; })()");
-    await cdp.waitFor("document.querySelector('#comps-facts li .v').textContent === '9건'");
+    await cdp.waitFor("document.querySelector('#comps-facts li .v').textContent === '11건'");
     await cdp.eval("document.getElementById('parcel-close').click(); 'ok'");
     // 켬·값·기간은 이 폰에 남는다
     await cdp.navigate(`${base}/index.html?reload=deals`);
-    await cdp.waitFor(`document.querySelectorAll('#map-svg g.deal').length === 5 && ${txt("deal-count")}.startsWith('대지 평당, 거래 9건')`);
+    await cdp.waitFor(`document.querySelectorAll('#map-svg g.deal').length === 5 && ${txt("deal-count")}.startsWith('대지 평당, 거래 11건')`);
     await cdp.eval("document.getElementById('map-deals').click(); 'ok'");
     await cdp.waitFor("document.querySelectorAll('#map-svg g.deal').length === 0 && document.getElementById('deal-legend').hidden");
     // 거래 파일은 있으나 거래가 0건(수집했고 거래 없음)이면 주변 사례를 감추지 않고 0건으로 보인다 (리뷰 반영 PR #111)

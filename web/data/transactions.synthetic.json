@@ -4,7 +4,7 @@
  "study_id": null,
  "source_dataset_version": null,
  "generated_at": "2026-10-13T00:00:00Z",
- "note": "연습용 가상 거래 (J5-063). 실제 거래가 아니다.",
+ "note": "연습용 가상 거래 (J5-063, 종류 J5-065). 실제 거래가 아니다.",
  "zone_rule": {
   "version": 1,
   "core": [
@@ -18,46 +18,81 @@
    "lawd_cd": "99999",
    "year": 2019,
    "months_complete": 12,
-   "months_any": 12
+   "months_any": 12,
+   "kind_months": {
+    "nrg": 12,
+    "sh": 12,
+    "land": 12
+   }
   },
   {
    "lawd_cd": "99999",
    "year": 2020,
    "months_complete": 12,
-   "months_any": 12
+   "months_any": 12,
+   "kind_months": {
+    "nrg": 12,
+    "sh": 12,
+    "land": 12
+   }
   },
   {
    "lawd_cd": "99999",
    "year": 2021,
    "months_complete": 12,
-   "months_any": 12
+   "months_any": 12,
+   "kind_months": {
+    "nrg": 12,
+    "sh": 12,
+    "land": 12
+   }
   },
   {
    "lawd_cd": "99999",
    "year": 2022,
    "months_complete": 12,
-   "months_any": 12
+   "months_any": 12,
+   "kind_months": {
+    "nrg": 12,
+    "sh": 12,
+    "land": 12
+   }
   },
   {
    "lawd_cd": "99999",
    "year": 2023,
    "months_complete": 12,
-   "months_any": 12
+   "months_any": 12,
+   "kind_months": {
+    "nrg": 12,
+    "sh": 12,
+    "land": 12
+   }
   },
   {
    "lawd_cd": "99999",
    "year": 2024,
    "months_complete": 12,
-   "months_any": 12
+   "months_any": 12,
+   "kind_months": {
+    "nrg": 12,
+    "sh": 12,
+    "land": 12
+   }
   },
   {
    "lawd_cd": "99999",
    "year": 2025,
    "months_complete": 12,
-   "months_any": 12
+   "months_any": 12,
+   "kind_months": {
+    "nrg": 12,
+    "sh": 12,
+    "land": 12
+   }
   }
  ],
- "count": 9,
+ "count": 11,
  "transactions": [
   {
    "zone": "core",
@@ -83,7 +118,9 @@
    "building_use": "제2종근린생활",
    "amount_krw": 1850000000,
    "building_area_m2": 1250.0,
-   "plottage_area_m2": 330.6
+   "plottage_area_m2": 330.6,
+   "deal_kind": "nrg",
+   "land_category": null
   },
   {
    "zone": "core",
@@ -109,7 +146,9 @@
    "building_use": "제2종근린생활",
    "amount_krw": 1200000000,
    "building_area_m2": 1250.0,
-   "plottage_area_m2": 330.6
+   "plottage_area_m2": 330.6,
+   "deal_kind": "nrg",
+   "land_category": null
   },
   {
    "zone": "core",
@@ -135,7 +174,9 @@
    "building_use": "업무",
    "amount_krw": 2480000000,
    "building_area_m2": 1680.2,
-   "plottage_area_m2": 412.0
+   "plottage_area_m2": 412.0,
+   "deal_kind": "nrg",
+   "land_category": null
   },
   {
    "zone": "core",
@@ -161,7 +202,9 @@
    "building_use": "제1종근린생활",
    "amount_krw": 930000000,
    "building_area_m2": 520.4,
-   "plottage_area_m2": 210.3
+   "plottage_area_m2": 210.3,
+   "deal_kind": "nrg",
+   "land_category": null
   },
   {
    "zone": "core",
@@ -187,7 +230,9 @@
    "building_use": "판매",
    "amount_krw": 1550000000,
    "building_area_m2": 840.0,
-   "plottage_area_m2": 250.1
+   "plottage_area_m2": 250.1,
+   "deal_kind": "nrg",
+   "land_category": null
   },
   {
    "zone": "core",
@@ -213,7 +258,9 @@
    "building_use": "제2종근린생활",
    "amount_krw": 2050000000,
    "building_area_m2": 990.5,
-   "plottage_area_m2": 280.4
+   "plottage_area_m2": 280.4,
+   "deal_kind": "nrg",
+   "land_category": null
   },
   {
    "zone": "core",
@@ -239,7 +286,9 @@
    "building_use": "숙박",
    "amount_krw": 3100000000,
    "building_area_m2": 2210.0,
-   "plottage_area_m2": 355.0
+   "plottage_area_m2": 355.0,
+   "deal_kind": "nrg",
+   "land_category": null
   },
   {
    "zone": "core",
@@ -265,7 +314,9 @@
    "building_use": "업무",
    "amount_krw": 4350000000,
    "building_area_m2": 3020.0,
-   "plottage_area_m2": 520.0
+   "plottage_area_m2": 520.0,
+   "deal_kind": "nrg",
+   "land_category": null
   },
   {
    "zone": "core",
@@ -291,7 +342,65 @@
    "building_use": "숙박",
    "amount_krw": 640000000,
    "building_area_m2": 2210.0,
-   "plottage_area_m2": 355.0
+   "plottage_area_m2": 355.0,
+   "deal_kind": "nrg",
+   "land_category": null
+  },
+  {
+   "zone": "core",
+   "lawd_cd": "99999",
+   "emd_name": "가상동",
+   "land_use": "일반상업지역",
+   "build_year": null,
+   "missing_reasons": [],
+   "share_deal": false,
+   "scope": "land_only",
+   "link_status": "unlinked",
+   "asset_id": null,
+   "link_basis": null,
+   "missing_from_provider": false,
+   "first_seen_run_id": null,
+   "last_seen_run_id": null,
+   "building_kind": "unknown",
+   "transaction_id": "3f6b2a1e-7c4d-4b8e-9a0f-1d2c3b4a5e61",
+   "deal_ymd": "202004",
+   "deal_date": "2020-04-10",
+   "jibun": "4-2",
+   "jibun_masked": false,
+   "building_use": null,
+   "amount_krw": 720000000,
+   "building_area_m2": null,
+   "plottage_area_m2": 210.3,
+   "deal_kind": "land",
+   "land_category": "대"
+  },
+  {
+   "zone": "core",
+   "lawd_cd": "99999",
+   "emd_name": "가상동",
+   "land_use": null,
+   "build_year": 1992,
+   "missing_reasons": [],
+   "share_deal": false,
+   "scope": "unclear",
+   "link_status": "unlinked",
+   "asset_id": null,
+   "link_basis": null,
+   "missing_from_provider": false,
+   "first_seen_run_id": null,
+   "last_seen_run_id": null,
+   "building_kind": "general",
+   "transaction_id": "5a7c9e1b-2d4f-4a6c-8e0b-3f5a7c9e1b2d",
+   "deal_ymd": "202011",
+   "deal_date": "2020-11-20",
+   "jibun": "3",
+   "jibun_masked": false,
+   "building_use": "다가구",
+   "amount_krw": 1150000000,
+   "building_area_m2": 310.2,
+   "plottage_area_m2": 355.0,
+   "deal_kind": "sh",
+   "land_category": null
   }
  ]
 }

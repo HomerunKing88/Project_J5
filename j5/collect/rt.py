@@ -1,11 +1,15 @@
-"""상업·업무용 부동산 매매 실거래 API 표본 수집 (J5-014A). 릴리스 계획 §4 R0 통과조건, 데이터 사전 §7.1, ADR-05 [E01·E02].
+"""매매 실거래 API 표본 수집 (J5-014A, 종류 확장 J5-065). 릴리스 계획 §4 R0 통과조건, 데이터 사전 §7.1, ADR-05 [E01·E02].
 
-하는 일: 시군구 코드 5자리·계약월(YYYYMM) 단위로 공식 API 를 호출해 원본 응답을 그대로 `J5_DATA_HOME/raw/rt_nrg/<시군구>/<YYYYMM>/pNNN.xml` 에 두고,
+하는 일: 시군구 코드 5자리·계약월(YYYYMM) 단위로 공식 API 를 호출해 원본 응답을 그대로 `J5_DATA_HOME/raw/<종류 폴더>/<시군구>/<YYYYMM>/pNNN.xml` 에 두고,
 요청·응답 기록(`run-<stamp>.json`, 키 가림)과 필드 가용성·건수·마스킹 요약(`report.json`)을 만든다. 정본에는 쓰지 않는다(정규화·연결은 R3).
 하지 않는 일: 응답 해석·PNU 연결·가격 판단. 비공개 API 추측·차단 우회. 인증키 출력.
 
 엔드포인트는 공공데이터포털 API 상세 페이지의 값을 사용자가 확인해 `--endpoint` 로 줄 수 있다(기본값은 코드에 적힌 최신 알려진 주소이며, 실제 응답으로 확인하기 전까지는 가정이다).
 결과 코드는 신형(`000`)·구형(`00`) 모두 정상으로 본다. 정상 0건·API 실패·페이지 누락을 구분한다.
+
+종류(J5-065): 상업·업무용(nrg, 기본, raw/rt_nrg), 단독·다가구(sh, raw/rt_sh), 토지(land, raw/rt_land). 종류마다 제공자·엔드포인트·원본 폴더가 다르고
+요청 파라미터(LAWD_CD·DEAL_YMD·pageNo·numOfRows)와 응답 틀(header/body/items)은 같다고 가정한다. 단독·다가구·토지의 주소와 응답 필드는
+첫 실제 응답(`rt-sample` 의 report)으로 확인하기 전까지 가정이다.
 """
 
 from __future__ import annotations
@@ -24,9 +28,35 @@ from urllib.request import Request, urlopen
 
 from j5.collect.config import redact
 
-DEFAULT_ENDPOINT = "https://apis.data.go.kr/1613000/RTMSDataSvcNrgTrade/getRTMSDataSvcNrgTrade"  # 사용자가 API 상세 페이지에서 확인한다
-PROVIDER = "data.go.kr:RTMSDataSvcNrgTrade"
-RAW_DIR = Path("raw") / "rt_nrg"
+
+
+@dataclass(frozen=True)
+class RtKind:
+    """실거래 수집 종류. name 은 명령 옵션(--kind)·파생본 deal_kind 값이다."""
+    name: str
+    label: str
+    service: str
+    raw_dir: Path
+
+    @property
+    def provider(self) -> str:
+        return f"data.go.kr:{self.service}"
+
+    @property
+    def endpoint(self) -> str:
+        """공공데이터포털 주소 규칙(…/1613000/<서비스>/get<서비스>)을 따른 기본값. 사용자가 API 상세 페이지에서 확인한다"""
+        return f"https://apis.data.go.kr/1613000/{self.service}/get{self.service}"
+
+
+KINDS = {k.name: k for k in (
+    RtKind("nrg", "상업·업무용 매매", "RTMSDataSvcNrgTrade", Path("raw") / "rt_nrg"),
+    RtKind("sh", "단독·다가구 매매", "RTMSDataSvcSHTrade", Path("raw") / "rt_sh"),
+    RtKind("land", "토지 매매", "RTMSDataSvcLandTrade", Path("raw") / "rt_land"),
+)}
+DEFAULT_KIND = "nrg"
+DEFAULT_ENDPOINT = KINDS[DEFAULT_KIND].endpoint
+PROVIDER = KINDS[DEFAULT_KIND].provider
+RAW_DIR = KINDS[DEFAULT_KIND].raw_dir
 LOG_NAME = "collect.log"
 OK_CODES = ("000", "00")
 MAX_RESPONSE_BYTES = 20 * 1024 * 1024
@@ -42,6 +72,21 @@ class CollectError(Exception):
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code, self.message = code, message
+
+
+def rt_kind(name: str | RtKind | None = None) -> RtKind:
+    """종류 이름 → RtKind. None 은 상업·업무용(기본). 모르는 이름은 bad_kind."""
+    if isinstance(name, RtKind):
+        return name
+    k = KINDS.get(name or DEFAULT_KIND)
+    if k is None:
+        raise CollectError("bad_kind", f"수집 종류는 {', '.join(KINDS)} 중 하나: {name!r}")
+    return k
+
+
+def kind_of_provider(provider: str | None) -> RtKind | None:
+    """제공자 문자열(실행 기록·정본의 provider) → RtKind. 모르는 제공자는 None."""
+    return next((k for k in KINDS.values() if k.provider == provider), None)
 
 
 @dataclass
@@ -276,20 +321,24 @@ def _now() -> str:
 
 # ---------------------------------------------------------------- 수집 실행
 
-def collect_months(data_home: Path, *, key: str, key_source: str, lawd_cd: str, months: list[str], endpoint: str = DEFAULT_ENDPOINT,
-                   num_rows: int = DEFAULT_NUM_ROWS, max_pages: int = DEFAULT_MAX_PAGES, opener=None, sleep=time.sleep, pause_s: float = 0.2) -> RunResult:
-    """월마다 페이지를 끝까지 받아 원본과 기록을 남긴다. 한 달이 실패해도 다음 달을 계속하고 결과에 구분해 적는다."""
+def collect_months(data_home: Path, *, key: str, key_source: str, lawd_cd: str, months: list[str], endpoint: str | None = None,
+                   num_rows: int = DEFAULT_NUM_ROWS, max_pages: int = DEFAULT_MAX_PAGES, opener=None, sleep=time.sleep, pause_s: float = 0.2,
+                   kind: str | RtKind | None = None) -> RunResult:
+    """월마다 페이지를 끝까지 받아 원본과 기록을 남긴다. 한 달이 실패해도 다음 달을 계속하고 결과에 구분해 적는다.
+    kind 는 수집 종류(기본 상업·업무용). endpoint 를 주지 않으면 그 종류의 기본 주소."""
     data_home = Path(data_home)
+    k = rt_kind(kind)
     check_lawd(lawd_cd)
     if not (1 <= num_rows <= 1000) or not (1 <= max_pages <= 500):
         raise CollectError("bad_paging", "numOfRows 는 1~1000, max_pages 는 1~500")
-    run = RunResult(run_id=_new_run_id(), provider=PROVIDER, endpoint=endpoint, started_at=_now(), lawd_cd=lawd_cd, key_source=key_source)
+    endpoint = endpoint or k.endpoint
+    run = RunResult(run_id=_new_run_id(), provider=k.provider, endpoint=endpoint, started_at=_now(), lawd_cd=lawd_cd, key_source=key_source)
     log = data_home / "logs" / LOG_NAME
     log.parent.mkdir(parents=True, exist_ok=True)
     for deal_ymd in months:
         mr = MonthResult(lawd_cd=lawd_cd, deal_ymd=deal_ymd)
         run.months.append(mr)
-        out_dir = data_home / RAW_DIR / lawd_cd / deal_ymd
+        out_dir = data_home / k.raw_dir / lawd_cd / deal_ymd
         out_dir.mkdir(parents=True, exist_ok=True)
         page = 1
         while page <= max_pages:
@@ -352,11 +401,11 @@ def collect_months(data_home: Path, *, key: str, key_source: str, lawd_cd: str, 
             mr.outcome = "complete"
             mr.message = f"{mr.items}건 ({len(mr.pages)}페이지)"
     run.finished_at = _now()
-    run_path = data_home / RAW_DIR / lawd_cd / f"run-{run.run_id}.json"
+    run_path = data_home / k.raw_dir / lawd_cd / f"run-{run.run_id}.json"
     _write_new(run_path, (redact(json.dumps(run.to_dict(), ensure_ascii=False, indent=2), key) + "\n").encode("utf-8"))
     run.run_path = run_path.relative_to(data_home).as_posix()
     report = build_report(data_home, run)
-    report_path = data_home / RAW_DIR / lawd_cd / f"report-{run.run_id}.json"
+    report_path = data_home / k.raw_dir / lawd_cd / f"report-{run.run_id}.json"
     _write_new(report_path, (redact(json.dumps(report, ensure_ascii=False, indent=2), key) + "\n").encode("utf-8"))
     run.report_path = report_path.relative_to(data_home).as_posix()
     return run
@@ -415,9 +464,9 @@ RUN_SUFFIX_RE = re.compile(r"^p\d{3}-(\d{8}-\d{6}(?:-[0-9a-f]{6})?)\.xml$")
 RUN_FILE_RE = re.compile(r"^run-(\d{8}-\d{6}-[0-9a-f]{6})\.json$")
 
 
-def list_run_ids(data_home: Path, lawd_cd: str) -> list[str]:
+def list_run_ids(data_home: Path, lawd_cd: str, kind: str | RtKind | None = None) -> list[str]:
     """시군구 폴더의 실행 기록(run-<실행>.json) ID 목록, 오래된 순 (실행 ID 는 UTC 시각으로 시작하므로 이름순이 시간순)."""
-    d = Path(data_home) / RAW_DIR / lawd_cd
+    d = Path(data_home) / rt_kind(kind).raw_dir / lawd_cd
     if not d.is_dir():
         return []
     out = []
@@ -460,13 +509,14 @@ def recent_months(n: int, *, today: str | None = None) -> list[str]:
     return [x for x in reversed(out) if x >= "200601"]
 
 
-def months_done_on_disk(data_home: Path, lawd_cd: str) -> dict[str, str]:
+def months_done_on_disk(data_home: Path, lawd_cd: str, kind: str | RtKind | None = None) -> dict[str, str]:
     """실행 기록 파일들에서 달마다 가장 좋은 결과(complete/empty/partial/failed)를 모은다. 깨진 기록은 무시한다."""
     rank = {"complete": 3, "empty": 3, "partial": 2, "failed": 1}
     best: dict[str, str] = {}
-    for rid in list_run_ids(data_home, lawd_cd):
+    k = rt_kind(kind)
+    for rid in list_run_ids(data_home, lawd_cd, k):
         try:
-            doc = json.loads((Path(data_home) / RAW_DIR / lawd_cd / f"run-{rid}.json").read_text(encoding="utf-8"))
+            doc = json.loads((Path(data_home) / k.raw_dir / lawd_cd / f"run-{rid}.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
         months = doc.get("months") if isinstance(doc, dict) else None
@@ -477,9 +527,9 @@ def months_done_on_disk(data_home: Path, lawd_cd: str) -> dict[str, str]:
     return best
 
 
-def list_runs(data_home: Path, lawd_cd: str, deal_ymd: str) -> list[str]:
+def list_runs(data_home: Path, lawd_cd: str, deal_ymd: str, kind: str | RtKind | None = None) -> list[str]:
     """그 달 폴더에 원본이 있는 실행 ID 목록 (오래된 것부터). 같은 초의 실행은 무작위 접미사가 아니라 파일 생성 시각으로 순서를 정한다."""
-    d = Path(data_home) / RAW_DIR / lawd_cd / deal_ymd
+    d = Path(data_home) / rt_kind(kind).raw_dir / lawd_cd / deal_ymd
     if not d.is_dir():
         return []
     first_mtime: dict[str, int] = {}
@@ -492,16 +542,16 @@ def list_runs(data_home: Path, lawd_cd: str, deal_ymd: str) -> list[str]:
     return sorted(first_mtime, key=lambda rid: (rid[:15], first_mtime[rid]))
 
 
-def load_month_items(data_home: Path, lawd_cd: str, deal_ymd: str, run_id: str | None = None) -> tuple[list[dict], list[str]]:
+def load_month_items(data_home: Path, lawd_cd: str, deal_ymd: str, run_id: str | None = None, kind: str | RtKind | None = None) -> tuple[list[dict], list[str]]:
     """저장된 원본 XML 에서 항목을 다시 읽는다 (네트워크 없음). 한 실행의 파일만 읽는다: run_id 가 없으면 가장 최근 실행.
     여러 실행을 합치면 같은 거래가 여러 번 세어지므로 합치지 않는다."""
-    d = Path(data_home) / RAW_DIR / lawd_cd / deal_ymd
+    d = Path(data_home) / rt_kind(kind).raw_dir / lawd_cd / deal_ymd
     items: list[dict] = []
     files: list[str] = []
     if not d.is_dir():
         return items, files
     if run_id is None:
-        runs = list_runs(data_home, lawd_cd, deal_ymd)
+        runs = list_runs(data_home, lawd_cd, deal_ymd, kind)
         if not runs:
             return items, files
         run_id = runs[-1]
@@ -519,11 +569,12 @@ def load_month_items(data_home: Path, lawd_cd: str, deal_ymd: str, run_id: str |
 
 
 def build_report(data_home: Path, run: RunResult) -> dict:
+    k = kind_of_provider(run.provider) or rt_kind()
     months = []
     for m in run.months:
-        items, files = load_month_items(data_home, m.lawd_cd, m.deal_ymd, run.run_id)
+        items, files = load_month_items(data_home, m.lawd_cd, m.deal_ymd, run.run_id, k)
         months.append({"deal_ymd": m.deal_ymd, "outcome": m.outcome, "total_count": m.total_count, "files": files, **summarize_items(items)})
-    return {"run_id": run.run_id, "provider": run.provider, "endpoint": run.endpoint, "lawd_cd": run.lawd_cd, "generated_at": _now(),
+    return {"run_id": run.run_id, "kind": k.name, "provider": run.provider, "endpoint": run.endpoint, "lawd_cd": run.lawd_cd, "generated_at": _now(),
             "note": "표본 월 실측(R0). 원본 행은 raw/ 에 있고 이 요약은 필드 가용성·건수·마스킹만 담는다. 정규화·연결은 R3.", "months": months}
 
 
@@ -536,9 +587,9 @@ def field_distribution(items: list[dict], field: str) -> dict[str, int]:
     return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
 
 
-def _run_record_total(data_home: Path, lawd_cd: str, deal_ymd: str, run_id: str) -> tuple[int | None, str | None]:
+def _run_record_total(data_home: Path, lawd_cd: str, deal_ymd: str, run_id: str, kind: str | RtKind | None = None) -> tuple[int | None, str | None]:
     """실행 기록 파일(run-<실행>.json)에서 그 달의 totalCount 와 수집 결과를 읽는다. 기록이 없거나 깨졌으면 (None, None)."""
-    p = Path(data_home) / RAW_DIR / lawd_cd / f"run-{run_id}.json"
+    p = Path(data_home) / rt_kind(kind).raw_dir / lawd_cd / f"run-{run_id}.json"
     try:
         doc = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -554,28 +605,31 @@ def _run_record_total(data_home: Path, lawd_cd: str, deal_ymd: str, run_id: str)
     return None, None
 
 
-def report_from_raw(data_home: Path, lawd_cd: str, months: list[str], run_id: str | None = None, dist_fields: tuple[str, ...] = ()) -> dict:
+def report_from_raw(data_home: Path, lawd_cd: str, months: list[str], run_id: str | None = None, dist_fields: tuple[str, ...] = (),
+                    kind: str | RtKind | None = None) -> dict:
     """네트워크 없이 저장된 원본만으로 요약한다. 월마다 한 실행(지정한 실행 또는 가장 최근 실행)만 센다.
     totalCount 와 수집 결과는 그 실행의 기록 파일에서 가져온다(원본 XML 을 다시 세지 않는다). dist_fields 의 필드는 값 종류 수와 무관하게 전체 분포를 넣는다."""
+    k = rt_kind(kind)
     out = []
     for deal_ymd in months:
-        runs = list_runs(data_home, lawd_cd, deal_ymd)
+        runs = list_runs(data_home, lawd_cd, deal_ymd, k)
         chosen = run_id if run_id is not None else (runs[-1] if runs else None)
-        items, files = load_month_items(data_home, lawd_cd, deal_ymd, chosen) if chosen else ([], [])
+        items, files = load_month_items(data_home, lawd_cd, deal_ymd, chosen, k) if chosen else ([], [])
         # 실행 기록은 선택한 실행이 있으면 항상 읽는다: 정상 페이지가 없는 실행(API 오류 응답만 저장됨)도 `failed` 로 구분되어야 한다
-        total, collected = _run_record_total(data_home, lawd_cd, deal_ymd, chosen) if chosen else (None, None)
+        total, collected = _run_record_total(data_home, lawd_cd, deal_ymd, chosen, k) if chosen else (None, None)
         summary = summarize_items(items)
         for f in dist_fields:
             if f in summary["fields"]:
                 summary["fields"][f]["distribution"] = field_distribution(items, f)
         out.append({"deal_ymd": deal_ymd, "outcome": "from_raw" if files else "no_raw", "collected_outcome": collected, "run_id": chosen if (files or collected) else None,
                     "other_runs": [r for r in runs if r != chosen], "total_count": total, "files": files, **summary})
-    return {"run_id": run_id, "provider": PROVIDER, "endpoint": None, "lawd_cd": lawd_cd, "generated_at": _now(), "dist_fields": list(dist_fields),
+    return {"run_id": run_id, "kind": k.name, "provider": k.provider, "endpoint": None, "lawd_cd": lawd_cd, "generated_at": _now(), "dist_fields": list(dist_fields),
             "note": "저장된 원본에서 다시 요약 (네트워크 없음). 월마다 한 실행만 센다", "months": out}
 
 
 def run_text(run: RunResult) -> str:
-    lines = [f"실거래 표본 수집 [{run.run_id}] 시군구 {run.lawd_cd} · {run.endpoint}", f"인증키 출처: {run.key_source} (키는 기록하지 않음)"]
+    k = kind_of_provider(run.provider)
+    lines = [f"실거래 표본 수집 [{run.run_id}] {k.label if k else run.provider} · 시군구 {run.lawd_cd} · {run.endpoint}", f"인증키 출처: {run.key_source} (키는 기록하지 않음)"]
     for m in run.months:
         lines.append(f"  {m.deal_ymd[:4]}-{m.deal_ymd[4:]}: {m.outcome} · {m.message}")
         for p in m.pages:
@@ -587,7 +641,8 @@ def run_text(run: RunResult) -> str:
 
 
 def report_text(report: dict) -> str:
-    lines = [f"실거래 표본 요약 시군구 {report['lawd_cd']} ({report.get('run_id') or '원본 재요약'})"]
+    k = KINDS.get(report.get("kind") or DEFAULT_KIND)
+    lines = [f"실거래 표본 요약 {k.label if k else report.get('kind')} · 시군구 {report['lawd_cd']} ({report.get('run_id') or '원본 재요약'})"]
     for m in report["months"]:
         extra = f" · 실행 {m['run_id']}" + (f" (다른 실행 {len(m['other_runs'])}개는 제외)" if m.get("other_runs") else "") if m.get("run_id") else ""
         if m.get("collected_outcome"):

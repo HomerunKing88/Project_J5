@@ -34,14 +34,14 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     // 지도 모듈 로드 실패: map.js 요청을 막고 첫 접속 (서비스 워커가 아직 없을 때). 목록·설정은 그대로 동작하고 지도 절만 안내를 낸다.
     await cdp.send("Network.setBlockedURLs", { urls: ["*/app/map.js"] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.29')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.30')");
     await cdp.waitFor("document.getElementById('map-note').textContent.includes('지도를 그리지 못했습니다')");
     assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li').length"), 1, "지도 모듈 없이도 목록 절이 그려진다");
     const blockedLogs = cdp.errors.splice(0);
     assert.ok(blockedLogs.every((e) => e.includes("ERR_BLOCKED_BY_CLIENT") || e.includes("Failed to load resource") || e.includes("map.js")), blockedLogs.join("; "));
     await cdp.send("Network.setBlockedURLs", { urls: [] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.29')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.30')");
     await cdp.waitFor("document.getElementById('map-note').textContent === ''");
     // 설정
     await cdp.eval("document.getElementById('study-id').value = 'e2e-study'; document.getElementById('save-settings').click(); 'ok'");
@@ -412,7 +412,7 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       // 필지 카드의 연도별 표 (J5-055): 필지 이력의 연도별 요약과 같은 값(최근 5개 연도까지), 누르면 필지 이력
       assert.equal(await cdp.eval("document.getElementById('parcel-years').hidden"), false);
       assert.deepEqual(await cdp.eval("Array.from(document.querySelectorAll('#parcel-years-table tbody tr')).map(tr => [tr.dataset.tx, ...Array.from(tr.cells).map(c => c.textContent)])"),
-        [["counted", "2026", "13,000,000", "0건수집 1/12개월", "09-24"], ["counted", "2025", "자료 없음", "1건번지대 1수집 1/12개월", "없음"]]);
+        [["counted", "2026", "13,000,000", "0건수집 1/12개월상업·업무만", "09-24"], ["counted", "2025", "자료 없음", "1건번지대 1수집 1/12개월상업·업무만", "없음"]]);
       assert.equal(await cdp.eval("document.getElementById('parcel-years-all').textContent"), "기록·거래 보기", "연도가 5개 이하면 모든 연도 수를 적지 않는다");
       assert.ok(!(await cdp.eval("document.body.scrollWidth > window.innerWidth")), "연도별 표가 가로 스크롤을 만들지 않는다");
       // 필지 카드의 최근 거래 (J5-057): 같은 필지 거래만, 번지대 거래는 확정하지 않고 수만 안내
@@ -493,10 +493,10 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
       assert.equal(await cdp.eval("document.getElementById('history-years').hidden"), false);
       // 표 (J5-055): 칸마다 값, 줄의 title 은 이 폰의 요약 글 한 줄 (PC 와는 칸의 값으로 대조)
       const yearCells = "Array.from(document.querySelectorAll('#ID tbody tr')).map(tr => [tr.dataset.tx, ...Array.from(tr.cells).map(c => c.textContent)])";
-      const yearsExpected = [["counted", "2026", "13,000,000", "0건수집 1/12개월", "09-24"], ["counted", "2025", "자료 없음", "1건번지대 1수집 1/12개월", "없음"]];
+      const yearsExpected = [["counted", "2026", "13,000,000", "0건수집 1/12개월상업·업무만", "09-24"], ["counted", "2025", "자료 없음", "1건번지대 1수집 1/12개월상업·업무만", "없음"]];
       assert.deepEqual(await cdp.eval(yearCells.replace("ID", "history-years-table")), yearsExpected);
       assert.deepEqual(await cdp.eval("Array.from(document.querySelectorAll('#history-years-table tbody tr')).map(tr => tr.title)"), [
-        "2026 공시지가 13,000,000원/㎡ · 같은 필지 0 · 번지대 0 (수집 1/12개월) · 소유 변동 2026-09-24", "2025 공시지가 자료 없음 · 같은 필지 1 · 번지대 1 (수집 1/12개월)"]);
+        "2026 공시지가 13,000,000원/㎡ · 같은 필지 0 · 번지대 0 (수집 1/12개월, 상업·업무만) · 소유 변동 2026-09-24", "2025 공시지가 자료 없음 · 같은 필지 1 · 번지대 1 (수집 1/12개월, 상업·업무만)"]);
       assert.equal(await cdp.eval("document.getElementById('history-years-more').hidden"), true, "상한(40개 연도) 안이면 빠진 연도 안내 없음 (J5-051)");
       await cdp.eval("document.getElementById('history-close').click(); 'ok'");
       await cdp.waitFor("document.getElementById('sec-history').hidden");
