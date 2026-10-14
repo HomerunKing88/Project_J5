@@ -168,8 +168,13 @@ def _build_parser() -> argparse.ArgumentParser:
     py_.add_argument("--to", dest="year_to", type=int, help="끝 연도 (기본: 올해)")
     py_.add_argument("--out", type=Path, help="표 전부를 CSV 로 저장 (덮어쓰지 않음)")
     py_.add_argument("--json", action="store_true")
-    pc_ = dsub.add_parser("parcels-comps", help="필지 하나의 주변 사례와 같은 동 연도별 시세 (J5-072, 폰 필지 카드의 주변 사례와 같은 규칙): 단가 중간값·범위, 공시지가 배율, 참고 추정, 사례, 연도별 중간값·거래 수. 정본에 쓰지 않음")
-    pc_.add_argument("pnu", help="PNU 19자리")
+    pc_ = dsub.add_parser("parcels-comps", help="필지의 주변 사례와 같은 동 연도별 시세 (J5-072, 폰 필지 카드의 주변 사례와 같은 규칙): 단가 중간값·범위, 공시지가 배율, 참고 추정, 사례, 연도별 중간값·거래 수. "
+                                                "필지 하나면 자세히, --pnu·--csv·--watchlist 로 여러 필지면 필지마다 한 줄 요약표 (J5-074). 정본에 쓰지 않음")
+    pc_.add_argument("pnu", nargs="?", help="PNU 19자리 (하나만 주면 자세히)")
+    pc_.add_argument("--pnu", dest="pnus", action="append", default=[], metavar="PNU[,PNU…]", help="요약표 대상 PNU. 반복 가능")
+    pc_.add_argument("--csv", type=Path, help="db parcels-find --csv 로 저장한 파일 (pnu 열): 요약표 대상")
+    pc_.add_argument("--watchlist", action="store_true", help="관찰목록 물건(watch·detailed_review·purchase_ready)에 오늘 연결된 필지: 요약표 대상")
+    pc_.add_argument("--out", type=Path, help="요약표를 CSV 로 저장 (덮어쓰지 않음)")
     pc_.add_argument("--years", type=int, default=5, choices=(1, 3, 5, 0), help="기간: 최근 n년 (0 = 전체, 기본 5)")
     pc_.add_argument("--kind", default="all", choices=("all", "nrg", "sh", "land"), help="거래 종류 (기본 all 모든 종류)")
     pc_.add_argument("--on", dest="on_date", help="기준일 YYYY-MM-DD (기본 오늘)")
@@ -785,9 +790,32 @@ def _db_main(args) -> int:
                                  + (f"CSV: {args.csv} ({r['total']}행)\n" if args.csv is not None else ""))
                 return 0
             if args.db_command == "parcels-comps":
-                from j5.db.parcel_comps import comps_text, parcel_comps
-                r = parcel_comps(db, args.pnu, years=args.years, kind=args.kind, on_date=args.on_date)
-                sys.stdout.write(json.dumps(r, ensure_ascii=False, indent=2) + "\n" if args.json else comps_text(r))
+                from j5.db.parcel_comps import comps_table, comps_text, parcel_comps, table_csv, table_text
+                if not (args.pnus or args.csv is not None or args.watchlist or args.out is not None):
+                    if args.pnu is None:
+                        print("PNU 를 주거나 --pnu·--csv·--watchlist 로 대상을 준다", file=sys.stderr)
+                        return USAGE_ERROR
+                    r = parcel_comps(db, args.pnu, years=args.years, kind=args.kind, on_date=args.on_date)
+                    sys.stdout.write(json.dumps(r, ensure_ascii=False, indent=2) + "\n" if args.json else comps_text(r))
+                    return 0
+                # 여러 필지의 요약표 (J5-074)
+                if args.out is not None and args.out.exists():
+                    print(f"출력 파일이 이미 있다 (덮어쓰지 않음): {args.out}", file=sys.stderr)
+                    return USAGE_ERROR
+                if args.out is not None and not args.out.parent.is_dir():
+                    print(f"출력 폴더가 없다: {args.out.parent}", file=sys.stderr)
+                    return USAGE_ERROR
+                pnus = ([args.pnu] if args.pnu else []) + [x.strip() for v in args.pnus for x in v.split(",") if x.strip()]
+                if args.csv is not None:
+                    pnus += pnus_from_csv(args.csv)
+                if args.watchlist:
+                    pnus += watchlist_pnus(db, db.now()[:10])
+                t = comps_table(db, pnus, years=args.years, kind=args.kind, on_date=args.on_date)
+                if args.out is not None:
+                    with open(args.out, "x", encoding="utf-8", newline="") as f:
+                        f.write(table_csv(t))
+                sys.stdout.write(json.dumps(t, ensure_ascii=False, indent=2) + "\n" if args.json else table_text(t)
+                                 + (f"CSV: {args.out} ({len(t['rows'])}행)\n" if args.out is not None else ""))
                 return 0
             if args.db_command == "parcels-years":
                 if args.out is not None and args.out.exists():
