@@ -33,6 +33,14 @@ def result(tmp_path_factory):
         for years, kind in ((0, "all"), (5, "all"), (1, "land")):
             out["tables"][(years, kind)] = comps_table(db, list(reversed(pnus)) + [pnus[0]], years=years, kind=kind, on_date=ON)
             out["single"][(years, kind)] = {p: parcel_comps(db, p, years=years, kind=kind, on_date=ON) for p in pnus}
+        # 리뷰 반영(PR #121): 기준일을 주지 않으면 표 전체에 오늘을 한 번만 쓴다 (실행 중 날짜가 바뀌어도 줄마다 같은 기간)
+        fixed = db.now
+        clock = iter(["2026-09-30T23:59:59Z", "2026-10-01T00:00:01Z", "2026-10-02T00:00:00Z"] * 10)
+        db.now = lambda: next(clock)
+        try:
+            out["midnight"] = comps_table(db, pnus, years=1)
+        finally:
+            db.now = fixed
         for name, args in (("empty", []), ("bad", ["12"]), ("missing", ["9999900100100099999"]), ("many", [f"{i:019d}" for i in range(501)])):
             try:
                 comps_table(db, args, on_date=ON)
@@ -73,6 +81,11 @@ def test_csv_and_text(result):
     text = table_text(t)
     assert text.startswith(f"필지 {len(t['rows'])}개 주변 사례 요약 (전체 기간, 기준일 {ON})") and "감정평가가 아니다" in text
     assert "이 필지 거래 2건 (최근 2026-05-27" in text
+
+
+def test_reference_date_resolved_once(result):
+    t = result["midnight"]
+    assert t["on_date"] == "2026-09-30" and {r["since"] for r in t["rows"]} == {"2025-09-30"}, "줄마다 같은 기준일·기간"
 
 
 def test_errors(result):

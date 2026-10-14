@@ -239,12 +239,12 @@ def comps_table(db: Db, pnus: list[str], *, years: int = 5, kind: str = "all", o
     missing = [p for p in pnus if db.conn.execute("SELECT 1 FROM parcels WHERE pnu = ?", (p,)).fetchone() is None]
     if missing:
         raise DbError("parcel_missing", f"정본에 없는 필지: {', '.join(missing[:5])}" + (f" 외 {len(missing) - 5}개" if len(missing) > 5 else ""))
+    # 기준일은 표 전체에 한 번 정한다: 줄마다 오늘을 읽으면 실행 중 날짜가 바뀔 때 줄마다 기간이 달라진다 (리뷰 반영 PR #121)
+    on = on_date or db.now()[:10]
     cache: dict = {}
     out = []
-    on = None
     for pnu in pnus:
-        r = parcel_comps(db, pnu, years=years, kind=kind, on_date=on_date, cache=cache)
-        on = r["on_date"]
+        r = parcel_comps(db, pnu, years=years, kind=kind, on_date=on, cache=cache)
         ref, ch = r["reference"], (r["by_year"] or {}).get("change") or {"missing": "거래가 없다"}
         own = [c for c in r["comps"] if c["mine"]]
         last = own[0] if own else None   # 사례는 최근 먼저
