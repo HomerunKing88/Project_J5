@@ -241,6 +241,7 @@ v1.0의 용적률 산정용 연면적, 승계 보증금 반환 의무, 사업기
 - 보정(J5-060, 2026-10-13): 사용자가 대시보드에서 만든 프로젝트는 Pages 가 아니라 Workers 정적 자산(배포 명령 `npx wrangler deploy`, 루트 디렉터리 `/`)이다. 설정 파일이 없으면 wrangler 가 폴더를 추측한다(4.149.0 은 `web` 을 골랐다). 추측에 맡기지 않도록 저장소 루트의 `wrangler.jsonc` 에 Worker 이름 `project-j5`, 올리는 폴더 `./web`, 서버 코드 없음(`main`·바인딩 없음), 없는 주소는 404 를 적는다. `_headers` 는 같은 규칙으로 적용되고 파일 자체는 올리지 않는다. Workers 의 사용자 지정 도메인은 도메인(dooduk.com)이 Cloudflare 의 DNS 영역이어야 한다(Pages 는 바깥 DNS 의 CNAME 으로도 하위 주소를 연결한다). 사용자는 DNS 를 옮기지 않기로 했고(등록처 가비아), 주소는 우선 `project-j5.<계정>.workers.dev` 다. 계정 하위 이름은 사용자 이름이 드러나지 않게 `j5map` 으로 바꿨다(2026-10-13, 주소 `https://project-j5.j5map.workers.dev/`). `j5.dooduk.com` 연결은 보류한다.
 - 게시되는 것은 코드·문서·가상자료뿐이다. `tests/test_web_publish.py` 가 web/ 안의 파일 형식과 data/ 의 가상자료 표시를 검사한다.
 - 서버 API·서버 저장은 없다. 실데이터(정본·파생본·사진·키)는 지금처럼 PC 에서 만든 파일을 폰이 가져와 폰 안(IndexedDB)에만 둔다.
+- 보정(J5-078, 2026-10-14): 사용자가 폰에서 필지를 바로 조회하는 온라인 방식을 골랐다("온라인 조회로 전환"). 결정 전에 Cloudflare 에서 VWorld 를 부를 수 있는지(해외 접속 차단)와 실제 응답을 재기 위해, 저장소 루트의 `worker/index.js` 를 Worker 코드로 두고 `/api/` 아래만 Worker 가 받는다(`wrangler.jsonc` 의 `main`·`assets.binding`·`assets.run_worker_first`). 지금 있는 주소는 고정 질의 하나를 부르는 시험 주소 `/api/vworld/probe` 뿐이며 서버 저장은 없다. VWorld 인증키는 Cloudflare 비밀값 `VWORLD_API_KEY` 에만 두고 응답에서 지운다. 온라인 조회의 구조(키 위치, 폰 직접 호출과 Worker 경유 중 무엇을 쓸지, 캐시·호출 한도)는 이 시험 결과로 ADR-27 에서 정한다.
 - 접속을 본인으로 제한하고 싶으면 Cloudflare Access(무료 한도)로 이 주소에 로그인을 걸 수 있다. 앱 동작과는 무관하다.
 - 2026-10-13 사용자 결정(공급자 Cloudflare, 하위 주소, 도메인 dooduk.com 의 루트는 재무관리용)으로 채택. ADR-01 의 "공급자는 계정 확인 후 확정" 을 이 결정으로 채운다.
 

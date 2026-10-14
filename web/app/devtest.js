@@ -1,10 +1,11 @@
 // J5-004 기기 시험. 이 페이지는 아무것도 서버로 보내지 않는다. 결과는 화면과 저장 파일에만 남는다.
 import { sniffImage, SUPPORTED } from "./sniff.js";
 import { sha256Hex, subtleAvailable } from "./hash.js";
+import { runParcelProbe, tileProbeUrl } from "./vworldtest.js";
 
 const PHOTO_LIMIT = 20_000_000; // 데이터 사전 §3.3 초기값
 const $ = (id) => document.getElementById(id);
-const results = { page: "j5-devtest", app: "0.1.0", started_at: new Date().toISOString(), env: {}, photos: [], saves: [], user_notes: "" };
+const results = { page: "j5-devtest", app: "0.1.0", started_at: new Date().toISOString(), env: {}, photos: [], saves: [], vworld: [], user_notes: "" };
 
 function show() {
   $("results").textContent = JSON.stringify(results, null, 2);
@@ -197,6 +198,26 @@ async function copyResults() {
 
 $("pick-library").addEventListener("change", (e) => onPick(e.target, "library"));
 $("pick-camera").addEventListener("change", (e) => onPick(e.target, "camera"));
+// J5-078: VWorld 직접 연결. 필지 조회(다른 출처 요청)와 배경 타일(그림)을 한 번씩 본다. 키는 결과에 남기지 않는다.
+async function runVworld() {
+  const key = $("vw-key").value.trim();
+  if (!key) { $("vw-note").textContent = "인증키를 넣습니다."; return; }
+  $("vw-note").textContent = "시험 중…";
+  const r = await runParcelProbe(key, location.origin);
+  const tile = await new Promise((ok) => {
+    const img = $("vw-tile");
+    const t0 = performance.now();
+    img.onload = () => ok({ outcome: "ok", ms: Math.round(performance.now() - t0), size: `${img.naturalWidth}x${img.naturalHeight}` });
+    img.onerror = () => ok({ outcome: "error", ms: Math.round(performance.now() - t0) });
+    img.hidden = false;
+    img.src = tileProbeUrl(key);
+  });
+  results.vworld.push({ at: new Date().toISOString(), online_type: navigator.connection?.effectiveType ?? null, origin: location.origin, parcel: r, tile });
+  $("vw-note").textContent = `필지 조회: ${r.outcome}${r.status ? ` (HTTP ${r.status})` : ""}, 타일: ${tile.outcome}. 아래 결과 JSON 을 복사해 보냅니다(키는 지워져 있습니다).`;
+  show();
+}
+
+$("vw-run").addEventListener("click", runVworld);
 $("save").addEventListener("click", saveResults);
 $("copy").addEventListener("click", copyResults);
 window.addEventListener("online", () => { results.env.online = true; show(); });

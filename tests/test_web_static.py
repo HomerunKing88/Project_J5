@@ -23,6 +23,10 @@ HOST = re.compile(r"https://([a-z0-9.-]+)/", re.IGNORECASE)
 TILE_HOSTS = {"api.vworld.kr"}
 CSP_IMG_SRC = "img-src 'self' blob: " + " ".join(f"https://{h}" for h in sorted(TILE_HOSTS))
 
+# J5-078: VWorld 직접 연결 시험은 기기 시험 페이지(devtest.html)에서만, 누를 때만 VWorld 를 부른다. 앱(index.html)의 CSP·코드는 바꾸지 않는다.
+VWORLD_TEST_FILE = "app/vworldtest.js"
+DEVTEST_CSP_VWORLD = ("img-src 'self' blob: https://api.vworld.kr", "connect-src https://api.vworld.kr")
+
 
 def test_no_external_urls_in_app_code():
     for p in web_files(".html", ".js", ".css"):
@@ -30,6 +34,14 @@ def test_no_external_urls_in_app_code():
         if rel == EXT_MAP_FILE:
             continue
         text = p.read_text(encoding="utf-8")
+        if rel == VWORLD_TEST_FILE:
+            hosts = {m.group(1).lower() for m in re.finditer(r"https?://([a-z0-9.-]+)", text, re.IGNORECASE)}
+            assert hosts == {"api.vworld.kr"}, f"{p}: VWorld 밖 호스트 {hosts}"
+            continue
+        if rel == "devtest.html":
+            for part in DEVTEST_CSP_VWORLD:
+                assert part in text, f"devtest.html CSP: {part}"
+                text = text.replace(part, "")
         if rel == "index.html":
             assert CSP_IMG_SRC in text, "index.html CSP 의 img-src 는 타일 허용 호스트만"
             text = text.replace(CSP_IMG_SRC, "")
@@ -86,6 +98,10 @@ def test_no_network_apis_in_js():
             assert token not in text, f"{p}: {token} 사용 금지"
         for m in re.finditer(r"\bfetch\(\s*([^)]*)", text):
             arg = m.group(1).strip()
+            if p.relative_to(WEB).as_posix() == VWORLD_TEST_FILE:
+                assert arg.startswith("url,"), f"{p}: VWorld 시험은 parcelProbeUrl 로 만든 주소만 부른다"
+                assert 'const url = parcelProbeUrl(key, domain);' in text
+                continue
             if p.name == "sw.js":
                 # 받은 요청 그대로, 또는 타일 요청의 키 자리표를 바꾼 같은 요청(tileRequest(e, …), ADR-18)만 보낸다
                 assert arg.startswith("e.request") or arg.startswith("tileRequest(e"), f"{p}: 서비스 워커는 받은 요청(또는 그 타일 요청의 키 치환본)만 전달"
@@ -106,7 +122,7 @@ def test_service_worker_caches_only_app_files():
         assert (WEB / rel).is_file(), f"캐시 목록의 파일이 없음: {f}"
     for js in web_files(".js"):
         rel = js.relative_to(WEB).as_posix()
-        if rel not in ("sw.js", "app/devtest.js"):
+        if rel not in ("sw.js", "app/devtest.js", VWORLD_TEST_FILE):
             assert f"./{rel}" in files, f"앱 모듈이 캐시 목록에 없음: {rel}"
 
 
