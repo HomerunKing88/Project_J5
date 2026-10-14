@@ -1,12 +1,13 @@
 // Cloudflare Worker 단위 시험 (J5-078). 실제 VWorld 를 부르지 않고 fetch 를 흉내 낸다. 가상 응답 시험이며 실제 VWorld·Cloudflare 확인이 아니다.
 import test from "node:test";
 import assert from "node:assert/strict";
-import worker, { redact, findPnu } from "../../worker/index.js";
+import worker, { redact, findPnu, _resetProbe } from "../../worker/index.js";
 
 const KEY = "ABCDEF12-3456-7890-ABCD-EF1234567890";
 const env = (extra = {}) => ({ VWORLD_API_KEY: KEY, ASSETS: { fetch: async (req) => new Response("asset:" + new URL(req.url).pathname) }, ...extra });
 
 function withFetch(handler, fn) {
+  _resetProbe();
   const orig = globalThis.fetch;
   const calls = [];
   globalThis.fetch = async (url, init) => { calls.push(String(url)); return handler(String(url), init); };
@@ -66,5 +67,19 @@ test("probe: 연결 실패도 키 없이 사유를 돌려준다, PNU 가 없으�
     assert.equal(out.pnu, null);
     assert.deepEqual(out.steps.map((s) => s.name), ["parcel_at_point", "zoning_at_point", "tile_base"]);
     assert.ok(out.steps.every((s) => s.status === null && s.error.includes("<KEY>")));
+  });
+});
+
+test("probe: 동시에 여러 번 불려도 VWorld 는 한 번씩만 부르고, 끝난 결과는 다시 쓴다 (리뷰 반영 PR #125)", async () => {
+  await withFetch(async (url) => {
+    await new Promise((r) => setTimeout(r, 20));
+    return new Response("{}", { headers: { "content-type": "application/json" } });
+  }, async (calls) => {
+    const rs = await Promise.all(Array.from({ length: 5 }, () => worker.fetch(new Request("https://h.example/api/vworld/probe"), env(), {})));
+    assert.ok(rs.every((r) => r.status === 200));
+    assert.equal(calls.length, 3, "PNU 없음: 필지·용도지역·타일 세 번뿐");
+    const again = await (await worker.fetch(new Request("https://h.example/api/vworld/probe"), env(), {})).json();
+    assert.equal(again.reused, true);
+    assert.equal(calls.length, 3, "5분 안에는 다시 부르지 않는다");
   });
 });

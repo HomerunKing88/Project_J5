@@ -62,10 +62,11 @@ export class Cdp {
     return c;
   }
   constructor(proc, ws) {
-    this.proc = proc; this.ws = ws; this.id = 0; this.pending = new Map(); this.errors = [];
+    this.proc = proc; this.ws = ws; this.id = 0; this.pending = new Map(); this.errors = []; this.listeners = new Map();
     ws.onmessage = (m) => {
       const d = JSON.parse(m.data);
       if (d.id && this.pending.has(d.id)) { this.pending.get(d.id)(d); this.pending.delete(d.id); }
+      else if (d.method && this.listeners.has(d.method)) this.listeners.get(d.method)(d.params);
       else if (d.method === "Runtime.exceptionThrown") this.errors.push(JSON.stringify(d.params.exceptionDetails).slice(0, 400));
       else if (d.method === "Log.entryAdded" && d.params.entry.level === "error") this.errors.push(d.params.entry.text.slice(0, 300));
     };
@@ -79,6 +80,8 @@ export class Cdp {
       this.ws.send(JSON.stringify({ id: i, method, params }));
     });
   }
+  /** CDP 이벤트 하나에 처리기를 붙인다 (예: Fetch.requestPaused 로 다른 출처 응답 흉내, J5-078) */
+  on(method, fn) { this.listeners.set(method, fn); }
   async eval(expression) { const r = await this.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error(r.exceptionDetails.text + " " + (r.exceptionDetails.exception?.description || "")); return r.result.value; }
   async waitFor(expression, ms = 8000) { const end = Date.now() + ms; while (Date.now() < end) { if (await this.eval(expression)) return true; await new Promise((r) => setTimeout(r, 100)); } throw new Error("timeout: " + expression); }
   async navigate(url) { await this.send("Page.navigate", { url }); await this.waitFor("document.readyState === 'complete'"); }

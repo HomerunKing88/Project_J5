@@ -1,7 +1,7 @@
 // 최소 앱 캐시 (ADR-01: 서비스 워커에는 앱 실행 파일만 캐시한다). 사진·관측·시드 파일은 캐시하지 않는다.
 // 버전을 올리면 이전 캐시를 지운다. 네트워크 없이도 아래 파일로 앱이 뜬다.
 const CACHE_PREFIX = "j5-app-";
-const CACHE = CACHE_PREFIX + "v0.2.37"; // 캐시한 앱 파일이 바뀌면 올린다 (J5-077: 연습용 자료는 ?demo=1 에서만)
+const CACHE = CACHE_PREFIX + "v0.2.38"; // 캐시한 앱 파일이 바뀌면 올린다 (J5-078: 다른 출처는 키 자리표가 든 타일 요청만 맡음)
 const APP_FILES = [
   "./",
   "./index.html",
@@ -115,7 +115,9 @@ self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== "GET") return;
   const sameOrigin = url.origin === self.location.origin;
-  if ((!sameOrigin && TILE_HOSTS.includes(url.hostname)) || (sameOrigin && url.pathname.includes("/tiles/"))) {
+  // 다른 출처는 앱이 만든 타일 요청(주소에 키 자리표가 있음)만 맡는다. 그 밖의 요청(기기 시험 페이지의 VWorld 직접 연결 시험 등, J5-078)은
+  // 손대지 않고 브라우저에 맡긴다: no-cors 로 바꿔 보내면 다른 출처 허용 여부를 잴 수 없고, 실제 키가 든 주소가 타일 캐시에 남는다(리뷰 반영 PR #125)
+  if ((!sameOrigin && TILE_HOSTS.includes(url.hostname) && e.request.url.includes(KEY_MARK)) || (sameOrigin && url.pathname.includes("/tiles/"))) {
     e.respondWith(tileResponse(e));
     return;
   }

@@ -67,15 +67,37 @@ export function findPnu(obj) {
   return null;
 }
 
+// 같은 Worker 실행체 안에서 시험을 한 번에 하나만 돌리고, 끝난 결과는 PROBE_CACHE_S 동안 다시 쓴다(리뷰 반영 PR #125: 공개 주소라
+// 동시에 여러 번 불려도 VWorld 호출이 그만큼 늘지 않게 한다). 실행체가 여럿이면 Cloudflare 캐시가 그 사이를 막는다.
+let inflight = null;
+let last = null;   // { at, out }
+
+/** 시험용: 실행체 안의 시험 상태를 지운다 */
+export function _resetProbe() { inflight = null; last = null; }
+
 async function probe(request, env, ctx) {
   const key = env.VWORLD_API_KEY;
   if (!key) return json({ error: "Worker 비밀값 VWORLD_API_KEY 가 없다" }, 500);
+  if (last && Date.now() - last.at < PROBE_CACHE_S * 1000) return json({ ...last.out, reused: true });
   const cache = typeof caches !== "undefined" ? caches.default : null;
   const cacheKey = new Request(new URL("/api/vworld/probe", request.url).toString());
   if (cache) {
     const hit = await cache.match(cacheKey);
     if (hit) return hit;
   }
+  if (!inflight) {
+    inflight = runProbe(request, key, env).then((out) => { last = { at: Date.now(), out }; return out; }).finally(() => { inflight = null; });
+  }
+  const out = await inflight;
+  if (cache && ctx?.waitUntil) {
+    const stored = json(out);
+    stored.headers.set("cache-control", `public, max-age=${PROBE_CACHE_S}`);
+    ctx.waitUntil(cache.put(cacheKey, stored));
+  }
+  return json(out);
+}
+
+async function runProbe(request, key, env) {
   const origin = new URL(request.url).origin;
   const domain = env.VWORLD_DOMAIN || origin;
   const [lon, lat] = PROBE_POINT;
@@ -94,11 +116,6 @@ async function probe(request, env, ctx) {
   }
   // 배경 타일(WMTS, 경로가 {z}/{y}/{x}): 시험 지점이 든 z17 타일
   steps.push(await call("tile_base", `/req/wmts/1.0.0/${key}/Base/17/50755/111775.png`, {}, { key, sendKey: false }));
-  const out = { note: "VWorld 연결 시험 (J5-078). 인증키는 지웠다. 시험이 끝나면 이 주소를 지운다.", checked_at: new Date().toISOString(), domain_param: domain, colo: request.cf?.colo ?? null,
-    country: request.cf?.country ?? null, pnu, steps: steps.map(({ _json, ...s }) => s) };
-  const res = json(out);
-  res.headers.set("cache-control", `public, max-age=${PROBE_CACHE_S}`);
-  if (cache && ctx?.waitUntil) ctx.waitUntil(cache.put(cacheKey, res.clone()));
-  res.headers.set("cache-control", "no-store");
-  return res;
+  return { note: "VWorld 연결 시험 (J5-078). 인증키는 지웠다. 시험이 끝나면 이 주소를 지운다.", checked_at: new Date().toISOString(), domain_param: domain, colo: request.cf?.colo ?? null,
+    country: request.cf?.country ?? null, pnu, steps: steps.map(({ _json, ...st }) => st) };
 }
