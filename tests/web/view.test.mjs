@@ -377,12 +377,12 @@ test("수집 종류: 거래 파일 검사와 연도별 표의 받은 종류", ()
   assert.deepEqual(validateTransactionsDoc(ok), []);
   assert.deepEqual(validateTransactionsDoc({ ...ok, transactions: [{ ...ok.transactions[0], deal_kind: "apt" }] }), ["transactions[0] deal_kind"]);
   assert.deepEqual(validateTransactionsDoc({ ...ok, transactions: [{ ...ok.transactions[0], land_category: 3 }] }), ["transactions[0] land_category"]);
-  for (const km of [{ apt: 1 }, { nrg: 9 }, { nrg: 0 }, { nrg: 1.5 }, ["nrg"], "nrg"]) {
+  for (const km of [{ apt: 1 }, { nrg: 9 }, { nrg: 0 }, { nrg: 1.5 }, ["nrg"], "nrg", null]) {   // null 은 PC 게시 전 확인도 거절한다 (J5-075)
     assert.equal(validateTransactionsDoc({ ...ok, coverage: [{ ...ok.coverage[0], kind_months: km }] }).length, 1, `kind_months ${JSON.stringify(km)}`);
   }
   // J5-073: 종류별 시도 개월 (그 종류의 완전 개월 이상, 종류를 가리지 않은 시도 개월 이하)
   assert.deepEqual(validateTransactionsDoc({ ...ok, coverage: [{ ...ok.coverage[0], kind_months_any: { nrg: 8, land: 3 } }] }), []);
-  for (const ka of [{ apt: 1 }, { nrg: 9, land: 2 }, { nrg: 7, land: 2 }, { nrg: 8 }, { nrg: 8, land: 0 }, ["nrg"]]) {
+  for (const ka of [{ apt: 1 }, { nrg: 9, land: 2 }, { nrg: 7, land: 2 }, { nrg: 8 }, { nrg: 8, land: 0 }, ["nrg"], null]) {
     assert.equal(validateTransactionsDoc({ ...ok, coverage: [{ ...ok.coverage[0], kind_months_any: ka }] }).length, 1, `kind_months_any ${JSON.stringify(ka)}`);
   }
   const feature = { id: "9999900100100010000", properties: { emd_name: "가상동", emd_code: "9999900100", label: "1", bon: 1, bu: 0, mountain: false } };

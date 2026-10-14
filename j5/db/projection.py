@@ -268,15 +268,16 @@ def _verify_tx_extras(tx: dict) -> None:
             ok = False
             break
         seen.add((c["lawd_cd"], c["year"]))
-        # J5-065: 종류마다 그해 완전히 받은 개월 수 (없으면 이전 형식). 종류를 가리지 않은 개월 수보다 클 수 없다
+        # J5-065: 종류마다 그해 완전히 받은 개월 수 (칸이 없으면 이전 형식). 종류를 가리지 않은 개월 수보다 클 수 없다.
+        # 칸이 있는데 null 이면 거절한다: 폰 검사와 같다 (리뷰 반영 PR #120, J5-075)
         km = c.get("kind_months")
-        if km is not None and not (isinstance(km, dict) and all(k in RT_KINDS and isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= c["months_complete"]
+        if "kind_months" in c and not (isinstance(km, dict) and all(k in RT_KINDS and isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= c["months_complete"]
                                                                 for k, v in km.items())):
             ok = False
             break
         # J5-073: 종류마다 그해 시도한 개월 수 (없으면 이전 형식). 종류를 가리지 않은 시도 개월보다 클 수 없고, 그 종류의 완전 개월보다 작을 수 없다
         ka = c.get("kind_months_any")
-        if ka is not None and not (isinstance(ka, dict) and all(k in RT_KINDS and isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= c["months_any"]
+        if "kind_months_any" in c and not (isinstance(ka, dict) and all(k in RT_KINDS and isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= c["months_any"]
                                                                 and v >= (km or {}).get(k, 0) for k, v in ka.items())
                                    and all(ka.get(k, 0) >= v for k, v in (km or {}).items())):
             ok = False
@@ -363,8 +364,11 @@ def verify_projection_dir(out: Path, *, expected_version: int | None = None, exp
         for t in tx["transactions"]:
             if t.get("zone") not in ("core", "comparison") or t.get("transaction_id") is None:
                 raise ProjectionError("verify_transaction_zone", "범위 밖 거래 또는 ID 없는 거래가 파생본에 있다")
-            if t.get("deal_kind") is not None and t["deal_kind"] not in RT_KINDS:
+            if t.get("deal_kind") is not None and not (isinstance(t["deal_kind"], str) and t["deal_kind"] in RT_KINDS):
                 raise ProjectionError("verify_transaction_kind", f"거래 {t['transaction_id']} 의 deal_kind {t['deal_kind']!r} 를 모른다")
+            # 토지 지목은 글자 또는 null (폰 검사와 같다, J5-075)
+            if t.get("land_category") is not None and not isinstance(t["land_category"], str):
+                raise ProjectionError("verify_transaction_kind", f"거래 {t['transaction_id']} 의 land_category 가 글자가 아니다")
             if t.get("asset_id") is not None and t["asset_id"] not in ids:
                 raise ProjectionError("verify_transaction_link", f"거래 {t['transaction_id']} 의 연결 물건이 물건 목록에 없다")
     if expected_counts is not None:
