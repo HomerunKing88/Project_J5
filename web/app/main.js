@@ -13,13 +13,13 @@ import { migrationReadiness, migrationText, persistenceText } from "./migrate.js
 import { createNavigator, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, pickLabel, pickPoint, MODE_LABEL, MODE_SHORT, retireModeTo } from "./ui.js";
 import { externalMapLinks, bboxCenter, LINK_ATTRS } from "./extmap.js";
 import { validateBasemap, LAYERS as BASEMAP_LAYERS, LAYER_LABEL as BASEMAP_LAYER_LABEL } from "./basemap.js";
-import { createVworldBridge, parseParcelResponse, parseZoningResponse, canLookup, fmtJiga, fmtAreaPyeong, DATASETS as VWORLD_DATASETS } from "./vworld.js";
+import { createVworldBridge, parseParcelResponse, parseZoningResponse, parseParcelsInBox, aroundQueryBox, zoningSummary, canLookup, fmtJiga, fmtAreaPyeong, DATASETS as VWORLD_DATASETS } from "./vworld.js";
 import { PROVIDERS, resolveTileConfig, prefetchPlan, padBbox, tileUrl, hasKeyLike, TILE_CACHE, PREFETCH_ZOOMS, KEY_PLACEHOLDER } from "./tiles.js";
 import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
 import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummaryInfo, yearSummaryRow, yearSummaryCells, recentDeals, parcelSummaryItems, fmtKrw, placeDeals, dealKind, dealValueText, dealDetailText, dealsSince, dealSince, compsChartData, compsByYear, TREND_MIN_CASES, niceTicks, DEAL_MODES, DEAL_YEARS, nearbyComps, COMP_LIST_MAX, DEAL_KIND_NAMES, DEAL_KIND_FILTERS, dealsOfKind, dealKindsPresent } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.40";
+export const APP_VERSION = "0.2.41";
 /** 자료가 없을 때 지도가 처음 보이는 곳: 종로5가역 부근 [경도, 위도] (J5-062, 배경 지도만 켠 경우) */
 const FIELD_HOME = [127.0019, 37.5709];
 const PARCEL_CARD_YEARS = 5;   // 필지 카드의 연도별 표에 보이는 최근 연도 수 (J5-055)
@@ -147,6 +147,7 @@ function updateTileFields() {
 function applyTileSettings({ provider, key, template }, { quiet = false } = {}) {
   if (!provider) {
     state.tiles = null;
+    scheduleAround();
     mapCall((m) => m.setTiles(null));
     if (!quiet) text($("tiles-note"), "배경 타일을 끄고 저장했습니다.", "ok");
     return true;
@@ -159,6 +160,7 @@ function applyTileSettings({ provider, key, template }, { quiet = false } = {}) 
     return false;
   }
   state.tiles = cfg;
+  scheduleAround();   // 배경 지도를 바꾸면 주변 필지 경계도 다시 정한다 (J5-081)
   mapCall((m) => m.setTiles({ url: cfg.url, minZoom: cfg.minZoom, maxZoom: cfg.maxZoom, attribution: cfg.attribution }));
   if (!quiet) text($("tiles-note"), `저장했습니다: ${PROVIDERS[provider].name} · ${cfg.url}` + (cfg.needsKey ? ". 인증키는 이 폰에만 저장합니다" : ""), "ok");
   return true;
@@ -1377,6 +1379,50 @@ function vworldBridge() {
   return state.vworld;
 }
 
+// ---- 화면 범위의 필지 경계 (J5-081) ----
+// 배경 지도에 VWorld 키가 있고 확대 17단계 이상이면 지도가 멈춘 뒤 덮이지 않은 영역(+여유)의 필지를 범위로 받아 경계·지번을 그린다.
+// 받은 범위는 기억해 같은 곳을 다시 부르지 않는다. 필지는 화면에만 두고 저장하지 않는다(상한을 넘으면 오래된 것부터 버린다).
+const AROUND_MIN_ZOOM = 17;
+const AROUND_KEEP = 4000;          // 화면에 둘 필지 수 상한
+let aroundTimer = null, aroundBusy = false;
+function scheduleAround() {
+  clearTimeout(aroundTimer);
+  aroundTimer = setTimeout(refreshAround, 600);
+}
+
+const covers = (outer, inner) => outer[0] <= inner[0] && outer[1] <= inner[1] && outer[2] >= inner[2] && outer[3] >= inner[3];
+const overlaps = (a, b) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+
+async function refreshAround() {
+  const map = state.map;
+  if (!map || !state.tiles || state.tiles.provider !== "vworld_base") return mapCall((m) => m.setAround([]));
+  if (map.zoom() < AROUND_MIN_ZOOM) return mapCall((m) => m.setAround([]));
+  const vb = map.visibleBbox();
+  const a = (state.around ??= { parcels: new Map(), boxes: [] });
+  if (!a.boxes.some((b) => covers(b, vb)) && !aroundBusy && navigator.onLine) {
+    const key = String((await state.store.getMeta("tiles_key")) ?? "").trim();
+    if (key) {
+      const box = aroundQueryBox(vb);
+      aroundBusy = true;
+      try {
+        const r = parseParcelsInBox(await vworldBridge().request(VWORLD_DATASETS.parcel, { box }, key, location.origin, { size: 1000 }));
+        if (r.status === "OK") {
+          for (const p of r.parcels) { a.parcels.delete(p.pnu); a.parcels.set(p.pnu, p); }
+          while (a.parcels.size > AROUND_KEEP) a.parcels.delete(a.parcels.keys().next().value);
+          if (!r.truncated) a.boxes = [...a.boxes.slice(-30), box];   // 다 받은 범위만 기억한다
+          a.truncated = r.truncated;
+        }
+      } catch (e) {
+        console.warn("주변 필지를 받지 못했습니다", e);
+      } finally {
+        aroundBusy = false;
+      }
+    }
+  }
+  const shown = [...a.parcels.values()].filter((p) => overlaps(p.bbox, vb));
+  mapCall((m) => m.setAround(shown));
+}
+
 function closeLookup() {
   lookupSeq += 1;
   $("lookup-panel").hidden = true;
@@ -1440,6 +1486,7 @@ function showLookup(p, zoning) {
     ["도형면적", `${fmtAreaPyeong(p.areaM2)} · 경계로 계산, 공부면적 아님`],
   ];
   if (zoning.status !== "OK") facts.push(["용도지역", zoning.status === "NOT_FOUND" ? "이 자리에 자료 없음" : `조회 실패 (${zoning.error ?? zoning.status})`]);
+  else facts.splice(2, 0, ["용도지역", zoningSummary(zoning.items) ?? "자료에 이름 없음 (아래 원문)"]);   // J5-081: 실측한 uname·dyear
   $("lookup-facts").replaceChildren(...facts.map(([k, v]) => el("li", {}, el("span", { class: "k", text: k }), el("span", { class: "v", text: v }))));
   const zi = zoning.status === "OK" ? zoning.items : [];
   $("lookup-zoning").hidden = !zi.length;
@@ -1470,7 +1517,7 @@ async function initMap() {
     // 자리 고르기 중에는 점·필지 누르기로 카드를 열지 않는다 (고르기 상태가 남지 않게, 리뷰 반영 PR #109). 고르기는 지도를 끌어 맞춘다
     state.map = createMap($("map-svg"), { onSelect: (a) => { if (!state.picking) selectOnMap(a); }, onSelectParcel: (f) => { if (!state.picking) showParcel(f); },
       onSelectDeal: (id) => { if (!state.picking) selectDeal(id); }, onTileStatus, home: FIELD_HOME,
-      onTapMap: (lonlat) => { if (!state.picking) lookupAt(lonlat); } });
+      onTapMap: (lonlat) => { if (!state.picking) lookupAt(lonlat); }, onViewChange: scheduleAround });
     $("map-zoom-in").addEventListener("click", () => mapCall((m) => m.zoomBy(2)));
     $("map-zoom-out").addEventListener("click", () => mapCall((m) => m.zoomBy(0.5)));
     $("map-fit").addEventListener("click", () => mapCall((m) => m.fit()));

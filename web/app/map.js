@@ -126,7 +126,7 @@ export function parcelLabelVisible(wb, label, view, w, h) {
  * SVG 점 지도. svgEl 은 index.html 의 정적 <svg>. onSelect(asset) 는 점을 탭했을 때.
  * 실패(예외)는 호출자가 잡아 목록만으로 동작하게 한다.
  */
-export function createMap(svgEl, { onSelect, onSelectParcel, onSelectDeal, onTileStatus, onTapMap, home = null } = {}) {
+export function createMap(svgEl, { onSelect, onSelectParcel, onSelectDeal, onTileStatus, onTapMap, onViewChange, home = null } = {}) {
   if (!svgEl || svgEl.namespaceURI == null || svgEl.tagName?.toLowerCase() !== "svg") throw new Error("SVG 요소가 아님");
   const NS = svgEl.namespaceURI;
   const node = (tag, attrs = {}) => {
@@ -143,6 +143,8 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onSelectDeal, onTil
   const layerRoadLabels = node("g", { class: "layer-road-labels" });
   const layerShapes = node("g", { class: "layer-parcels" });
   const layerLabels = node("g", { class: "layer-parcel-labels" });
+  const layerAround = node("g", { class: "layer-around" });     // 화면 범위의 필지 경계 (J5-081): VWorld 에서 받은 주변 필지. 탭 대상 아님(누르면 그 자리를 조회)
+  const layerAroundLabels = node("g", { class: "layer-around-labels" });
   const layerLookup = node("g", { class: "layer-lookup" });     // 온라인 조회 필지 (J5-080): 지도를 눌러 VWorld 에서 받은 필지 하나의 경계. 탭 대상 아님
   const layerDeals = node("g", { class: "layer-deals" });       // 실거래 (J5-063): 필지·번지대 위의 종류+금액 꼬리표. 켰을 때는 가격을 보려는 것이라 위치점 위에 둔다(가린 대상은 필지 카드의 "이 필지의 대상" 에서 기록)
   const layerPts = node("g", { class: "layer-pts" });
@@ -160,7 +162,7 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onSelectDeal, onTil
   const scaleText = node("text", { x: 10, y: 0 });
   layerScale.append(scaleLine, scaleText);
   const attribText = node("text", { class: "map-attrib", "text-anchor": "end" });
-  svgEl.replaceChildren(layerTiles, layerBase, layerRoadLabels, layerShapes, layerLabels, layerLookup, layerPts, layerDeals, layerLocate, layerPick, layerScale, attribText);
+  svgEl.replaceChildren(layerTiles, layerBase, layerRoadLabels, layerAround, layerAroundLabels, layerShapes, layerLabels, layerLookup, layerPts, layerDeals, layerLocate, layerPick, layerScale, attribText);
 
   let view = fitView([], 320, 280);
   let size = { w: 320, h: 280 };
@@ -188,6 +190,9 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onSelectDeal, onTil
   let baseCount = 0, baseBbox = null;
   let selectedId = null, selectedPnu = null;
   let lookup = null;             // { origin, wb } 조회 필지 (J5-080) 또는 null
+  let around = [];               // [{ text, wb, lp, label, visible }] 화면 범위 필지 (J5-081)
+  let aroundOrigin = null;
+  let lastViewKey = "";          // 마지막으로 알린 화면 (같은 화면이면 onViewChange 를 다시 부르지 않는다)
   const pointers = new Map();
   let downTarget = null, moved = 0;
 
@@ -225,6 +230,10 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onSelectDeal, onTil
 
   const render = () => {
     renderTiles();
+    if (onViewChange) {
+      const key = `${view.scale.toPrecision(6)}|${view.tx.toFixed(0)}|${view.ty.toFixed(0)}|${size.w}x${size.h}`;
+      if (key !== lastViewKey) { lastViewKey = key; try { onViewChange(); } catch { /* 알림 실패는 그리기를 막지 않는다 */ } }
+    }
     const vr = visibleRect();
     if (pickOn) layerPick.setAttribute("transform", `translate(${(vr.x + vr.w / 2).toFixed(1)},${(vr.y + vr.h / 2).toFixed(1)})`);
     attribText.setAttribute("x", vr.x + vr.w - 6); attribText.setAttribute("y", vr.y + vr.h - 6);
@@ -239,6 +248,19 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onSelectDeal, onTil
           r.text.setAttribute("transform", `translate(${p.x.toFixed(1)},${p.y.toFixed(1)}) rotate(${r.mid.angle.toFixed(1)})`);
         }
         if (vis !== r.visible) { r.visible = vis; r.text.setAttribute("visibility", vis ? "visible" : "hidden"); }
+      }
+    }
+    if (aroundOrigin) {
+      const o = toScreen(aroundOrigin, view);
+      layerAround.setAttribute("transform", `translate(${o.x.toFixed(2)},${o.y.toFixed(2)}) scale(${(view.scale / PARCEL_LOCAL_K).toPrecision(8)})`);
+      const showLabels = Math.log2(view.scale / 256) >= 18;
+      for (const a of around) {
+        const vis = showLabels && parcelLabelVisible(a.wb, a.label, view, size.w, size.h);
+        if (vis) {
+          const p = toScreen(a.lp, view);
+          a.text.setAttribute("transform", `translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`);
+        }
+        if (vis !== a.visible) { a.visible = vis; a.text.setAttribute("visibility", vis ? "visible" : "hidden"); }
       }
     }
     if (lookup) {
@@ -431,6 +453,36 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onSelectDeal, onTil
       selectedPnu = pnu ?? null;
       for (const pc of parcels.values()) setParcelClass(pc);
       render();
+    },
+    /** 화면 범위의 필지 경계와 지번 (J5-081). items: [{ pnu, lot, polygons, bbox }]. 빈 배열이면 지운다. 화면은 옮기지 않는다 */
+    setAround(items) {
+      layerAround.replaceChildren();
+      layerAroundLabels.replaceChildren();
+      around = [];
+      aroundOrigin = null;
+      if (items?.length) {
+        const c = mercator([(items[0].bbox[0] + items[0].bbox[2]) / 2, (items[0].bbox[1] + items[0].bbox[3]) / 2]);
+        aroundOrigin = { x: c.x, y: c.y };
+        for (const it of items) {
+          layerAround.append(node("path", { class: "around-parcel", "data-around-pnu": it.pnu, d: parcelPathD(it.polygons, aroundOrigin), "vector-effect": "non-scaling-stroke" }));
+          if (!it.lot) continue;
+          const text = node("text", { class: "around-label", visibility: "hidden" });
+          text.textContent = it.lot;
+          layerAroundLabels.append(text);
+          const lp = labelPointOf({ geometry: { type: "MultiPolygon", coordinates: it.polygons } }) ?? [(it.bbox[0] + it.bbox[2]) / 2, (it.bbox[1] + it.bbox[3]) / 2];
+          around.push({ text, wb: worldBbox(it.bbox), lp: mercator(lp), label: it.lot, visible: false });
+        }
+      }
+      render();
+      return around.length;
+    },
+    /** 지금 확대 단계 (타일 확대 단계와 같은 눈금, 소수) */
+    zoom() { return Math.log2(view.scale / 256); },
+    /** 덮이지 않은 영역의 경위도 범위 [서, 남, 동, 북] */
+    visibleBbox() {
+      const vr = visibleRect();
+      const a = unmercator(toWorld(vr.x, vr.y + vr.h, view)), b = unmercator(toWorld(vr.x + vr.w, vr.y, view));
+      return [a[0], a[1], b[0], b[1]];
     },
     /** 온라인 조회 필지의 경계 (J5-080). polygons: 경위도 MultiPolygon 좌표, bbox: [서, 남, 동, 북]. null 이면 지운다. 화면은 옮기지 않는다 */
     setLookup(polygons, bbox) {
