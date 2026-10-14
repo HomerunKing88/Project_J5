@@ -142,10 +142,10 @@ def test_load_by_kind_and_isolation(db, home):
     assert c["kind"] == "land" and c["months"][0]["collection"] == "complete" and c["months"][0]["runs"] == 2 and c["transactions"] == 2
     cn = coverage(db, LAWD, ["202608"])
     assert cn["kind"] == "nrg" and cn["months"][0]["collection"] == "empty" and cn["transactions"] == 0, "기본 범위 현황은 상업·업무용만"
-    assert coverage_rows(db) == [{"lawd_cd": LAWD, "year": 2026, "months_complete": 1, "months_any": 1, "kind_months": {"nrg": 1, "sh": 1, "land": 1}}]
+    assert coverage_rows(db) == [{"lawd_cd": LAWD, "year": 2026, "months_complete": 1, "months_any": 1, "kind_months": {"nrg": 1, "sh": 1, "land": 1}, "kind_months_any": {"nrg": 1, "sh": 1, "land": 1}}]
     # 리뷰 반영(PR #112): 상업·업무용만 더 받은 해는 종류마다 개월이 다르게 남는다 (모든 종류를 다 받은 해로 보이지 않는다)
     load_run(db, home, LAWD, fetch(home, None, [], ym="202607").run_id)
-    assert coverage_rows(db) == [{"lawd_cd": LAWD, "year": 2026, "months_complete": 2, "months_any": 2, "kind_months": {"nrg": 2, "sh": 1, "land": 1}}]
+    assert coverage_rows(db) == [{"lawd_cd": LAWD, "year": 2026, "months_complete": 2, "months_any": 2, "kind_months": {"nrg": 2, "sh": 1, "land": 1}, "kind_months_any": {"nrg": 2, "sh": 1, "land": 1}}]
 
 
 def test_run_record_in_wrong_kind_folder_is_rejected(db, home):
@@ -188,7 +188,7 @@ def test_projection_exports_kind_and_verifier(db, home, tmp_path):
     tx = json.loads((out / "transactions.json").read_text(encoding="utf-8"))
     kinds = sorted(((t["deal_kind"], t["land_category"], t["building_use"]) for t in tx["transactions"]), key=lambda x: tuple(v or "" for v in x))
     assert kinds == [("land", None, None), ("land", "대", None), ("nrg", None, "제2종근린생활"), ("sh", None, "단독")]
-    assert tx["coverage"] == [{"lawd_cd": LAWD, "year": 2026, "months_complete": 1, "months_any": 1, "kind_months": {"nrg": 1, "sh": 1, "land": 1}}]
+    assert tx["coverage"] == [{"lawd_cd": LAWD, "year": 2026, "months_complete": 1, "months_any": 1, "kind_months": {"nrg": 1, "sh": 1, "land": 1}, "kind_months_any": {"nrg": 1, "sh": 1, "land": 1}}]
     land = next(t for t in tx["transactions"] if t["land_category"] == "대")
     assert land["building_area_m2"] is None and land["missing_reasons"] == {"buildingAr": "not_applicable", "buildYear": "not_applicable"} and land["scope"] == "land_only"
     verify_projection_dir(out)
@@ -197,14 +197,20 @@ def test_projection_exports_kind_and_verifier(db, home, tmp_path):
                          (lambda t: t["coverage"][0].update(kind_months={"apt": 1}), "verify_transactions_coverage"),
                          (lambda t: t["coverage"][0].update(kind_months={"nrg": 2}), "verify_transactions_coverage"),
                          (lambda t: t["coverage"][0].update(kind_months={"nrg": 0}), "verify_transactions_coverage"),
-                         (lambda t: t["coverage"][0].update(kind_months=["nrg"]), "verify_transactions_coverage")):
+                         (lambda t: t["coverage"][0].update(kind_months=["nrg"]), "verify_transactions_coverage"),
+                         # J5-073: 종류별 시도 개월은 그 종류의 완전 개월 이상, 시도 개월 이하
+                         (lambda t: t["coverage"][0].update(kind_months_any={"apt": 1}), "verify_transactions_coverage"),
+                         (lambda t: t["coverage"][0].update(kind_months_any={"nrg": 2, "sh": 1, "land": 1}), "verify_transactions_coverage"),
+                         (lambda t: t["coverage"][0].update(kind_months_any={"nrg": 1, "sh": 1}), "verify_transactions_coverage"),
+                         (lambda t: t["coverage"][0].update(kind_months_any={"nrg": 0, "sh": 1, "land": 1}), "verify_transactions_coverage"),
+                         (lambda t: t["coverage"][0].update(kind_months_any=[]), "verify_transactions_coverage")):
         tamper(out, change)
         with pytest.raises(ProjectionError) as e:
             verify_projection_dir(out)
         assert e.value.code == code
         for n, data in saved.items():
             (out / n).write_bytes(data)
-    tamper(out, lambda t: [x.pop("deal_kind") for x in t["transactions"]] and [c.pop("kind_months") for c in t["coverage"]])
+    tamper(out, lambda t: [x.pop("deal_kind") for x in t["transactions"]] and [(c.pop("kind_months"), c.pop("kind_months_any")) for c in t["coverage"]])
     verify_projection_dir(out)  # 이전 형식(종류 없음)도 받는다
 
 

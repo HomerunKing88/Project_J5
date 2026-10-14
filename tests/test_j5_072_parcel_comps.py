@@ -118,7 +118,7 @@ def test_phone_comps_match_pc(built):
     phone = json.loads(res.stdout)
     pc = b["inspect"]["pc"]
     assert set(phone) == set(pc)
-    seen = {"comps": 0, "ratio": 0, "reference": 0, "mine": 0, "share": 0, "change": 0, "not_collected": 0, "incomplete": 0, "unknown": 0, "kinds": 0, "land_kind": 0, "years": 0}
+    seen = {"comps": 0, "ratio": 0, "reference": 0, "mine": 0, "share": 0, "change": 0, "not_collected": 0, "incomplete": 0, "incomplete_kind": 0, "not_collected_kind": 0, "kinds": 0, "land_kind": 0, "years": 0}
     for key, ph in phone.items():
         r = pc[key]
         assert ph["count"] == r["count"], key
@@ -150,18 +150,15 @@ def test_phone_comps_match_pc(built):
         for a, c in zip(py["years"], ry["years"]):
             for k in ("count", "n", "months", "kinds", "partial"):
                 assert a[k] == c[k], (key, a["year"], k, a[k], c[k])
-            # 폰은 종류를 고르면 그 종류의 시도 개월을 모른다(파일에 없음): 받은 달이 없고 그해 시도가 있으면 모름. PC 는 종류별로 가른다
-            if a["counted"] == "unknown":
-                assert not key.endswith("|all") and c["counted"] in ("incomplete", "not_collected"), (key, a, c)
-                seen["unknown"] += 1
-            else:
-                assert a["counted"] == c["counted"], (key, a["year"], a["counted"], c["counted"])
-            if key.endswith("|all"):
-                assert a["monthsAny"] == c["months_any"], (key, a, c)
+            # 종류를 골라도 파생본의 종류별 시도 개월(kind_months_any, J5-073)로 폰이 PC 와 같이 실패·미수집을 가른다
+            assert a["counted"] == c["counted"], (key, a["year"], a["counted"], c["counted"])
+            assert a["monthsAny"] == c["months_any"], (key, a, c)
             assert all(close(a[k], c[k]) for k in ("median", "min", "max")), (key, a, c)
             seen["years"] += 1
             seen["not_collected"] += c["counted"] == "not_collected"
             seen["incomplete"] += a["counted"] == "incomplete"
+            seen["incomplete_kind"] += a["counted"] == "incomplete" and not key.endswith("|all")
+            seen["not_collected_kind"] += a["counted"] == "not_collected" and not key.endswith("|all") and c["months_any"] == 0
             seen["kinds"] += bool(c["kinds"])
             seen["land_kind"] += key.endswith("|land") and c["months"] > 0
     # 빈 비교로 통과하지 않게: 갈래마다 한 번 이상

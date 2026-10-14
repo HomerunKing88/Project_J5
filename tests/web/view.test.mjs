@@ -380,6 +380,11 @@ test("수집 종류: 거래 파일 검사와 연도별 표의 받은 종류", ()
   for (const km of [{ apt: 1 }, { nrg: 9 }, { nrg: 0 }, { nrg: 1.5 }, ["nrg"], "nrg"]) {
     assert.equal(validateTransactionsDoc({ ...ok, coverage: [{ ...ok.coverage[0], kind_months: km }] }).length, 1, `kind_months ${JSON.stringify(km)}`);
   }
+  // J5-073: 종류별 시도 개월 (그 종류의 완전 개월 이상, 종류를 가리지 않은 시도 개월 이하)
+  assert.deepEqual(validateTransactionsDoc({ ...ok, coverage: [{ ...ok.coverage[0], kind_months_any: { nrg: 8, land: 3 } }] }), []);
+  for (const ka of [{ apt: 1 }, { nrg: 9, land: 2 }, { nrg: 7, land: 2 }, { nrg: 8 }, { nrg: 8, land: 0 }, ["nrg"]]) {
+    assert.equal(validateTransactionsDoc({ ...ok, coverage: [{ ...ok.coverage[0], kind_months_any: ka }] }).length, 1, `kind_months_any ${JSON.stringify(ka)}`);
+  }
   const feature = { id: "9999900100100010000", properties: { emd_name: "가상동", emd_code: "9999900100", label: "1", bon: 1, bu: 0, mountain: false } };
   const txDoc = { ...ok, zone_rule: { version: 1, core: ["가상동"], comparison: [] }, transactions: [] , count: 0,
     coverage: [{ lawd_cd: "99999", year: 2026, months_complete: 8, months_any: 8, kind_months: { nrg: 8 } }, { lawd_cd: "99999", year: 2025, months_complete: 12, months_any: 12, kind_months: { nrg: 12, sh: 12, land: 12 } },
@@ -491,6 +496,11 @@ test("연도별 시세: 달력 연도별 대지 평당 중간값·거래 수·�
   assert.deepEqual(fa.years.map((r) => [r.year, r.counted, r.monthsAny]).slice(1, 4), [[2022, "counted", 0], [2023, "incomplete", 2], [2024, "counted", 0]]);
   assert.deepEqual(compsByYear(c, failed, mine, { from: 2021, today: "2026-10-13", kind: "land" }).years[2].counted, "unknown");
   assert.equal(compsByYear(c, failed, mine, { from: 2021, today: "2026-10-13", kind: "land" }).years[2].monthsAny, null);
+  // J5-073: 종류별 시도 개월이 있으면 종류를 골라도 실패·미수집을 가른다 (PC parcels-comps 와 같다)
+  const perKind = { coverage: [{ lawd_cd: "99999", year: 2023, months_complete: 0, months_any: 2, kind_months: {}, kind_months_any: { nrg: 2 } }] };
+  const nrg23 = compsByYear(c, perKind, mine, { from: 2021, today: "2026-10-13", kind: "nrg" }).years[2];
+  const land23 = compsByYear(c, perKind, mine, { from: 2021, today: "2026-10-13", kind: "land" }).years[2];
+  assert.deepEqual([nrg23.counted, nrg23.monthsAny, land23.counted, land23.monthsAny], ["incomplete", 2, "not_collected", 0]);
   // 리뷰 반영(PR #119): 시작 해 중간값이 0(금액 0 신고)이면 변동률을 내지 않는다
   const zero = [T2(31, "2021-02-01", 0), T2(32, "2021-03-01", 0), T2(33, "2021-04-01", 0), T2(34, "2022-02-01", 5e6), T2(35, "2022-03-01", 6e6), T2(36, "2022-04-01", 7e6)];
   assert.match(compsByYear(nearbyComps(mine, zero, [mine]), txDoc, mine, { today: "2022-12-31" }).change.missing, /^시작 해\(2021년\)의 대지 평당 중간값이 0 이하라/);
