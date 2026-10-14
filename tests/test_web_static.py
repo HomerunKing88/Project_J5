@@ -26,6 +26,11 @@ CSP_IMG_SRC = "img-src 'self' blob: " + " ".join(f"https://{h}" for h in sorted(
 # J5-078: VWorld 직접 연결 시험은 기기 시험 페이지(devtest.html)에서만, 누를 때만 VWorld 를 부른다. 앱(index.html)의 CSP·코드는 바꾸지 않는다.
 VWORLD_TEST_FILE = "app/vworldtest.js"
 DEVTEST_CSP_VWORLD = ("img-src 'self' blob: https://api.vworld.kr", "connect-src https://api.vworld.kr")
+# J5-078: VWorld JSONP 격리 프레임. sandbox="allow-scripts" 로 넣어 앱 저장소에 닿지 못하고, 이 페이지만 VWorld 스크립트를 읽는다.
+# 같은 출처 권한이 없는 프레임은 모듈 스크립트를 읽지 못해 일반 스크립트 하나만 쓴다.
+VWORLD_FRAME_PAGE = "vworld-frame.html"
+VWORLD_FRAME_JS = "app/vworld-frame.js"
+FRAME_CSP_VWORLD = "script-src 'self' https://api.vworld.kr"
 
 
 def test_no_external_urls_in_app_code():
@@ -34,6 +39,16 @@ def test_no_external_urls_in_app_code():
         if rel == EXT_MAP_FILE:
             continue
         text = p.read_text(encoding="utf-8")
+        if rel == VWORLD_FRAME_PAGE:
+            assert FRAME_CSP_VWORLD in text and "connect-src 'none'" in text, "격리 프레임 CSP: 스크립트만 VWorld, 통신 없음"
+            text = text.replace(FRAME_CSP_VWORLD, "")
+        if rel == VWORLD_FRAME_JS:
+            hosts = {m.group(1).lower() for m in re.finditer(r"https?://([a-z0-9.-]+)", text, re.IGNORECASE)}
+            assert hosts == {"api.vworld.kr"}, f"{p}: VWorld 밖 호스트 {hosts}"
+            assert 's.src = VWORLD + "?" + q.toString();' in text and "DATASETS[m.data] === true" in text, "격리 프레임은 정해 둔 VWorld 데이터 주소만 만든다"
+            for token in ("indexedDB", "localStorage", "document.cookie", "fetch(", "XMLHttpRequest"):
+                assert token not in text, f"{p}: {token} 사용 금지"
+            continue
         if rel == VWORLD_TEST_FILE:
             hosts = {m.group(1).lower() for m in re.finditer(r"https?://([a-z0-9.-]+)", text, re.IGNORECASE)}
             assert hosts == {"api.vworld.kr"}, f"{p}: VWorld 밖 호스트 {hosts}"
@@ -86,6 +101,10 @@ def test_every_page_has_csp_and_no_inline_script():
         assert re.search(r"<script(?![^>]*\bsrc=)", text) is None, f"{p}: 인라인 스크립트 금지"
         assert re.search(r"\son\w+=", text) is None, f"{p}: 인라인 이벤트 핸들러 금지"
         for m in re.finditer(r'<script[^>]*src="([^"]+)"', text):
+            if p.name == VWORLD_FRAME_PAGE:
+                assert m.group(1) == VWORLD_FRAME_JS and 'type="module"' not in m.group(0), "격리 프레임은 일반 스크립트 하나"
+                assert (p.parent / m.group(1)).is_file()
+                continue
             assert 'type="module"' in m.group(0), f"{p}: ES Modules만"
             assert (p.parent / m.group(1)).is_file(), f"{p}: {m.group(1)} 없음"
 
@@ -122,7 +141,7 @@ def test_service_worker_caches_only_app_files():
         assert (WEB / rel).is_file(), f"캐시 목록의 파일이 없음: {f}"
     for js in web_files(".js"):
         rel = js.relative_to(WEB).as_posix()
-        if rel not in ("sw.js", "app/devtest.js", VWORLD_TEST_FILE):
+        if rel not in ("sw.js", "app/devtest.js", VWORLD_TEST_FILE, VWORLD_FRAME_JS):
             assert f"./{rel}" in files, f"앱 모듈이 캐시 목록에 없음: {rel}"
 
 
@@ -144,3 +163,12 @@ def test_no_vendor_yet():
     """외부 고정 배포본은 없다. ZIP 은 자체 STORED 작성기(ADR-11), 지도는 자체 SVG 점 지도(ADR-12).
     MapLibre 는 타일 이용조건이 확인되는 시점에 새 ADR 로 검토한다."""
     assert not (WEB / "vendor").exists()
+
+
+def test_vworld_frame_is_sandboxed():
+    """J5-078: VWorld JSONP 는 같은 출처 권한이 없는 격리 프레임에서만 돈다. 어느 파일도 allow-same-origin 을 주지 않는다."""
+    for p in web_files(".html", ".js"):
+        assert "allow-same-origin" not in p.read_text(encoding="utf-8"), f"{p}: 격리 프레임에 같은 출처 권한 금지"
+    probe = (WEB / VWORLD_TEST_FILE).read_text(encoding="utf-8")
+    assert 'frame.setAttribute("sandbox", "allow-scripts");' in probe and 'frame.src = "vworld-frame.html";' in probe
+    assert "e.source !== frame.contentWindow" in probe, "격리 프레임에서 온 메시지만 받는다"

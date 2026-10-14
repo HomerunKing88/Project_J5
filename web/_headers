@@ -8,6 +8,19 @@
   Cross-Origin-Opener-Policy: same-origin
   Permissions-Policy: geolocation=(self), microphone=(), payment=(), usb=(), interest-cohort=()
 
+# VWorld 격리 프레임(J5-078)만 이 앱 안의 틀로 넣을 수 있게 한다. 위 규칙의 틀 금지를 떼고 같은 출처만 허용한다.
+# 배포 공급자가 .html 을 뗀 주소로 넘기므로 두 주소 모두 적는다.
+/vworld-frame.html
+  ! Content-Security-Policy
+  ! X-Frame-Options
+  Content-Security-Policy: frame-ancestors 'self'
+  X-Frame-Options: SAMEORIGIN
+/vworld-frame
+  ! Content-Security-Policy
+  ! X-Frame-Options
+  Content-Security-Policy: frame-ancestors 'self'
+  X-Frame-Options: SAMEORIGIN
+
 # 앱 진입점과 서비스 워커는 매번 새로 확인한다(새 판이 바로 보이게). 나머지 파일은 서비스 워커의 캐시 판으로 바뀐다.
 /
   Cache-Control: no-cache

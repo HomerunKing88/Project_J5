@@ -66,21 +66,21 @@ export class Cdp {
     ws.onmessage = (m) => {
       const d = JSON.parse(m.data);
       if (d.id && this.pending.has(d.id)) { this.pending.get(d.id)(d); this.pending.delete(d.id); }
-      else if (d.method && this.listeners.has(d.method)) this.listeners.get(d.method)(d.params);
+      else if (d.method && this.listeners.has(d.method)) this.listeners.get(d.method)(d.params, d.sessionId);
       else if (d.method === "Runtime.exceptionThrown") this.errors.push(JSON.stringify(d.params.exceptionDetails).slice(0, 400));
       else if (d.method === "Log.entryAdded" && d.params.entry.level === "error") this.errors.push(d.params.entry.text.slice(0, 300));
     };
   }
-  send(method, params = {}, timeoutMs = 20000) {
+  send(method, params = {}, timeoutMs = 20000, sessionId = undefined) {
     // 응답이 없는 명령은 멈춤 대신 오류로 끝낸다 (CI 에서 무한 대기 방지).
     return new Promise((res, rej) => {
       const i = ++this.id;
       const timer = setTimeout(() => { this.pending.delete(i); rej(new Error(`CDP ${method} 응답 없음 (${timeoutMs}ms)`)); }, timeoutMs);
       this.pending.set(i, (d) => { clearTimeout(timer); d.error ? rej(new Error(`${method}: ${d.error.message}`)) : res(d.result); });
-      this.ws.send(JSON.stringify({ id: i, method, params }));
+      this.ws.send(JSON.stringify(sessionId ? { id: i, method, params, sessionId } : { id: i, method, params }));
     });
   }
-  /** CDP 이벤트 하나에 처리기를 붙인다 (예: Fetch.requestPaused 로 다른 출처 응답 흉내, J5-078) */
+  /** CDP 이벤트 하나에 처리기를 붙인다 (예: Fetch.requestPaused 로 다른 출처 응답 흉내, J5-078). 처리기는 (params, sessionId) 를 받는다 */
   on(method, fn) { this.listeners.set(method, fn); }
   async eval(expression) { const r = await this.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error(r.exceptionDetails.text + " " + (r.exceptionDetails.exception?.description || "")); return r.result.value; }
   async waitFor(expression, ms = 8000) { const end = Date.now() + ms; while (Date.now() < end) { if (await this.eval(expression)) return true; await new Promise((r) => setTimeout(r, 100)); } throw new Error("timeout: " + expression); }

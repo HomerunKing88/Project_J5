@@ -1,6 +1,7 @@
 // 기기 시험 페이지의 VWorld 직접 연결 시험 e2e (J5-078, 리뷰 반영 PR #125). 헤드리스 Chromium(CDP), 브라우저가 없으면 건너뛴다.
 // 앱의 서비스 워커가 설치된 뒤(배포 주소의 보통 흐름) 기기 시험 페이지에서 VWorld 를 부르면, 요청이 서비스 워커를 거치지 않고 페이지에서 바로 나가야 한다:
 // 서비스 워커가 no-cors 로 바꿔 보내면 다른 출처 허용 여부를 잴 수 없고, 실제 키가 든 타일 주소가 타일 캐시에 남는다.
+// 격리 프레임(sandbox, JSONP)과 경계 그림(WMS) 시험도 같은 흐름으로 본다.
 // VWorld 응답은 CDP Fetch 로 흉내 낸다(페이지가 낸 요청만 가로챈다). 가상 응답 시험이며 실제 VWorld·iPhone 확인은 아니다.
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -25,14 +26,26 @@ test("VWorld 직접 연결 시험: 서비스 워커가 있어도 페이지에서
     await cdp.waitFor("navigator.serviceWorker.ready.then(() => !!navigator.serviceWorker.controller)", 15000);
 
     const seen = [];
-    cdp.on("Fetch.requestPaused", async (p) => {
-      seen.push(p.request.url);
-      const isTile = p.request.url.includes("/req/wmts/");
-      const body = isTile ? png1x1([10, 20, 30]) : Buffer.from(JSON.stringify({ response: { status: "OK", result: { featureCollection: { features: [{ properties: { pnu: "1111013800101820013", jibun: "182-13대" } }] } } } }));
+    const feature = { response: { status: "OK", result: { featureCollection: { features: [{ properties: { pnu: "1111013800101820013", jibun: "182-13대" } }] } } } };
+    cdp.on("Fetch.requestPaused", async (p, sessionId) => {
+      const url = p.request.url;
+      seen.push(url);
+      const isImg = url.includes("/req/wmts/") || url.includes("/req/wms?");
+      const cb = new URL(url).searchParams.get("callback");
+      // JSONP(격리 프레임): 콜백 이름으로 감싼 스크립트. 그 밖의 데이터 요청은 다른 출처 허용 머리글을 단 JSON
+      const body = isImg ? png1x1([10, 20, 30]) : Buffer.from(cb ? `${cb}(${JSON.stringify(feature)});` : JSON.stringify(feature));
+      const type = isImg ? "image/png" : cb ? "application/javascript" : "application/json";
       await cdp.send("Fetch.fulfillRequest", { requestId: p.requestId, responseCode: 200, body: body.toString("base64"),
-        responseHeaders: [{ name: "content-type", value: isTile ? "image/png" : "application/json" }, { name: "access-control-allow-origin", value: "*" }] });
+        responseHeaders: [{ name: "content-type", value: type }, { name: "access-control-allow-origin", value: "*" }] }, 20000, sessionId);
     });
-    await cdp.send("Fetch.enable", { patterns: [{ urlPattern: "https://api.vworld.kr/*" }] });
+    const vworldOnly = { patterns: [{ urlPattern: "https://api.vworld.kr/*" }] };
+    await cdp.send("Fetch.enable", vworldOnly);
+    // 격리 프레임(sandbox)은 다른 프로세스의 틀이 될 수 있다. 붙을 때 멈춰 두고 그 틀에도 같은 가로채기를 켠 뒤 이어 간다
+    cdp.on("Target.attachedToTarget", async ({ sessionId }) => {
+      await cdp.send("Fetch.enable", vworldOnly, 20000, sessionId).catch(() => {});
+      await cdp.send("Runtime.runIfWaitingForDebugger", {}, 20000, sessionId).catch(() => {});
+    });
+    await cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
 
     await cdp.navigate(`${base}/devtest.html`);
     assert.equal(await cdp.eval("!!navigator.serviceWorker.controller"), true, "서비스 워커가 맡은 기기 시험 페이지");
@@ -43,6 +56,11 @@ test("VWorld 직접 연결 시험: 서비스 워커가 있어도 페이지에서
     assert.equal(v.parcel.outcome, "ok", `필지 조회가 페이지에서 바로 나가 다른 출처 허용 응답을 받는다: ${JSON.stringify(v.parcel).slice(0, 300)}`);
     assert.ok(v.parcel.fields.includes("response.result.featureCollection.features[0].properties.pnu"), "응답 필드 이름 경로를 남긴다");
     assert.equal(v.tile.outcome, "ok");
+    assert.equal(v.wms.outcome, "ok", "경계 그림(WMS)");
+    assert.equal(v.jsonp.outcome, "ok", `격리 프레임 JSONP: ${JSON.stringify(v.jsonp).slice(0, 300)}`);
+    assert.ok(v.jsonp.fields.includes("response.result.featureCollection.features[0].properties.pnu"));
+    assert.ok(seen.some((u) => u.includes("callback=__j5vw")), "격리 프레임이 콜백을 붙여 불렀다");
+    assert.equal(await cdp.eval("document.querySelectorAll('iframe').length"), 0, "시험 뒤 격리 프레임을 지운다");
     assert.ok(seen.some((u) => u.includes("/req/data?")) && seen.some((u) => u.includes("/req/wmts/")), "두 요청 모두 페이지에서 나갔다");
     assert.ok(!JSON.stringify(r).includes(KEY), "결과 JSON 에 키 없음");
     const cached = await cdp.eval("caches.has('j5-tiles-v1').then((h) => h ? caches.open('j5-tiles-v1').then((c) => c.keys()).then((ks) => ks.map((k) => k.url)) : [])");
