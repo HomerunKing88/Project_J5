@@ -231,7 +231,8 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onSelectDeal, onTil
   const render = () => {
     renderTiles();
     if (onViewChange) {
-      const key = `${view.scale.toPrecision(6)}|${view.tx.toFixed(0)}|${view.ty.toFixed(0)}|${size.w}x${size.h}`;
+      // 덮개 두께(시트를 접고 펼침)도 넣는다: 보이는 영역이 바뀌면 받을 범위도 바뀐다 (리뷰 반영 PR #128)
+      const key = `${view.scale.toPrecision(6)}|${view.tx.toFixed(0)}|${view.ty.toFixed(0)}|${size.w}x${size.h}|${inset.top}|${inset.right}|${inset.bottom}|${inset.left}`;
       if (key !== lastViewKey) { lastViewKey = key; try { onViewChange(); } catch { /* 알림 실패는 그리기를 막지 않는다 */ } }
     }
     const vr = visibleRect();

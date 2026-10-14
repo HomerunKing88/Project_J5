@@ -25,6 +25,7 @@ test("온라인 필지 조회: 키 없으면 안내, 키가 있으면 지도를 
     await cdp.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
     const seen = [];
     let parcelReply = "ok";
+    let boxDelayMs = 0;
     cdp.on("Fetch.requestPaused", async (p, sessionId) => {
       const url = new URL(p.request.url);
       seen.push(p.request.url);
@@ -34,6 +35,7 @@ test("온라인 필지 조회: 키 없으면 안내, 키가 있으면 지도를 
         type = "application/javascript";
         const data = url.searchParams.get("data");
         const isBox = (url.searchParams.get("geomFilter") ?? "").startsWith("BOX(");
+        if (isBox && boxDelayMs) await new Promise((r) => setTimeout(r, boxDelayMs));
         const isSearch = url.pathname === "/req/search";
         const ring = (dx) => [[[127.0019 + dx, 37.5709], [127.0020 + dx, 37.5709], [127.0020 + dx, 37.5710], [127.0019 + dx, 37.5710], [127.0019 + dx, 37.5709]]];
         const doc = isSearch
@@ -117,6 +119,23 @@ test("온라인 필지 조회: 키 없으면 안내, 키가 있으면 지도를 
     await cdp.eval("document.getElementById('map-zoom-in').click(); 'ok'");
     await new Promise((r) => setTimeout(r, 1200));
     assert.equal(seen.filter((u) => u.includes("geomFilter=BOX")).length, before, "받은 범위 안이면 다시 부르지 않는다");
+    // 받는 중에 지도를 또 움직이면 끝난 뒤 새 범위를 한 번 더 받는다 (리뷰 반영 PR #128)
+    boxDelayMs = 2500;
+    const n0 = seen.filter((u) => u.includes("geomFilter=BOX")).length;
+    for (let i = 0; i < 3 && seen.filter((u) => u.includes("geomFilter=BOX")).length === n0; i++) {
+      await cdp.eval("document.getElementById('map-zoom-out').click(); 'ok'");
+      await new Promise((r) => setTimeout(r, 900));
+    }
+    assert.equal(seen.filter((u) => u.includes("geomFilter=BOX")).length, n0 + 1, "축소해 받은 범위를 벗어나면 범위 조회");
+    // 받는 중에 지도를 옆으로 크게 끈다(받을 범위 밖으로)
+    // 오른쪽 확대·축소 버튼(x 310 이상)과 위 버튼 줄을 피해 지도 가운데에서 끈다
+    await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: 270, y: 330, button: "left", clickCount: 1 });
+    for (let x = 250; x >= 10; x -= 20) await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y: 330, button: "left", buttons: 1 });
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: 10, y: 330, button: "left", clickCount: 1 });
+    await new Promise((r) => setTimeout(r, 4500));
+    boxDelayMs = 0;
+    for (let i = 0; i < 50 && seen.filter((u) => u.includes("geomFilter=BOX")).length < n0 + 2; i++) await new Promise((r) => setTimeout(r, 100));
+    assert.equal(seen.filter((u) => u.includes("geomFilter=BOX")).length, n0 + 2, "받는 중에 움직인 화면은 끝난 뒤 다시 받는다");
     // 배경 지도를 끄면 경계도 지운다
     await cdp.eval("document.getElementById('nav-settings').click(); document.getElementById('tiles-provider').value = ''; document.getElementById('tiles-save').click(); document.getElementById('nav-map').click(); 'ok'");
     await cdp.waitFor("document.querySelectorAll('#map-svg path.around-parcel').length === 0", 8000);

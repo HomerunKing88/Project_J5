@@ -1431,7 +1431,7 @@ function vworldBridge() {
 // 받은 범위는 기억해 같은 곳을 다시 부르지 않는다. 필지는 화면에만 두고 저장하지 않는다(상한을 넘으면 오래된 것부터 버린다).
 const AROUND_MIN_ZOOM = 17;
 const AROUND_KEEP = 4000;          // 화면에 둘 필지 수 상한
-let aroundTimer = null, aroundBusy = false;
+let aroundTimer = null, aroundBusy = false, aroundAgain = false;
 function scheduleAround() {
   clearTimeout(aroundTimer);
   aroundTimer = setTimeout(refreshAround, 600);
@@ -1446,7 +1446,9 @@ async function refreshAround() {
   if (map.zoom() < AROUND_MIN_ZOOM) return mapCall((m) => m.setAround([]));
   const vb = map.visibleBbox();
   const a = (state.around ??= { parcels: new Map(), boxes: [] });
-  if (!a.boxes.some((b) => covers(b, vb)) && !aroundBusy && navigator.onLine) {
+  // 받는 중에 지도를 또 움직였으면 끝난 뒤 한 번 더 정한다 (리뷰 반영 PR #128: 그 화면이 비어 남지 않게)
+  if (aroundBusy) { aroundAgain = true; return; }
+  if (!a.boxes.some((b) => covers(b, vb)) && navigator.onLine) {
     const key = String((await state.store.getMeta("tiles_key")) ?? "").trim();
     if (key) {
       const box = aroundQueryBox(vb);
@@ -1455,7 +1457,10 @@ async function refreshAround() {
         const r = parseParcelsInBox(await vworldBridge().request(VWORLD_DATASETS.parcel, { box }, key, location.origin, { size: 1000 }));
         if (r.status === "OK") {
           for (const p of r.parcels) { a.parcels.delete(p.pnu); a.parcels.set(p.pnu, p); }
-          while (a.parcels.size > AROUND_KEEP) a.parcels.delete(a.parcels.keys().next().value);
+          if (a.parcels.size > AROUND_KEEP) {
+            while (a.parcels.size > AROUND_KEEP) a.parcels.delete(a.parcels.keys().next().value);
+            a.boxes = [];   // 오래된 필지를 버렸으면 그 범위를 받았다는 기록도 버린다 (리뷰 반영 PR #128: 돌아가면 다시 받게)
+          }
           if (!r.truncated) a.boxes = [...a.boxes.slice(-30), box];   // 다 받은 범위만 기억한다
           a.truncated = r.truncated;
         }
@@ -1464,9 +1469,11 @@ async function refreshAround() {
       } finally {
         aroundBusy = false;
       }
+      if (aroundAgain) { aroundAgain = false; return refreshAround(); }
     }
   }
-  const shown = [...a.parcels.values()].filter((p) => overlaps(p.bbox, vb));
+  const now = state.map?.visibleBbox() ?? vb;   // 받는 사이 화면이 바뀌었을 수 있다
+  const shown = [...a.parcels.values()].filter((p) => overlaps(p.bbox, now));
   mapCall((m) => m.setAround(shown));
 }
 
