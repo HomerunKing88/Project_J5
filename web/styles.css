@@ -528,3 +528,6 @@ body > h1, body > p { margin: var(--s-3); }
 table { border-collapse: collapse; width: 100%; font-size: var(--t-s); }
 td, th { border-bottom: 1px solid var(--rule); padding: 6px; text-align: left; vertical-align: top; }
 pre { white-space: pre-wrap; word-break: break-all; font-size: var(--t-xs); background: var(--sheet-2); padding: 8px; border-radius: 8px; }
+
+/* 온라인 조회 필지 (J5-080): 지도를 눌러 VWorld 에서 받은 필지의 경계 */
+.layer-lookup .lookup-parcel { fill: rgba(37, 99, 235, 0.14); stroke: #1d4ed8; stroke-width: 2.5; pointer-events: none; }

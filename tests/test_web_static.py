@@ -172,3 +172,9 @@ def test_vworld_frame_is_sandboxed():
     probe = (WEB / VWORLD_TEST_FILE).read_text(encoding="utf-8")
     assert 'frame.setAttribute("sandbox", "allow-scripts");' in probe and 'frame.src = "vworld-frame.html";' in probe
     assert "e.source !== frame.contentWindow" in probe, "격리 프레임에서 온 메시지만 받는다"
+    # J5-080: 앱의 온라인 필지 조회도 같은 격리 프레임만 쓴다
+    app = (WEB / "app" / "vworld.js").read_text(encoding="utf-8")
+    assert 'frame.setAttribute("sandbox", "allow-scripts");' in app and 'src = "vworld-frame.html"' in app
+    assert "e.source !== frame.contentWindow" in app, "격리 프레임에서 온 메시지만 받는다"
+    for token in ("fetch(", "XMLHttpRequest", "https://"):
+        assert token not in app, f"app/vworld.js: {token} 금지 (VWorld 는 격리 프레임만 부른다)"

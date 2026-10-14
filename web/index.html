@@ -173,6 +173,27 @@
         </details>
       </div>
 
+      <div id="lookup-panel" class="parcel-card" hidden>
+        <div class="card-head">
+          <div class="card-title"><span class="badge">VWorld 조회</span><strong id="lookup-title" class="jibun"></strong></div>
+          <button id="lookup-close" class="tool close" aria-label="조회한 필지 닫기">✕</button>
+        </div>
+        <p id="lookup-status" class="note" role="status"></p>
+        <div id="lookup-body" hidden>
+          <p class="pencil small">필지 번호 <span id="lookup-pnu" class="num"></span></p>
+          <ul id="lookup-facts" class="facts"></ul>
+          <details id="lookup-zoning" class="disclosure" hidden>
+            <summary>용도지역 자료 (VWorld 원문)</summary>
+            <ul id="lookup-zoning-list" class="facts"></ul>
+            <p class="help">VWorld 용도지역 자료의 속성을 이름 그대로 보입니다. 필드 뜻은 실제 응답으로 확인한 뒤 정리합니다.</p>
+          </details>
+          <div class="card-actions">
+            <button id="lookup-new-asset" class="primary">이 필지를 대상으로 기록</button>
+          </div>
+          <p class="help">지도를 누른 자리의 필지를 VWorld 연속지적도에서 그때 조회한 값입니다. 공부(대장) 확인이나 법률 판단이 아니며, 면적은 경계로 계산한 도형면적입니다. 누른 자리의 좌표가 VWorld 로 전송됩니다.</p>
+        </div>
+      </div>
+
       <div id="home-empty" class="start-card" hidden>
         <h3>시작하기</h3>
         <p>PC 에서 만든 자료 파일(.j5view.zip)을 가져오면 대상·필지·거래가 한 번에 들어옵니다.<span class="demo-only"> 처음이라면 연습용 자료로 먼저 둘러봅니다.</span></p>

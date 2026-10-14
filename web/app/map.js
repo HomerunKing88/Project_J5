@@ -126,7 +126,7 @@ export function parcelLabelVisible(wb, label, view, w, h) {
  * SVG 점 지도. svgEl 은 index.html 의 정적 <svg>. onSelect(asset) 는 점을 탭했을 때.
  * 실패(예외)는 호출자가 잡아 목록만으로 동작하게 한다.
  */
-export function createMap(svgEl, { onSelect, onSelectParcel, onSelectDeal, onTileStatus, home = null } = {}) {
+export function createMap(svgEl, { onSelect, onSelectParcel, onSelectDeal, onTileStatus, onTapMap, home = null } = {}) {
   if (!svgEl || svgEl.namespaceURI == null || svgEl.tagName?.toLowerCase() !== "svg") throw new Error("SVG 요소가 아님");
   const NS = svgEl.namespaceURI;
   const node = (tag, attrs = {}) => {
@@ -143,6 +143,7 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onSelectDeal, onTil
   const layerRoadLabels = node("g", { class: "layer-road-labels" });
   const layerShapes = node("g", { class: "layer-parcels" });
   const layerLabels = node("g", { class: "layer-parcel-labels" });
+  const layerLookup = node("g", { class: "layer-lookup" });     // 온라인 조회 필지 (J5-080): 지도를 눌러 VWorld 에서 받은 필지 하나의 경계. 탭 대상 아님
   const layerDeals = node("g", { class: "layer-deals" });       // 실거래 (J5-063): 필지·번지대 위의 종류+금액 꼬리표. 켰을 때는 가격을 보려는 것이라 위치점 위에 둔다(가린 대상은 필지 카드의 "이 필지의 대상" 에서 기록)
   const layerPts = node("g", { class: "layer-pts" });
   const layerLocate = node("g", { class: "layer-locate" });   // 현재 위치 (J5-027): 정확도 원 + 점. 저장하지 않는다
@@ -159,7 +160,7 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onSelectDeal, onTil
   const scaleText = node("text", { x: 10, y: 0 });
   layerScale.append(scaleLine, scaleText);
   const attribText = node("text", { class: "map-attrib", "text-anchor": "end" });
-  svgEl.replaceChildren(layerTiles, layerBase, layerRoadLabels, layerShapes, layerLabels, layerPts, layerDeals, layerLocate, layerPick, layerScale, attribText);
+  svgEl.replaceChildren(layerTiles, layerBase, layerRoadLabels, layerShapes, layerLabels, layerLookup, layerPts, layerDeals, layerLocate, layerPick, layerScale, attribText);
 
   let view = fitView([], 320, 280);
   let size = { w: 320, h: 280 };
@@ -186,6 +187,7 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onSelectDeal, onTil
   let baseOrigin = { x: 0, y: 0 };
   let baseCount = 0, baseBbox = null;
   let selectedId = null, selectedPnu = null;
+  let lookup = null;             // { origin, wb } 조회 필지 (J5-080) 또는 null
   const pointers = new Map();
   let downTarget = null, moved = 0;
 
@@ -238,6 +240,10 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onSelectDeal, onTil
         }
         if (vis !== r.visible) { r.visible = vis; r.text.setAttribute("visibility", vis ? "visible" : "hidden"); }
       }
+    }
+    if (lookup) {
+      const o = toScreen(lookup.origin, view);
+      layerLookup.setAttribute("transform", `translate(${o.x.toFixed(2)},${o.y.toFixed(2)}) scale(${(view.scale / PARCEL_LOCAL_K).toPrecision(8)})`);
     }
     if (parcels.size) {
       const o = toScreen(parcelOrigin, view);
@@ -426,6 +432,18 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onSelectDeal, onTil
       for (const pc of parcels.values()) setParcelClass(pc);
       render();
     },
+    /** 온라인 조회 필지의 경계 (J5-080). polygons: 경위도 MultiPolygon 좌표, bbox: [서, 남, 동, 북]. null 이면 지운다. 화면은 옮기지 않는다 */
+    setLookup(polygons, bbox) {
+      layerLookup.replaceChildren();
+      lookup = null;
+      if (polygons && bbox) {
+        const wb = worldBbox(bbox);
+        const origin = { x: (wb.x0 + wb.x1) / 2, y: (wb.y0 + wb.y1) / 2 };
+        layerLookup.append(node("path", { class: "lookup-parcel", d: parcelPathD(polygons, origin), "vector-effect": "non-scaling-stroke" }));
+        lookup = { origin, wb };
+      }
+      render();
+    },
     /** 필지 하나로 화면을 맞춘다 (J5-027). 없는 PNU 면 false. 확대 상한은 FOCUS_MAX_SCALE. */
     focusParcel(pnu) {
       const pc = parcels.get(pnu);
@@ -597,6 +615,10 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onSelectDeal, onTil
         const pc = parcels.get(downTarget.getAttribute("data-pnu"));
         if (pc && onSelectParcel) onSelectParcel(pc.feature);
       }
+    } else if (wasSingle && e.type === "pointerup" && moved < TAP_PX && !downTarget && onTapMap) {
+      // 빈 곳(대상·거래·불러온 필지가 아닌 곳)을 누르면 그 자리의 경도·위도를 알린다 (J5-080: 온라인 필지 조회)
+      const p = local(e);
+      onTapMap(unmercator(toWorld(p.x, p.y, view)));
     }
     if (pointers.size === 0) downTarget = null;
   };
