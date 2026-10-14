@@ -81,3 +81,19 @@ test("prefetchPlan·padBbox: 범위·단계·상한", () => {
   assert.ok(padded[0] < bbox[0] && padded[1] < bbox[1] && padded[2] > bbox[2] && padded[3] > bbox[3]);
   assert.ok(Math.abs((padded[3] - bbox[3]) * 111320 - 300) < 1);
 });
+
+test("resolveTileConfig: 직접 입력에 넣은 VWorld 주소는 그 제공자의 확대 범위를 따른다 (J5-083)", () => {
+  // 0.2.40 이전에는 VWorld 기본 지도를 직접 입력으로만 켤 수 있었다. 그 설정이 확대 상한 22 로 남아 z20 이상 타일(VWorld 에 없음)을 요청해 배경이 비었다
+  const base = resolveTileConfig({ provider: "custom", template: "https://api.vworld.kr/req/wmts/1.0.0/{key}/Base/{z}/{y}/{x}.png", key: "abc" });
+  assert.equal(base.provider, "vworld_base", "기본 지도 주소와 같으면 기본 지도로 본다 (주변 필지·찾기도 켜진다)");
+  assert.equal(base.maxZoom, 19);
+  assert.equal(base.attribution, PROVIDERS.vworld_base.attribution);
+  assert.equal(base.prefetch, false);
+  const upper = resolveTileConfig({ provider: "custom", template: "https://API.vworld.kr/req/wmts/1.0.0/{key}/Base/{z}/{y}/{x}.png", key: "abc" });
+  assert.equal(upper.provider, "vworld_base", "호스트 대소문자는 가리지 않는다");
+  const sat = resolveTileConfig({ provider: "custom", template: "https://api.vworld.kr/req/wmts/1.0.0/{key}/Satellite/{z}/{y}/{x}.jpeg", key: "abc" });
+  assert.equal(sat.provider, "custom", "확인 전 제공자는 직접 입력으로 남긴다");
+  assert.equal(sat.maxZoom, 19, "VWorld 호스트는 19 단계까지만 요청하고 그 위는 19 단계 타일을 늘려 그린다");
+  assert.equal(resolveTileConfig({ provider: "custom", template: "./tiles/{z}/{x}/{y}.png" }).maxZoom, 22, "같은 출처 타일은 그대로");
+  assert.equal(tileZoom(256 * 2 ** 21, { minZoom: base.minZoom, maxZoom: base.maxZoom, dpr: 2 }), 19);
+});

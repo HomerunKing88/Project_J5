@@ -116,6 +116,16 @@ async function loadTileSettings() {
     template = null;
     scrubbed = await scrubKeyTiles();
   }
+  // J5-083: 직접 입력에 VWorld 기본 지도 주소를 넣은 설정은 기본 지도 설정으로 바꿔 저장한다 (설정 화면·출처 글이 실제 제공자와 맞게)
+  if (provider === "custom" && template) {
+    const cfg = resolveTileConfig({ provider, key: key ?? "", template });
+    if (!cfg.errors && cfg.provider !== "custom") {
+      await state.store.setMeta("tiles_provider", cfg.provider);
+      await state.store.setMeta("tiles_template", null);
+      provider = cfg.provider;
+      template = null;
+    }
+  }
   $("tiles-provider").value = provider ?? "";
   $("tiles-key").value = key ?? "";
   $("tiles-template").value = template ?? "";

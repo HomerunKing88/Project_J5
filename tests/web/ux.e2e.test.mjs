@@ -270,6 +270,25 @@ test("현장 앱 UX: 빈 상태 → 대상 → 관측 → 내보내기 → 유�
     assert.deepEqual(await cdp.eval("caches.open('j5-tiles-v1').then((c) => c.keys()).then((ks) => ks.map((r) => new URL(r.url).pathname))"), ["/tiles/15/1/2.png"]);
     assert.equal(await cdp.eval(`new Promise((res) => { const q = indexedDB.open('j5'); q.onsuccess = () => { const g = q.result.transaction('meta').objectStore('meta').get('tiles_template'); g.onsuccess = () => { res(g.result ?? null); q.result.close(); }; }; })`), null);
     await cdp.eval("caches.delete('j5-tiles-v1').then(() => 'ok')");
+    const errsBeforeMigrate = cdp.errors.length;
+    // 13d-2. 직접 입력에 VWorld 기본 지도 주소({key} 자리표)를 넣은 예전 설정 (J5-083): 다시 열면 기본 지도 설정으로 바꿔 저장하고 출처 글도 VWorld 로 보인다
+    await cdp.eval(`(async () => {
+      const db = await new Promise((res, rej) => { const q = indexedDB.open('j5'); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+      await new Promise((res) => { const tx = db.transaction('meta', 'readwrite'); const m = tx.objectStore('meta'); m.put('custom', 'tiles_provider'); m.put('https://api.vworld.kr/req/wmts/1.0.0/{key}/Base/{z}/{y}/{x}.png', 'tiles_template'); m.put('test-key-0001', 'tiles_key'); tx.oncomplete = res; });
+      db.close();
+      return 'ok';
+    })()`);
+    await cdp.navigate(`${base}/index.html?reload=migrate#settings`);
+    await cdp.waitFor("document.getElementById('tiles-provider').value === 'vworld_base'");
+    assert.ok(await cdp.eval("document.getElementById('tiles-template-field').hidden"), "직접 입력 주소 칸은 감춘다");
+    assert.ok((await cdp.eval("document.querySelector('#map-svg .map-attrib').textContent")).includes("VWorld"), "출처 글이 VWorld 로 보인다");
+    assert.deepEqual(await cdp.eval(`new Promise((res) => { const q = indexedDB.open('j5'); q.onsuccess = () => { const s = q.result.transaction('meta').objectStore('meta'); const a = s.get('tiles_provider'), b = s.get('tiles_template'); b.onsuccess = () => { res([a.result ?? null, b.result ?? null]); q.result.close(); }; }; })`), ["vworld_base", null]);
+    // 다음 시험에 온라인 조회가 끼지 않게 배경 지도를 끈다
+    await cdp.eval("document.getElementById('tiles-provider').value = ''; document.getElementById('tiles-provider').dispatchEvent(new Event('change')); document.getElementById('tiles-save').click(); 'ok'");
+    await cdp.waitFor(`${txt("tiles-note")}.includes('끄고 저장')`);
+    // 시험 환경은 VWorld 에 닿지 않아 그 사이 타일 요청이 실패로 남는다. 그 실패만 빼고 다른 오류는 그대로 본다
+    for (let n = -1; n !== cdp.errors.length; ) { n = cdp.errors.length; await new Promise((r) => setTimeout(r, 1500)); }
+    cdp.errors.splice(errsBeforeMigrate, cdp.errors.length - errsBeforeMigrate, ...cdp.errors.slice(errsBeforeMigrate).filter((e) => !e.startsWith("Failed to load resource")));
     // 13e. 자리 고르기 (J5-062): 지도 가운데 십자를 필지 위에 맞추면 그 필지 카드, 필지 밖이면 필지 번호 없는 이 폰의 대상을 만들고 바로 기록
     await cdp.eval("document.getElementById('load-synthetic-parcels').click(); 'ok'");
     await go(cdp, "map");

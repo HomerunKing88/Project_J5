@@ -41,7 +41,25 @@ export function resolveTileConfig({ provider, key = "", template = "", attributi
   if (needsKey && !String(key ?? "").trim()) return { errors: ["이 주소는 인증키가 필요하다 (제공자 사이트에서 발급, 이 기기에만 저장)"] };
   const errs = validateTemplate(url);
   if (errs.length) return { errors: errs };
-  return { url, prefetch: p.prefetch !== false, minZoom: p.minZoom, maxZoom: p.maxZoom, attribution: provider === "custom" && attribution ? attribution : p.attribution, provider, needsKey };
+  let maxZoom = p.maxZoom;
+  if (provider === "custom") {
+    // J5-083: VWorld 기본 지도를 직접 입력으로 켠 설정(0.2.40 이전 방식)은 기본 지도로 본다. 그대로 두면 확대 상한 22 로 VWorld 에 없는 z20 이상을 요청해 배경이 빈다
+    const known = knownProviderOf(url);
+    if (known) return resolveTileConfig({ provider: known, key });
+    if (hostOf(url) === PROVIDERS.vworld_base.host) maxZoom = PROVIDERS.vworld_base.maxZoom;   // 그 위 단계는 19 단계 타일을 늘려 그린다
+  }
+  return { url, prefetch: p.prefetch !== false, minZoom: p.minZoom, maxZoom, attribution: provider === "custom" && attribution ? attribution : p.attribution, provider, needsKey };
+}
+
+const hostOf = (url) => (/^https:\/\//i.test(url) ? url.slice(8).split(/[/?#]/)[0].toLowerCase() : null);
+
+/** 직접 입력 주소가 고를 수 있는 미리 설정 제공자의 주소와 같으면 그 제공자 ID. 호스트 대소문자는 가리지 않는다. */
+function knownProviderOf(url) {
+  const host = hostOf(url);
+  if (!host) return null;
+  const path = url.slice(8 + host.length);
+  for (const [id, q] of Object.entries(PROVIDERS)) if (q.enabled && q.host === host && q.template === path) return id;
+  return null;
 }
 
 /** 주소에 둘 수 있는 자리표. 이것을 뺀 뒤 남은 { 나 } 는 하나라도 거절한다 (짝이 맞지 않는 괄호 포함, 리뷰 반영 PR #108). */
