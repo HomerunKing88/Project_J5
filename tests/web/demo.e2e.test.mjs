@@ -30,18 +30,23 @@ test("연습용 모드: 기본은 실제 자료, ?demo=1 에서만 연습용 자
     assert.ok(!(await cdp.eval("document.getElementById('field-sheet').innerText")).includes("연습용"), "현장 시트에 연습용 글 없음");
     assert.equal(await cdp.eval("document.getElementById('data-mode').value"), "private_real");
     assert.equal(await cdp.eval("document.querySelector('#data-mode option[value=synthetic]').disabled"), true);
+    // 기본값을 저장해 둔다: 비어 있으면 PC 자료 파일을 처음 넣을 때 파일의 자료 종류(연습용 포함)를 받는다(리뷰 반영 PR #124)
+    const storedMode = "new Promise((ok, no) => { const r = indexedDB.open('j5'); r.onerror = no; r.onsuccess = () => { const g = r.result.transaction('meta').objectStore('meta').get('data_mode'); g.onsuccess = () => { ok(g.result ?? null); r.result.close(); }; g.onerror = no; }; })";
+    assert.equal(await cdp.eval(storedMode), "private_real");
     for (const id of ["load-synthetic", "load-synthetic-parcels", "load-synthetic-basemap"]) {
       assert.equal(await cdp.eval(`getComputedStyle(document.getElementById('${id}')).display`), "none", `${id} 감춤`);
     }
 
-    // 2. ?demo=1: 연습용 자료로 둘러보기 → 대상·필지·윤곽·거래, 배지 연습용
+    // 2. ?demo=1: 자료 종류를 연습용으로 저장 → 연습용 자료로 둘러보기 → 대상·필지·윤곽·거래, 배지 연습용
     await cdp.navigate(`${base}/index.html?demo=1`);
     await cdp.waitFor(appUp);
+    // 이미 실제로 저장된 폰은 연습용 모드를 켜도 실제 그대로이고, 설정에서 연습용을 고를 수 있다
+    assert.equal(await cdp.eval("document.getElementById('data-mode').value"), "private_real");
+    assert.equal(await cdp.eval("document.querySelector('#data-mode option[value=synthetic]').disabled"), false);
+    await cdp.eval("document.getElementById('study-id').value = 'demo-study'; document.getElementById('data-mode').value = 'synthetic'; document.getElementById('save-settings').click(); 'ok'");
+    await cdp.waitFor("document.getElementById('settings-note').textContent === '저장했습니다'");
     assert.equal(await cdp.eval("document.getElementById('mode-badge').textContent"), "연습용 자료");
     assert.equal(await cdp.eval("document.getElementById('mode-badge').hidden"), false);
-    assert.equal(await cdp.eval("document.getElementById('data-mode').value"), "synthetic");
-    await cdp.eval("document.getElementById('study-id').value = 'demo-study'; document.getElementById('save-settings').click(); 'ok'");
-    await cdp.waitFor("document.getElementById('settings-note').textContent === '저장했습니다'");
     await cdp.eval("document.getElementById('home-load-synthetic').click(); 'ok'");
     await cdp.waitFor("document.getElementById('seed-status').textContent.startsWith('대상 5곳')");
     await cdp.waitFor("!document.getElementById('sample-item').hidden");

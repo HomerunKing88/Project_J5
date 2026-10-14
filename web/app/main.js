@@ -279,11 +279,13 @@ async function resolveDemo() {
 }
 
 /** 연습용 모드가 아니면 앱에 든 연습용 대상·필지·윤곽·거래를 걷어 낸다. 기록·사진·PC 자료 파일·이 폰이 만든 대상은 그대로다(J5-061 지우기와 같은 범위).
- *  자료 종류가 연습용으로 저장돼 있고 연습용 기록이 하나도 없으면 실제로 바꾼다. 연습용 기록이 있으면 보내기 묶음이 갈리지 않게 그대로 둔다. */
+ *  자료 종류를 저장한 적 없으면 실제를 저장하고, 연습용으로 저장돼 있고 연습용 기록이 하나도 없으면 실제로 바꾼다. 연습용 기록이 있으면 보내기 묶음이 갈리지 않게 그대로 둔다. */
 async function retireSample() {
   try {
     await state.store.clearSample();
-    const to = retireModeTo(await state.store.getMeta("data_mode"), await state.store.listEvents());
+    const mode = await state.store.getMeta("data_mode");
+    // 저장한 적 없는 폰은 기본값(실제)을 저장해 둔다. 비워 두면 PC 자료 파일을 처음 넣을 때 파일의 자료 종류(연습용 포함)를 그대로 받는다(리뷰 반영 PR #124)
+    const to = mode == null ? "private_real" : retireModeTo(mode, await state.store.listEvents());
     if (to) await state.store.setMeta("data_mode", to);
   } catch (e) {
     console.warn("연습용 자료 정리 실패", e);
@@ -308,6 +310,7 @@ async function saveSettings() {
   await state.store.setMeta("route_version_id", route || null);
   text($("settings-note"), "저장했습니다", "ok");
   renderModeBadge($("data-mode").value);
+  applyDemoUi($("data-mode").value);   // 연습용에서 실제로 바꿔 저장하면 연습용을 다시 고를 수 없게 한다(리뷰 반영 PR #124)
   await renderMigrate(await state.store.listEvents());  // 설정(study_id·모드)이 바뀌면 '현재 설정' 기준이 바뀐다
   await refreshStatus();
 }

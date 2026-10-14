@@ -122,5 +122,7 @@ self.addEventListener("fetch", (e) => {
   if (!sameOrigin) return;
   const path = url.pathname.replace(/^.*\//, "./").replace(/^\.\/app\//, "./app/");
   // 앱 파일만 캐시 우선. 그 밖(시드·데이터 등)은 네트워크로 보내고 캐시하지 않는다.
-  e.respondWith(caches.match(e.request).then((hit) => hit || fetch(e.request)).then(unredirected));
+  // 페이지 열기는 주소의 ?뒤(연습용 모드 ?demo=1 등, J5-077)를 빼고 캐시의 앱 첫 화면과 맞춘다. 오프라인에서도 그런 주소로 열린다(리뷰 반영 PR #124)
+  const hit = e.request.mode === "navigate" ? caches.match(e.request, { ignoreSearch: true }) : caches.match(e.request);
+  e.respondWith(hit.then((h) => h || fetch(e.request)).then(unredirected));
 });
