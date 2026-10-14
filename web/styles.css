@@ -98,6 +98,9 @@ code { font-family: inherit; font-weight: 600; overflow-wrap: anywhere; }
 .appbar-inner { height: var(--appbar-h); padding: 0 var(--s-4); display: flex; align-items: center; gap: var(--s-3); max-width: 1200px; margin-inline: auto; }
 .wordmark { font-size: var(--t-s); font-weight: 700; letter-spacing: -.01em; }
 .mode-badge { margin-left: auto; border-radius: var(--r-pill); padding: 3px 11px; font-size: var(--t-xs); font-weight: 700; color: var(--pencil); border: 1.5px dashed var(--rule-strong); white-space: nowrap; }
+/* J5-077: 연습용 자료 버튼·안내는 ?demo=1 로 켠 폰에서만 */
+body:not(.demo) .demo-only { display: none !important; }
+.mode-badge[hidden] { display: none; }
 .mode-badge.mode-private_real { color: var(--blue-ink); background: var(--blue); border: 1.5px solid var(--blue); }
 .banner { display: block; padding: 8px var(--s-4); font-size: var(--t-s); font-weight: 600; }
 .banner-offline { background: var(--warn-soft); color: var(--warn); border-top: 1px solid var(--rule); }

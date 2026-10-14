@@ -10,7 +10,7 @@ import { validateSeed, filterAssets, hasTracking, isWatchlist, TRACKING_LABEL, A
 import { validateParcels, parcelAssets, BASIS_LABEL, parcelTitle, fmtArea, attrLines, attrsSummary, ZONE_LABELS, findParcels, parcelAt, interiorPoint, labelPoint, priceTrend, priceTrendRow, ownershipKinds, ownershipChanges, parseFilter, hasCriteria, filterParcels, filterRowText, FILTER_LIMIT } from "./parcels.js";
 import { selectRecords, planBatches, buildPackage, hasRemainingBatches, studyIdError } from "./export.js";
 import { migrationReadiness, migrationText, persistenceText } from "./migrate.js";
-import { createNavigator, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, pickLabel, pickPoint, MODE_LABEL, MODE_SHORT } from "./ui.js";
+import { createNavigator, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, pickLabel, pickPoint, MODE_LABEL, MODE_SHORT, retireModeTo } from "./ui.js";
 import { externalMapLinks, bboxCenter, LINK_ATTRS } from "./extmap.js";
 import { validateBasemap, LAYERS as BASEMAP_LAYERS, LAYER_LABEL as BASEMAP_LAYER_LABEL } from "./basemap.js";
 import { PROVIDERS, resolveTileConfig, prefetchPlan, padBbox, tileUrl, hasKeyLike, TILE_CACHE, PREFETCH_ZOOMS, KEY_PLACEHOLDER } from "./tiles.js";
@@ -18,13 +18,14 @@ import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
 import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummaryInfo, yearSummaryRow, yearSummaryCells, recentDeals, parcelSummaryItems, fmtKrw, placeDeals, dealKind, dealValueText, dealDetailText, dealsSince, dealSince, compsChartData, compsByYear, TREND_MIN_CASES, niceTicks, DEAL_MODES, DEAL_YEARS, nearbyComps, COMP_LIST_MAX, DEAL_KIND_NAMES, DEAL_KIND_FILTERS, dealsOfKind, dealKindsPresent } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.36";
+export const APP_VERSION = "0.2.37";
 /** 자료가 없을 때 지도가 처음 보이는 곳: 종로5가역 부근 [경도, 위도] (J5-062, 배경 지도만 켠 경우) */
 const FIELD_HOME = [127.0019, 37.5709];
 const PARCEL_CARD_YEARS = 5;   // 필지 카드의 연도별 표에 보이는 최근 연도 수 (J5-055)
 const PARCEL_CARD_DEALS = 3;   // 필지 카드의 최근 거래 수 (J5-057)
 const $ = (id) => document.getElementById(id);
 const state = { store: null, parcelFilter: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, zoneColors: false, seedLoadedAt: null, seedSource: null, openParcel: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
+                demo: false, defaultMode: "private_real",   // J5-077: 연습용 자료는 ?demo=1 로 켠 폰에서만. 기본 자료 종류는 실제
                 nav: null, returnFocus: null, mapSelected: null, assetFilter: "all", picking: false,
                 dealView: { on: false, mode: "total", years: 5, kind: "all" }, dealGroups: new Map(), openDealKey: null, compsTrend: "price" };
 
@@ -96,9 +97,10 @@ async function loadSettings() {
     state.store.getMeta("study_id"), state.store.getMeta("data_mode"), state.store.getMeta("route_version_id"),
   ]);
   $("study-id").value = studyId ?? "";
-  $("data-mode").value = dataMode ?? "synthetic";
+  $("data-mode").value = dataMode ?? state.defaultMode;
   $("route-version").value = route ?? "";
-  renderModeBadge(dataMode ?? "synthetic");
+  renderModeBadge(dataMode ?? state.defaultMode);
+  applyDemoUi(dataMode ?? state.defaultMode);
 }
 
 // ---- 배경 지도 타일 (J5-024, ADR-18) ----
@@ -264,6 +266,35 @@ function renderModeBadge(mode) {
   const b = $("mode-badge");
   b.textContent = MODE_LABEL[mode] ?? mode;
   b.className = `mode-badge mode-${mode}`;
+  b.hidden = mode === "private_real";   // J5-077: 실제 자료가 기본이므로 연습용일 때만 알린다
+}
+
+// ---- 연습용 모드 (J5-077) ----
+// 주소에 ?demo=1 을 붙여 연 폰에서만 연습용 자료(가상 대상·필지·윤곽·거래)를 넣는 버튼과 연습용 자료 종류를 보인다. ?demo=0 으로 끈다.
+// 켬 여부는 이 폰에 저장한다(주소의 값을 바꾸며 다시 열어도 유지된다).
+async function resolveDemo() {
+  const q = new URLSearchParams(location.search).get("demo");
+  if (q === "1" || q === "0") await state.store.setMeta("demo_mode", q === "1");
+  return (await state.store.getMeta("demo_mode")) === true;
+}
+
+/** 연습용 모드가 아니면 앱에 든 연습용 대상·필지·윤곽·거래를 걷어 낸다. 기록·사진·PC 자료 파일·이 폰이 만든 대상은 그대로다(J5-061 지우기와 같은 범위).
+ *  자료 종류가 연습용으로 저장돼 있고 연습용 기록이 하나도 없으면 실제로 바꾼다. 연습용 기록이 있으면 보내기 묶음이 갈리지 않게 그대로 둔다. */
+async function retireSample() {
+  try {
+    await state.store.clearSample();
+    const to = retireModeTo(await state.store.getMeta("data_mode"), await state.store.listEvents());
+    if (to) await state.store.setMeta("data_mode", to);
+  } catch (e) {
+    console.warn("연습용 자료 정리 실패", e);
+  }
+}
+
+/** 실제 모드 폰의 설정 화면에서 연습용 자료 종류를 고를 수 없게 한다. 지금 값이 연습용이면(연습용 기록이 남은 폰) 그대로 둔다 */
+function applyDemoUi(mode) {
+  document.body.classList.toggle("demo", state.demo);
+  const opt = $("data-mode").querySelector('option[value="synthetic"]');
+  if (opt) opt.hidden = opt.disabled = !state.demo && mode !== "synthetic";
 }
 
 async function saveSettings() {
@@ -331,7 +362,7 @@ async function clearSample() {
     if (!parts.length) return text($("sample-note"), "지울 연습용 자료가 없습니다.", "pencil");
     const mode = await state.store.getMeta("data_mode");
     text($("sample-note"), `연습용 자료(${parts.join("·")})를 지웠습니다. 저장한 기록은 그대로입니다.` +
-      ((mode ?? "synthetic") === "synthetic" ? " 실제 임장 기록을 남기려면 아래 작업 공간에서 자료 종류를 실제 자료로 바꾸고 저장합니다." : ""), "ok");
+      ((mode ?? state.defaultMode) === "synthetic" ? " 실제 임장 기록을 남기려면 아래 작업 공간에서 자료 종류를 실제 자료로 바꾸고 저장합니다." : ""), "ok");
   } catch (e) {
     text($("sample-note"), "연습용 자료를 지우지 못했습니다: " + (e?.message || e), "bad");
   }
@@ -1126,7 +1157,7 @@ function showParcel(feature) {
 async function createAssetFromParcel(feature) {
   const pt = interiorPoint(feature);
   if (!pt) return text($("parcel-search-note"), "이 필지 안의 점을 정하지 못해 대상을 만들 수 없습니다.", "warn");
-  const dataMode = (await state.store.getMeta("data_mode")) ?? "synthetic";
+  const dataMode = (await state.store.getMeta("data_mode")) ?? state.defaultMode;
   const asset = { asset_id: uuid4(), label: parcelTitle(feature.properties), location_point: pt, data_mode: dataMode, created_at: isoWithOffset(), notes: null, pnu: feature.id, origin: "device" };
   try {
     await state.store.addDeviceAsset(asset);
@@ -1295,7 +1326,7 @@ async function pickHere() {
     endPick();
     return showParcel(feature);
   }
-  const dataMode = (await state.store.getMeta("data_mode")) ?? "synthetic";
+  const dataMode = (await state.store.getMeta("data_mode")) ?? state.defaultMode;
   const asset = { asset_id: uuid4(), label: pickLabel($("pick-name").value), location_point: pt, data_mode: dataMode, created_at: isoWithOffset(), notes: null, pnu: null, origin: "device" };
   try {
     await state.store.addDeviceAsset(asset);
@@ -1581,8 +1612,8 @@ async function doSaveObservation() {
     state.store.getMeta("route_version_id"), state.store.getMeta("study_id"), state.store.getMeta("data_mode"),
   ]);
   if (!studyId) return text($("observe-note"), "아직 저장하지 않았습니다. 설정에서 작업 공간 이름을 먼저 저장합니다.", "bad");
-  if (state.target.data_mode !== (dataMode ?? "synthetic")) {
-    return text($("observe-note"), `아직 저장하지 않았습니다. 이 대상은 ${MODE_SHORT[state.target.data_mode]} 자료인데 설정은 ${MODE_SHORT[dataMode ?? "synthetic"]} 자료입니다. 설정의 자료 종류를 맞춘 뒤 저장합니다.`, "bad");
+  if (state.target.data_mode !== (dataMode ?? state.defaultMode)) {
+    return text($("observe-note"), `아직 저장하지 않았습니다. 이 대상은 ${MODE_SHORT[state.target.data_mode]} 자료인데 설정은 ${MODE_SHORT[dataMode ?? state.defaultMode]} 자료입니다. 설정의 자료 종류를 맞춘 뒤 저장합니다.`, "bad");
   }
   const ev = buildEvent({
     eventId: uuid4(), assetId: state.target.asset_id, observedAt, precision: dateOnly ? "date" : "datetime",
@@ -1597,7 +1628,7 @@ async function doSaveObservation() {
   // 저장 시점의 study_id·data_mode 를 기록에 고정한다. 나중에 설정을 바꿔도 이 기록의 맥락은 바뀌지 않는다 (J5-007 은 이 값으로 묶는다).
   const record = {
     event_id: ev.event_id, asset_id: ev.asset_id, event: ev, line, event_hash: await sha256Hex(line),
-    study_id: studyId, data_mode: dataMode ?? "synthetic", asset_label: state.target.label,
+    study_id: studyId, data_mode: dataMode ?? state.defaultMode, asset_label: state.target.label,
     saved_at: new Date().toISOString(), status: "saved", exported_in: [],
   };
   const photos = [...uniq.values()].map((p) => ({ sha256: p.sha256, ext: p.ext, bytes: p.bytes, blob: p.blob, created_at: record.saved_at }));
@@ -1634,7 +1665,7 @@ async function exportPlan({ quiet = false } = {}) {
   const [studyId, dataMode] = await Promise.all([state.store.getMeta("study_id"), state.store.getMeta("data_mode")]);
   if (!studyId) { if (!quiet) exportNote("설정에서 작업 공간 이름을 먼저 저장합니다.", "bad"); text($("export-summary"), "작업 공간 이름이 없어 보낼 수 없습니다. 설정에서 저장합니다.", "summary warn"); return null; }
   const records = await state.store.listEvents();
-  const sel = selectRecords(records, { studyId, dataMode: dataMode ?? "synthetic", includeExported: $("include-exported").checked });
+  const sel = selectRecords(records, { studyId, dataMode: dataMode ?? state.defaultMode, includeExported: $("include-exported").checked });
   const meta = await state.store.photoMeta();
   const { batches, errors } = planBatches(sel.selected, meta);
   const photoCount = new Set(batches.flatMap((b) => b.shas)).size;
@@ -1643,7 +1674,7 @@ async function exportPlan({ quiet = false } = {}) {
   const head = sel.selected.length ? `보낼 기록 ${sel.selected.length}건${photoCount ? `, 사진 ${photoCount}장` : ""} (약 ${fmtBytes(est)})` + (batches.length > 1 ? `. 파일 ${batches.length}개로 나눠 만듭니다` : "") + "." : "보낼 기록이 없습니다.";
   text($("export-summary"), head + (sel.excludedExported ? ` 이미 보낸 ${sel.excludedExported}건은 넣지 않습니다.` : "") + (sel.otherContext ? ` 다른 작업 공간·자료 종류의 기록 ${sel.otherContext}건은 넣지 않습니다.` : ""), "summary");
   $("export-errors").replaceChildren(...errors.map((e) => el("li", { class: "bad", text: `기록 ${e.event_id.slice(0, 8)}… 은 넣지 않았습니다: ${e.reason}` })));
-  return { studyId, dataMode: dataMode ?? "synthetic", batches, errors, k: 0, package: null, url: null, attempted: false, recordsById: new Map(sel.selected.map((r) => [r.event_id, r])) };
+  return { studyId, dataMode: dataMode ?? state.defaultMode, batches, errors, k: 0, package: null, url: null, attempted: false, recordsById: new Map(sel.selected.map((r) => [r.event_id, r])) };
 }
 
 function fmtBytes(n) {
@@ -1780,7 +1811,7 @@ async function renderRecords() {
 // ---- 기기·도메인 이전 준비 (J5-017D) ----
 async function renderMigrate(events) {
   const [studyId, dataMode] = await Promise.all([state.store.getMeta("study_id"), state.store.getMeta("data_mode")]);
-  const r = migrationReadiness(events, { studyId: studyId ?? null, dataMode: dataMode ?? "synthetic" });
+  const r = migrationReadiness(events, { studyId: studyId ?? null, dataMode: dataMode ?? state.defaultMode });
   const m = migrationText(r);
   text($("migrate-note"), m.text, m.cls);
   text($("migrate-origin"), location.origin);
@@ -1816,7 +1847,7 @@ function renderHome(readiness) {
 async function refreshStatus() {
   const c = await state.store.counts();
   const studyId = await state.store.getMeta("study_id");
-  const mode = (await state.store.getMeta("data_mode")) ?? "synthetic";
+  const mode = (await state.store.getMeta("data_mode")) ?? state.defaultMode;
   text($("status-line"), `앱 ${APP_VERSION} · ${mode} · study ${studyId ?? "(미설정)"} · 대상 ${c.assets} · 기록 ${c.events} · 사진 ${c.photos} · ${navigator.onLine ? "온라인" : "오프라인"}`);
   $("offline-banner").hidden = navigator.onLine;
   syncBannerSpace();
@@ -1896,6 +1927,9 @@ async function main() {
   const sections = Object.fromEntries(Array.from(document.querySelectorAll("section.view")).map((s) => [s.dataset.view, s]));
   state.nav = createNavigator({ sections, navButtons: Array.from(document.querySelectorAll(".bottom-nav .nav-btn")), onShow: onViewShown });
   state.nav.show(viewFromHash(location.hash), { focus: false });
+  state.demo = await resolveDemo();
+  state.defaultMode = state.demo ? "synthetic" : "private_real";
+  if (!state.demo) await retireSample();
   await loadSettings();
   // 버튼·입력 리스너는 목록·기록을 그리기 전에 붙인다. 첫 화면 직후의 탭이 무시되지 않게 한다.
   $("save-settings").addEventListener("click", saveSettings);

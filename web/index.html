@@ -13,7 +13,7 @@
 <header class="appbar">
   <div class="appbar-inner">
     <h1 class="wordmark">종로5가 투자지도</h1>
-    <span id="mode-badge" class="mode-badge" title="지금 쓰는 자료 종류">연습용 자료</span>
+    <span id="mode-badge" class="mode-badge" title="지금 쓰는 자료 종류" hidden>연습용 자료</span>
   </div>
   <div id="offline-banner" class="banner banner-offline" role="status" hidden>오프라인입니다. 지도·목록·기록·보내기는 그대로 쓸 수 있습니다.</div>
 </header>
@@ -175,10 +175,10 @@
 
       <div id="home-empty" class="start-card" hidden>
         <h3>시작하기</h3>
-        <p>PC 에서 만든 자료 파일(.j5view.zip)을 가져오면 대상·필지·거래가 한 번에 들어옵니다. 처음이라면 연습용 자료로 먼저 둘러봅니다.</p>
+        <p>PC 에서 만든 자료 파일(.j5view.zip)을 가져오면 대상·필지·거래가 한 번에 들어옵니다.<span class="demo-only"> 처음이라면 연습용 자료로 먼저 둘러봅니다.</span></p>
         <div class="card-actions">
           <label class="file-btn primary-file"><span>PC 자료 파일 가져오기</span><input id="home-view-file" type="file" accept="application/zip,.zip"></label>
-          <button id="home-load-synthetic" class="secondary">연습용 자료로 둘러보기</button>
+          <button id="home-load-synthetic" class="secondary demo-only">연습용 자료로 둘러보기</button>
         </div>
         <p id="home-note" class="note" role="status"></p>
         <button id="home-go-settings" class="quiet">다른 파일은 설정에서 가져옵니다</button>
@@ -215,7 +215,7 @@
 
       <details class="disclosure quiet">
         <summary>지도 보는 법</summary>
-        <p id="map-legend" class="map-legend"><span><span class="lg lg-syn"></span>연습용 대상</span> <span><span class="lg lg-real"></span>실제 대상</span> <span><span class="lg lg-sel"></span>고른 대상</span> <span><span class="lg lg-parcel"></span>필지 경계</span> <span><span class="lg lg-bm"></span>건물·도로</span></p>
+        <p id="map-legend" class="map-legend"><span class="demo-only"><span class="lg lg-syn"></span>연습용 대상</span> <span><span class="lg lg-real"></span>실제 대상</span> <span><span class="lg lg-sel"></span>고른 대상</span> <span><span class="lg lg-parcel"></span>필지 경계</span> <span><span class="lg lg-bm"></span>건물·도로</span></p>
         <p class="help">점을 누르면 대상이, 필지를 누르면 그 필지의 정보가 아래에 열립니다. 북쪽이 위입니다.</p>
         <p class="help">"내 위치" 는 누를 때만 위치를 한 번 읽어 지도에 표시하고 그 자리의 필지를 엽니다. 위치는 저장하거나 보내지 않습니다. 배경 타일을 켜 두었다면 화면을 자동으로 옮기지 않습니다(옮기면 그 주변 타일을 제공자에게 요청하게 됩니다).</p>
         <p class="help">"용도지역" 은 토지 자료가 든 필지 파일을 넣었을 때 켤 수 있습니다. 색은 구분용이며 규제 판단이 아닙니다.</p>
@@ -291,7 +291,7 @@
             <div class="field-name">대상 목록</div>
             <p id="seed-status" class="pencil small"></p>
             <div class="card-actions">
-              <button id="load-synthetic" class="secondary">연습용 대상 5곳</button>
+              <button id="load-synthetic" class="secondary demo-only">연습용 대상 5곳</button>
               <label class="file-btn"><span>목록 파일 선택</span><input id="seed-file" type="file" accept="application/json,.json"></label>
             </div>
             <p id="seed-note" class="note" role="status"></p>
@@ -299,7 +299,7 @@
           <div class="data-item">
             <div class="field-name">필지 경계</div>
             <div class="card-actions">
-              <button id="load-synthetic-parcels" class="secondary">연습용 필지 6개</button>
+              <button id="load-synthetic-parcels" class="secondary demo-only">연습용 필지 6개</button>
               <label class="file-btn"><span>필지 파일 선택</span><input id="parcels-file" type="file" accept="application/json,application/geo+json,.json,.geojson"></label>
               <button id="clear-parcels" class="danger">필지 지우기</button>
             </div>
@@ -308,7 +308,7 @@
           <div class="data-item">
             <div class="field-name">건물·도로 윤곽</div>
             <div class="card-actions">
-              <button id="load-synthetic-basemap" class="secondary">연습용 배경</button>
+              <button id="load-synthetic-basemap" class="secondary demo-only">연습용 배경</button>
               <label class="file-btn"><span>배경 파일 선택</span><input id="basemap-file" type="file" accept="application/json,application/geo+json,.json,.geojson"></label>
               <button id="clear-basemap" class="danger">배경 지우기</button>
             </div>
