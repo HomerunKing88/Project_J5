@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { Cdp, WEB, findChrome, serve } from "./cdp.mjs";
 
 const chrome = findChrome();
-const appUp = "document.getElementById('status-line').textContent.includes('앱 0.2.38')";
+const appUp = "document.getElementById('status-line').textContent.includes('앱 0.2.40')";
 const shown = (id) => `(() => { const e = document.getElementById('${id}'); return !!e && !e.hidden && getComputedStyle(e).display !== 'none' && e.getClientRects().length > 0; })()`;
 
 test("연습용 모드: 기본은 실제 자료, ?demo=1 에서만 연습용 자료, 끄면 걷어 냄", { skip: chrome ? false : "Chromium 없음" }, async () => {
@@ -36,6 +36,21 @@ test("연습용 모드: 기본은 실제 자료, ?demo=1 에서만 연습용 자
     for (const id of ["load-synthetic", "load-synthetic-parcels", "load-synthetic-basemap"]) {
       assert.equal(await cdp.eval(`getComputedStyle(document.getElementById('${id}')).display`), "none", `${id} 감춤`);
     }
+    // J5-079: 빈 지도의 '배경 지도 켜기' → 설정의 배경 지도 칸, VWorld 기본 지도가 골라지고 인증키 칸에 커서
+    assert.ok(await cdp.eval(shown("map-empty")) && await cdp.eval(shown("map-empty-tiles")), "빈 지도에 배경 지도 켜기");
+    await cdp.eval("document.getElementById('map-empty-tiles').click(); 'ok'");
+    await cdp.waitFor("!document.getElementById('view-settings').hidden");
+    assert.equal(await cdp.eval("document.getElementById('tiles-provider').value"), "vworld_base");
+    assert.equal(await cdp.eval("document.getElementById('tiles-provider').selectedOptions[0].disabled"), false);
+    assert.equal(await cdp.eval("document.activeElement.id"), "tiles-key");
+    await cdp.eval("document.getElementById('tiles-key').value = 'e2e-vworld-key'; document.getElementById('tiles-save').click(); 'ok'");
+    await cdp.waitFor("document.getElementById('tiles-note').textContent.startsWith('저장했습니다: VWorld 기본 지도')");
+    assert.ok(!(await cdp.eval("document.getElementById('tiles-note').textContent")).includes("e2e-vworld-key"), "키는 안내 글에 없다");
+    await cdp.eval("document.getElementById('tiles-prefetch').click(); 'ok'");
+    await cdp.waitFor("document.getElementById('tiles-prefetch-note').textContent.includes('이용조건')");   // 약관 확인 전이라 미리 받기 안 함 (리뷰 반영 PR #127)
+    await cdp.eval("document.getElementById('tiles-provider').value = ''; document.getElementById('tiles-save').click(); 'ok'");
+    await cdp.waitFor("document.getElementById('tiles-note').textContent === '배경 타일을 끄고 저장했습니다.'");
+    await cdp.eval("document.getElementById('nav-map').click(); 'ok'");
 
     // 2. ?demo=1: 자료 종류를 연습용으로 저장 → 연습용 자료로 둘러보기 → 대상·필지·윤곽·거래, 배지 연습용
     await cdp.navigate(`${base}/index.html?demo=1`);

@@ -5,9 +5,17 @@ import { KEY_IN_TEMPLATE_ERROR, hasKeyLike, PROVIDERS, TILE_HOSTS, resolveTileCo
 
 test("resolveTileConfig: 미검증 제공자는 선택 불가, 키는 자리표로만, 템플릿 규칙", () => {
   assert.deepEqual(TILE_HOSTS, ["api.vworld.kr"]);
-  const v = resolveTileConfig({ provider: "vworld_base", key: "abc" });
-  assert.ok(v.errors && v.errors[0].includes("아직 고를 수 없다"), "공식 문서로 확인하기 전에는 미리 설정을 쓸 수 없다");
-  assert.ok(Object.entries(PROVIDERS).every(([id, p]) => p.enabled === (id === "custom") && p.verified === null), "직접 입력만 켜져 있다");
+  const v = resolveTileConfig({ provider: "vworld_satellite", key: "abc" });
+  assert.ok(v.errors && v.errors[0].includes("아직 고를 수 없다"), "확인하기 전에는 미리 설정을 쓸 수 없다");
+  const b = resolveTileConfig({ provider: "vworld_base", key: "abc" });
+  assert.equal(b.url, "https://api.vworld.kr/req/wmts/1.0.0/{key}/Base/{z}/{y}/{x}.png", "기본 지도: 키는 자리표 그대로");
+  assert.equal(b.prefetch, false, "약관 확인 전이라 미리 받기 안 함 (리뷰 반영 PR #127)");
+  assert.equal(resolveTileConfig({ provider: "custom", template: "./tiles/{z}/{x}/{y}.png" }).prefetch, true);
+  assert.equal(resolveTileConfig({ provider: "vworld_base", key: "" }).errors[0].includes("인증키"), true, "키 없으면 거절");
+  // J5-079: VWorld 기본 지도는 실기기에서 확인해 켰다. 항공사진 두 가지는 확인 전이라 고를 수 없다
+  assert.deepEqual(Object.entries(PROVIDERS).filter(([, p]) => p.enabled).map(([id]) => id).sort(), ["custom", "vworld_base"]);
+  assert.equal(PROVIDERS.vworld_base.verified, "2026-10-14");
+  assert.ok(["vworld_satellite", "vworld_hybrid"].every((id) => PROVIDERS[id].verified === null && resolveTileConfig({ provider: id, key: "abc" }).errors));
   assert.ok(resolveTileConfig({ provider: "nope" }).errors.length);
   const c = resolveTileConfig({ provider: "custom", template: "./tiles/{z}/{x}/{y}.png" });
   assert.equal(c.url, "./tiles/{z}/{x}/{y}.png");

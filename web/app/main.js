@@ -13,12 +13,13 @@ import { migrationReadiness, migrationText, persistenceText } from "./migrate.js
 import { createNavigator, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, pickLabel, pickPoint, MODE_LABEL, MODE_SHORT, retireModeTo } from "./ui.js";
 import { externalMapLinks, bboxCenter, LINK_ATTRS } from "./extmap.js";
 import { validateBasemap, LAYERS as BASEMAP_LAYERS, LAYER_LABEL as BASEMAP_LAYER_LABEL } from "./basemap.js";
+import { createVworldBridge, parseParcelResponse, parseZoningResponse, canLookup, fmtJiga, fmtAreaPyeong, DATASETS as VWORLD_DATASETS } from "./vworld.js";
 import { PROVIDERS, resolveTileConfig, prefetchPlan, padBbox, tileUrl, hasKeyLike, TILE_CACHE, PREFETCH_ZOOMS, KEY_PLACEHOLDER } from "./tiles.js";
 import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
 import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummaryInfo, yearSummaryRow, yearSummaryCells, recentDeals, parcelSummaryItems, fmtKrw, placeDeals, dealKind, dealValueText, dealDetailText, dealsSince, dealSince, compsChartData, compsByYear, TREND_MIN_CASES, niceTicks, DEAL_MODES, DEAL_YEARS, nearbyComps, COMP_LIST_MAX, DEAL_KIND_NAMES, DEAL_KIND_FILTERS, dealsOfKind, dealKindsPresent } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.38";
+export const APP_VERSION = "0.2.40";
 /** 자료가 없을 때 지도가 처음 보이는 곳: 종로5가역 부근 [경도, 위도] (J5-062, 배경 지도만 켠 경우) */
 const FIELD_HOME = [127.0019, 37.5709];
 const PARCEL_CARD_YEARS = 5;   // 필지 카드의 연도별 표에 보이는 최근 연도 수 (J5-055)
@@ -163,6 +164,16 @@ function applyTileSettings({ provider, key, template }, { quiet = false } = {}) 
   return true;
 }
 
+/** 빈 지도의 '배경 지도 켜기' (J5-079): 설정의 배경 지도 칸으로 가서 VWorld 기본 지도를 고르고 인증키 칸에 커서를 둔다. 저장은 사용자가 누른다 */
+function openTileSetup() {
+  state.nav.show("settings");
+  if (!$("tiles-provider").value) $("tiles-provider").value = "vworld_base";
+  updateTileFields();
+  $("tiles-title").scrollIntoView({ block: "start" });
+  const target = $("tiles-key-field").hidden ? $("tiles-provider") : $("tiles-key");
+  target.focus({ preventScroll: true });
+}
+
 async function saveTileSettings() {
   const provider = $("tiles-provider").value, key = $("tiles-key").value.trim(), template = $("tiles-template").value.trim();
   // 먼저 검증만 하고, 키를 저장한 뒤에 타일을 켠다 (서비스 워커가 첫 요청부터 키를 읽을 수 있게)
@@ -222,6 +233,7 @@ function prefetchBbox() {
 async function prefetchTiles() {
   if (state.prefetching) return;
   if (!state.tiles) return text($("tiles-prefetch-note"), "먼저 배경 지도를 켜고 저장합니다.", "warn");
+  if (!state.tiles.prefetch) return text($("tiles-prefetch-note"), "이 제공자는 이용조건(대량 받기·보관 범위·호출 한도)을 확인하기 전이라 미리 받기를 하지 않습니다. 지도를 움직여 본 곳의 타일은 그대로 보입니다.", "warn");
   if (!navigator.onLine) return text($("tiles-prefetch-note"), "오프라인이라 받을 수 없습니다.", "warn");
   const bbox = prefetchBbox();
   if (!bbox) return text($("tiles-prefetch-note"), "범위를 정할 대상·필지가 없습니다. 자료를 먼저 가져옵니다.", "warn");
@@ -1110,6 +1122,7 @@ function showParcel(feature) {
   const p = feature.properties;
   state.openParcel = feature;
   closeDealPanel();
+  if (!$("lookup-panel").hidden) closeLookup();
   // 시트 위 카드는 하나만 (J5-054): 필지를 열면 고른 대상 카드는 닫는다
   if (state.mapSelected) clearMapSelection();
   mapCall((m) => m.selectParcel(feature.id));
@@ -1169,6 +1182,7 @@ async function createAssetFromParcel(feature) {
   }
   await renderAssets();
   closeParcelPanel();
+  if (!$("lookup-panel").hidden) closeLookup();   // 온라인 조회 카드에서 만든 경우 (J5-080)
   text($("parcel-search-note"), `${asset.label} 을 이 폰의 대상으로 만들었습니다. PC 로 보내면 PC 에서 확인 전 대상으로 들어갑니다.`, "ok");
   startObservation(asset);
 }
@@ -1353,6 +1367,94 @@ async function deleteDeviceAsset(asset) {
   await renderRecords();
 }
 
+// ---- 온라인 필지 조회 (J5-080, ADR-27) ----
+// 지도의 빈 곳을 누르면 그 자리의 필지를 VWorld 에서 받아 경계를 그리고 카드에 지번·지목·공시지가·도형면적·용도지역(원문)을 보인다.
+// VWorld 데이터 API 는 격리 프레임(sandbox, JSONP)으로만 부른다. 인증키는 배경 지도에 넣은 VWorld 키(이 폰에만 저장)를 쓴다.
+// 결과는 화면에만 두고 저장하지 않는다. 늦게 온 응답은 마지막으로 누른 자리의 것만 보인다.
+let lookupSeq = 0;
+function vworldBridge() {
+  state.vworld ??= createVworldBridge(document);
+  return state.vworld;
+}
+
+function closeLookup() {
+  lookupSeq += 1;
+  $("lookup-panel").hidden = true;
+  state.lookup = null;
+  mapCall((m) => m.setLookup(null));
+}
+
+function lookupStatus(msg, cls) {
+  $("lookup-body").hidden = true;
+  $("lookup-title").textContent = "";
+  text($("lookup-status"), msg, cls);
+  $("lookup-panel").hidden = false;
+}
+
+const LOOKUP_ERRORS = { timeout: "VWorld 응답이 없습니다", script_error: "VWorld 에 연결하지 못했습니다(인증키·등록한 서비스 주소·통신을 확인합니다)", frame_timeout: "조회 준비가 되지 않았습니다", bad_request: "조회할 수 없는 자리입니다" };
+
+async function lookupAt(lonlat) {
+  if (!canLookup(lonlat)) return;
+  // 시트 위 카드는 하나만 (J5-054)
+  if (state.mapSelected) clearMapSelection();
+  if (state.openParcel) closeParcelPanel();
+  closeDealPanel();
+  const seq = ++lookupSeq;
+  mapCall((m) => m.setLookup(null));
+  const key = String((await state.store.getMeta("tiles_key")) ?? "").trim();
+  if (!key) {
+    lookupStatus("지도를 누른 자리의 필지를 보려면 VWorld 인증키가 필요합니다. 설정의 배경 지도에서 VWorld 기본 지도를 고르고 키를 넣어 저장합니다.", "warn");
+    openSheet();
+    return;
+  }
+  if (!navigator.onLine) { lookupStatus("오프라인이라 필지를 조회할 수 없습니다.", "warn"); openSheet(); return; }
+  lookupStatus("필지를 조회하는 중…", "pencil");
+  openSheet();
+  const bridge = vworldBridge();
+  let parcel, zoning;
+  try {
+    const [pr, zr] = await Promise.allSettled([bridge.request(VWORLD_DATASETS.parcel, lonlat, key, location.origin), bridge.request(VWORLD_DATASETS.zoning, lonlat, key, location.origin)]);
+    if (seq !== lookupSeq) return;
+    if (pr.status === "rejected") throw pr.reason;
+    parcel = parseParcelResponse(pr.value);
+    zoning = zr.status === "fulfilled" ? parseZoningResponse(zr.value) : { status: "ERROR", items: [], error: String(zr.reason?.message || zr.reason) };
+  } catch (e) {
+    if (seq !== lookupSeq) return;
+    const code = String(e?.message || e);
+    return lookupStatus(`필지를 조회하지 못했습니다: ${LOOKUP_ERRORS[code] ?? code}.`, "bad");
+  }
+  if (parcel.status === "NOT_FOUND") return lookupStatus("이 자리에는 필지가 없습니다 (VWorld 연속지적도 기준).", "pencil");
+  if (parcel.status !== "OK") return lookupStatus(`필지를 조회하지 못했습니다: VWorld 응답 ${parcel.status}${parcel.error ? ` (${parcel.error})` : ""}.`, "bad");
+  showLookup(parcel.parcel, zoning);
+}
+
+function showLookup(p, zoning) {
+  state.lookup = p;
+  mapCall((m) => m.setLookup(p.polygons, p.bbox));
+  $("lookup-title").textContent = p.addr ?? p.lot ?? p.pnu;
+  $("lookup-pnu").textContent = p.pnu;
+  const facts = [
+    ["지번", p.lot ?? "미확인"],
+    ["지목", p.jimok ?? "미확인"],
+    ["공시지가", p.jiga !== null ? `${fmtJiga(p.jiga)}${p.gosi ? ` (${p.gosi} 기준)` : ""}` : "미확인"],
+    ["도형면적", `${fmtAreaPyeong(p.areaM2)} · 경계로 계산, 공부면적 아님`],
+  ];
+  if (zoning.status !== "OK") facts.push(["용도지역", zoning.status === "NOT_FOUND" ? "이 자리에 자료 없음" : `조회 실패 (${zoning.error ?? zoning.status})`]);
+  $("lookup-facts").replaceChildren(...facts.map(([k, v]) => el("li", {}, el("span", { class: "k", text: k }), el("span", { class: "v", text: v }))));
+  const zi = zoning.status === "OK" ? zoning.items : [];
+  $("lookup-zoning").hidden = !zi.length;
+  $("lookup-zoning-list").replaceChildren(...zi.flatMap((props, i) => [
+    ...(zi.length > 1 ? [el("li", { class: "muted", text: `결과 ${i + 1}` })] : []),
+    ...props.map(([k, v]) => el("li", {}, el("span", { class: "k", text: k }), el("span", { class: "v", text: v }))),
+  ]));
+  $("lookup-new-asset").onclick = () => createAssetFromParcel(p.feature);
+  text($("lookup-status"), `VWorld 연속지적도, ${new Date().toTimeString().slice(0, 5)} 조회.`, "pencil small");
+  $("lookup-body").hidden = false;
+  $("lookup-panel").hidden = false;
+  openSheet();
+  $("field-sheet").querySelector(".sheet-body").scrollTop = 0;
+}
+
 function closeParcelPanel() {
   state.openParcel = null;
   $("parcel-panel").hidden = true;
@@ -1367,7 +1469,8 @@ async function initMap() {
     const { createMap } = await import("./map.js");
     // 자리 고르기 중에는 점·필지 누르기로 카드를 열지 않는다 (고르기 상태가 남지 않게, 리뷰 반영 PR #109). 고르기는 지도를 끌어 맞춘다
     state.map = createMap($("map-svg"), { onSelect: (a) => { if (!state.picking) selectOnMap(a); }, onSelectParcel: (f) => { if (!state.picking) showParcel(f); },
-      onSelectDeal: (id) => { if (!state.picking) selectDeal(id); }, onTileStatus, home: FIELD_HOME });
+      onSelectDeal: (id) => { if (!state.picking) selectDeal(id); }, onTileStatus, home: FIELD_HOME,
+      onTapMap: (lonlat) => { if (!state.picking) lookupAt(lonlat); } });
     $("map-zoom-in").addEventListener("click", () => mapCall((m) => m.zoomBy(2)));
     $("map-zoom-out").addEventListener("click", () => mapCall((m) => m.zoomBy(0.5)));
     $("map-fit").addEventListener("click", () => mapCall((m) => m.fit()));
@@ -1419,6 +1522,7 @@ function mapNote(c) {
 /** 지도의 점이나 목록 줄을 누르면 바로 기록 화면을 열지 않고 시트 위에 대상 카드와 '기록하기' 를 보여 준다. */
 function selectOnMap(asset, { focus = true } = {}) {
   closeDealPanel();
+  if (!$("lookup-panel").hidden) closeLookup();
   state.mapSelected = asset.asset_id;
   mapCall((m) => m.select(asset.asset_id));
   const s = assetSummary(asset.asset_id, state.events);
@@ -1963,6 +2067,7 @@ async function main() {
   $("tiles-provider").addEventListener("change", updateTileFields);
   $("tiles-template").addEventListener("input", updateTileFields);
   $("tiles-save").addEventListener("click", saveTileSettings);
+  $("map-empty-tiles").addEventListener("click", openTileSetup);
   $("tiles-prefetch").addEventListener("click", prefetchTiles);
   $("tiles-clear").addEventListener("click", clearTileCache);
   $("view-file").addEventListener("change", (e) => loadViewFile(e.target));
@@ -1971,6 +2076,7 @@ async function main() {
   $("history-close-2").addEventListener("click", closeHistory);
   $("history-record").addEventListener("click", () => { const a = state.historyAsset; closeHistory(); if (a) startObservation(a); });
   $("parcel-close").addEventListener("click", closeParcelPanel);
+  $("lookup-close").addEventListener("click", closeLookup);
   $("photos").addEventListener("change", (e) => addPhotos(e.target));
   $("save-observation").addEventListener("click", saveObservation);
   $("cancel-observation").addEventListener("click", () => closeObservation());

@@ -34,14 +34,14 @@ test("앱 e2e: 설정·시드·관측 저장·재접속·오프라인·j5 inspec
     // 지도 모듈 로드 실패: map.js 요청을 막고 첫 접속 (서비스 워커가 아직 없을 때). 목록·설정은 그대로 동작하고 지도 절만 안내를 낸다.
     await cdp.send("Network.setBlockedURLs", { urls: ["*/app/map.js"] });
     await cdp.navigate(`${base}/index.html?demo=1`);   // J5-077: 연습용 자료 버튼은 연습용 모드(?demo=1)에서만 보인다
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.38')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.40')");
     await cdp.waitFor("document.getElementById('map-note').textContent.includes('지도를 그리지 못했습니다')");
     assert.equal(await cdp.eval("document.querySelectorAll('#asset-list li').length"), 1, "지도 모듈 없이도 목록 절이 그려진다");
     const blockedLogs = cdp.errors.splice(0);
     assert.ok(blockedLogs.every((e) => e.includes("ERR_BLOCKED_BY_CLIENT") || e.includes("Failed to load resource") || e.includes("map.js")), blockedLogs.join("; "));
     await cdp.send("Network.setBlockedURLs", { urls: [] });
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.38')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.40')");
     await cdp.waitFor("document.getElementById('map-note').textContent === ''");
     // 설정
     await cdp.eval("document.getElementById('study-id').value = 'e2e-study'; document.getElementById('save-settings').click(); 'ok'");
