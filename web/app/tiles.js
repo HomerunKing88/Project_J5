@@ -18,7 +18,8 @@ export const KEY_PLACEHOLDER = "{key}";
  */
 export const PROVIDERS = Object.freeze({
   // J5-079: 기본 지도는 배포 주소의 iPhone Safari 에서 실제 키로 z17 타일(256×256 PNG, 종로5가역 일대)을 받아 확인했다(2026-10-14, J5-078 기기 시험). 항공사진 두 가지는 아직 확인 전
-  vworld_base: { name: "VWorld 기본 지도 (국토교통부)", host: "api.vworld.kr", template: "/req/wmts/1.0.0/{key}/Base/{z}/{y}/{x}.png", minZoom: 6, maxZoom: 19, needsKey: true, attribution: "배경: VWorld (국토교통부)", verified: "2026-10-14", enabled: true },
+  // prefetch: false: 약관의 대량 받기·보관 범위와 호출 한도를 확인하기 전이라 "이 범위 미리 받기"(한 번에 최대 3,000장)를 하지 않는다(리뷰 반영 PR #127). 확인되면 지운다
+  vworld_base: { name: "VWorld 기본 지도 (국토교통부)", host: "api.vworld.kr", template: "/req/wmts/1.0.0/{key}/Base/{z}/{y}/{x}.png", minZoom: 6, maxZoom: 19, needsKey: true, attribution: "배경: VWorld (국토교통부)", verified: "2026-10-14", enabled: true, prefetch: false },
   vworld_satellite: { name: "VWorld 항공사진", host: "api.vworld.kr", template: "/req/wmts/1.0.0/{key}/Satellite/{z}/{y}/{x}.jpeg", minZoom: 6, maxZoom: 19, needsKey: true, attribution: "배경: VWorld (국토교통부)", verified: null, enabled: false },
   vworld_hybrid: { name: "VWorld 항공사진 + 라벨", host: "api.vworld.kr", template: "/req/wmts/1.0.0/{key}/Hybrid/{z}/{y}/{x}.png", minZoom: 6, maxZoom: 19, needsKey: true, attribution: "배경: VWorld (국토교통부)", verified: null, enabled: false },
   custom: { name: "직접 입력 (허용 호스트 또는 같은 출처)", host: null, template: "", minZoom: 0, maxZoom: 22, needsKey: false, attribution: "배경: 사용자 지정 타일", verified: null, enabled: true },
@@ -40,7 +41,7 @@ export function resolveTileConfig({ provider, key = "", template = "", attributi
   if (needsKey && !String(key ?? "").trim()) return { errors: ["이 주소는 인증키가 필요하다 (제공자 사이트에서 발급, 이 기기에만 저장)"] };
   const errs = validateTemplate(url);
   if (errs.length) return { errors: errs };
-  return { url, minZoom: p.minZoom, maxZoom: p.maxZoom, attribution: provider === "custom" && attribution ? attribution : p.attribution, provider, needsKey };
+  return { url, prefetch: p.prefetch !== false, minZoom: p.minZoom, maxZoom: p.maxZoom, attribution: provider === "custom" && attribution ? attribution : p.attribution, provider, needsKey };
 }
 
 /** 주소에 둘 수 있는 자리표. 이것을 뺀 뒤 남은 { 나 } 는 하나라도 거절한다 (짝이 맞지 않는 괄호 포함, 리뷰 반영 PR #108). */

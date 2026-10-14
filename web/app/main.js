@@ -232,6 +232,7 @@ function prefetchBbox() {
 async function prefetchTiles() {
   if (state.prefetching) return;
   if (!state.tiles) return text($("tiles-prefetch-note"), "먼저 배경 지도를 켜고 저장합니다.", "warn");
+  if (!state.tiles.prefetch) return text($("tiles-prefetch-note"), "이 제공자는 이용조건(대량 받기·보관 범위·호출 한도)을 확인하기 전이라 미리 받기를 하지 않습니다. 지도를 움직여 본 곳의 타일은 그대로 보입니다.", "warn");
   if (!navigator.onLine) return text($("tiles-prefetch-note"), "오프라인이라 받을 수 없습니다.", "warn");
   const bbox = prefetchBbox();
   if (!bbox) return text($("tiles-prefetch-note"), "범위를 정할 대상·필지가 없습니다. 자료를 먼저 가져옵니다.", "warn");

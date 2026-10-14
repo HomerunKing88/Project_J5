@@ -46,6 +46,8 @@ test("연습용 모드: 기본은 실제 자료, ?demo=1 에서만 연습용 자
     await cdp.eval("document.getElementById('tiles-key').value = 'e2e-vworld-key'; document.getElementById('tiles-save').click(); 'ok'");
     await cdp.waitFor("document.getElementById('tiles-note').textContent.startsWith('저장했습니다: VWorld 기본 지도')");
     assert.ok(!(await cdp.eval("document.getElementById('tiles-note').textContent")).includes("e2e-vworld-key"), "키는 안내 글에 없다");
+    await cdp.eval("document.getElementById('tiles-prefetch').click(); 'ok'");
+    await cdp.waitFor("document.getElementById('tiles-prefetch-note').textContent.includes('이용조건')");   // 약관 확인 전이라 미리 받기 안 함 (리뷰 반영 PR #127)
     await cdp.eval("document.getElementById('tiles-provider').value = ''; document.getElementById('tiles-save').click(); 'ok'");
     await cdp.waitFor("document.getElementById('tiles-note').textContent === '배경 타일을 끄고 저장했습니다.'");
     await cdp.eval("document.getElementById('nav-map').click(); 'ok'");
