@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; connect-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob: https://api.vworld.kr; object-src 'none'; base-uri 'none'; form-action 'none'; connect-src https://api.vworld.kr">
 <title>J5 기기 시험</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 <h1>기기 시험 (J5-004)</h1>
-<p class="muted">이 페이지는 아무것도 전송하지 않는다. 사진은 기기 안에서만 읽는다. 결과 JSON을 저장해 PC로 옮긴 뒤 <code>docs/worklog/J5-004.md</code>에 기록한다.</p>
+<p class="muted">이 페이지는 5번 VWorld 시험을 누를 때만 VWorld 로 요청을 보낸다. 그 밖에는 아무것도 전송하지 않는다. 사진은 기기 안에서만 읽는다. 결과 JSON을 저장해 PC로 옮긴 뒤 <code>docs/worklog/J5-004.md</code>에 기록한다.</p>
 
 <section>
   <h2>1. 환경</h2>
@@ -37,7 +37,16 @@
 </section>
 
 <section>
-  <h2>4. 결과</h2>
+  <h2>4. VWorld 직접 연결 (J5-078)</h2>
+  <p class="muted">폰에서 VWorld 를 바로 부를 수 있는지 본다. 인증키는 이 칸에만 두고 저장하지 않는다. 결과에는 키를 지운 주소만 남는다. 와이파이와 LTE/5G 에서 한 번씩 눌러 본다.</p>
+  <label>VWorld 인증키 <input id="vw-key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+  <button id="vw-run">VWorld 시험</button>
+  <p id="vw-note" class="muted"></p>
+  <img id="vw-tile" alt="VWorld 배경 타일 시험" width="128" height="128" hidden>
+</section>
+
+<section>
+  <h2>5. 결과</h2>
   <pre id="results"></pre>
 </section>
 <p><a href="./">← 처음으로</a></p>
