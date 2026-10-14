@@ -4,6 +4,8 @@
 "use strict";
 (function () {
   var VWORLD = "https://api.vworld.kr/req/data";
+  var SEARCH = "https://api.vworld.kr/req/search";   // 주소·지번 찾기 (J5-082)
+  var CATEGORIES = { parcel: true, road: true };
   var DATASETS = { LP_PA_CBND_BUBUN: true, LT_C_UQ111: true };
   var TIMEOUT_MS = 15000;
   var seq = 0;
@@ -20,7 +22,13 @@
     return Array.isArray(b) && b.length === 4 && inKorea(b[0], b[1]) && inKorea(b[2], b[3]) && b[0] < b[2] && b[1] < b[3] &&
       b[2] - b[0] <= MAX_BOX_DEG && b[3] - b[1] <= MAX_BOX_DEG;
   }
+  function validSearch(m) {
+    return m && m.type === "j5-vworld-req" && m.api === "search" && Number.isInteger(m.id) && typeof m.key === "string" && /^[A-Za-z0-9-]{8,64}$/.test(m.key) &&
+      typeof m.domain === "string" && /^https?:\/\/[a-z0-9.-]+(:\d+)?$/.test(m.domain) && typeof m.query === "string" &&
+      m.query.length >= 1 && m.query.length <= 80 && !/[\u0000-\u001f<>"'`\\]/.test(m.query) && CATEGORIES[m.category] === true;
+  }
   function valid(m) {
+    if (m && m.api === "search") return validSearch(m);
     return m && m.type === "j5-vworld-req" && Number.isInteger(m.id) && typeof m.key === "string" && /^[A-Za-z0-9-]{8,64}$/.test(m.key) &&
       typeof m.domain === "string" && /^https?:\/\/[a-z0-9.-]+(:\d+)?$/.test(m.domain) && DATASETS[m.data] === true &&
       (m.box === undefined ? inKorea(m.lon, m.lat) : validBox(m.box)) &&
@@ -53,11 +61,20 @@
     };
     s.onerror = function () { finish({ ok: false, error: "script_error" }); };
     timer = setTimeout(function () { finish({ ok: false, error: "timeout" }); }, TIMEOUT_MS);
-    // 점(누른 자리) 또는 범위(화면에 보이는 곳, J5-081)
-    var geom = m.box === undefined ? "POINT(" + m.lon + " " + m.lat + ")" : "BOX(" + m.box.join(",") + ")";
-    var q = new URLSearchParams({ service: "data", version: "2.0", request: "GetFeature", format: "json", errorformat: "json", size: String(m.size || 10), page: "1",
-      data: m.data, geomFilter: geom, geometry: "true", attribute: "true", crs: "EPSG:4326", key: m.key, domain: m.domain, callback: cb });
-    s.src = VWORLD + "?" + q.toString();
+    var q, base;
+    if (m.api === "search") {
+      // 주소·지번 찾기 (J5-082): 주소 검색, 경위도로 받는다
+      base = SEARCH;
+      q = new URLSearchParams({ service: "search", request: "search", version: "2.0", crs: "EPSG:4326", size: "5", page: "1", query: m.query, type: "address",
+        category: m.category, format: "json", errorformat: "json", key: m.key, domain: m.domain, callback: cb });
+    } else {
+      // 점(누른 자리) 또는 범위(화면에 보이는 곳, J5-081)
+      base = VWORLD;
+      var geom = m.box === undefined ? "POINT(" + m.lon + " " + m.lat + ")" : "BOX(" + m.box.join(",") + ")";
+      q = new URLSearchParams({ service: "data", version: "2.0", request: "GetFeature", format: "json", errorformat: "json", size: String(m.size || 10), page: "1",
+        data: m.data, geomFilter: geom, geometry: "true", attribute: "true", crs: "EPSG:4326", key: m.key, domain: m.domain, callback: cb });
+    }
+    s.src = base + "?" + q.toString();
     document.head.appendChild(s);
   });
 

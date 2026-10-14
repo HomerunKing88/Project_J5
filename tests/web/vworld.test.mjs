@@ -135,3 +135,21 @@ test("aroundQueryBox: 사방 25% 여유, 한 변 0.02° 상한은 가운데 기�
   assert.ok(big[2] - big[0] <= MAX_BOX_DEG && big[3] - big[1] <= MAX_BOX_DEG);
   assert.ok(Math.abs((big[0] + big[2]) / 2 - 127) < 1e-6 && Math.abs((big[1] + big[3]) / 2 - 37.5) < 1e-6, "가운데 유지");
 });
+
+test("searchQuery·parseSearchResponse: 주소 찾기 (J5-082, 응답 필드는 실측 전)", async () => {
+  const { searchQuery, parseSearchResponse } = await import("../../web/app/vworld.js");
+  assert.equal(searchQuery("  종로5가   193-17 "), "종로5가 193-17");
+  assert.equal(searchQuery('<b>종로"5가</b>'), "b 종로 5가 /b");
+  assert.equal(searchQuery("   "), null);
+  assert.equal(searchQuery("가".repeat(100)).length, 80);
+  const ok = parseSearchResponse({ response: { status: "OK", result: { items: [
+    { id: "1111016300101930017", address: { parcel: "서울특별시 종로구 종로5가 193-17", road: "" }, point: { x: "127.0021", y: "37.5705" } },
+    { address: { road: "서울특별시 종로구 종로 200" }, point: { x: 127.003, y: 37.571 } },
+    { address: { parcel: "범위 밖" }, point: { x: "0", y: "0" } },
+    { address: { parcel: "자리 없음" } }] } } });
+  assert.equal(ok.status, "OK");
+  assert.deepEqual(ok.items, [{ title: "서울특별시 종로구 종로5가 193-17", lonlat: [127.0021, 37.5705] }, { title: "서울특별시 종로구 종로 200", lonlat: [127.003, 37.571] }]);
+  assert.deepEqual(parseSearchResponse({ response: { status: "NOT_FOUND" } }), { status: "OK", items: [] });
+  assert.equal(parseSearchResponse({ response: { status: "ERROR", error: { text: "키 오류" } } }).error, "키 오류");
+  assert.equal(parseSearchResponse({}).status, "bad_response");
+});

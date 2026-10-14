@@ -13,13 +13,13 @@ import { migrationReadiness, migrationText, persistenceText } from "./migrate.js
 import { createNavigator, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, pickLabel, pickPoint, MODE_LABEL, MODE_SHORT, retireModeTo } from "./ui.js";
 import { externalMapLinks, bboxCenter, LINK_ATTRS } from "./extmap.js";
 import { validateBasemap, LAYERS as BASEMAP_LAYERS, LAYER_LABEL as BASEMAP_LAYER_LABEL } from "./basemap.js";
-import { createVworldBridge, parseParcelResponse, parseZoningResponse, parseParcelsInBox, aroundQueryBox, zoningSummary, canLookup, fmtJiga, fmtAreaPyeong, DATASETS as VWORLD_DATASETS } from "./vworld.js";
+import { createVworldBridge, parseParcelResponse, parseZoningResponse, parseParcelsInBox, aroundQueryBox, zoningSummary, searchQuery, parseSearchResponse, canLookup, fmtJiga, fmtAreaPyeong, DATASETS as VWORLD_DATASETS } from "./vworld.js";
 import { PROVIDERS, resolveTileConfig, prefetchPlan, padBbox, tileUrl, hasKeyLike, TILE_CACHE, PREFETCH_ZOOMS, KEY_PLACEHOLDER } from "./tiles.js";
 import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
 import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummaryInfo, yearSummaryRow, yearSummaryCells, recentDeals, parcelSummaryItems, fmtKrw, placeDeals, dealKind, dealValueText, dealDetailText, dealsSince, dealSince, compsChartData, compsByYear, TREND_MIN_CASES, niceTicks, DEAL_MODES, DEAL_YEARS, nearbyComps, COMP_LIST_MAX, DEAL_KIND_NAMES, DEAL_KIND_FILTERS, dealsOfKind, dealKindsPresent } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.41";
+export const APP_VERSION = "0.2.42";
 /** 자료가 없을 때 지도가 처음 보이는 곳: 종로5가역 부근 [경도, 위도] (J5-062, 배경 지도만 켠 경우) */
 const FIELD_HOME = [127.0019, 37.5709];
 const PARCEL_CARD_YEARS = 5;   // 필지 카드의 연도별 표에 보이는 최근 연도 수 (J5-055)
@@ -148,6 +148,7 @@ function applyTileSettings({ provider, key, template }, { quiet = false } = {}) 
   if (!provider) {
     state.tiles = null;
     scheduleAround();
+    applySearchUi();
     mapCall((m) => m.setTiles(null));
     if (!quiet) text($("tiles-note"), "배경 타일을 끄고 저장했습니다.", "ok");
     return true;
@@ -160,7 +161,8 @@ function applyTileSettings({ provider, key, template }, { quiet = false } = {}) 
     return false;
   }
   state.tiles = cfg;
-  scheduleAround();   // 배경 지도를 바꾸면 주변 필지 경계도 다시 정한다 (J5-081)
+  scheduleAround();
+  applySearchUi();   // 배경 지도를 바꾸면 주변 필지 경계도 다시 정한다 (J5-081)
   mapCall((m) => m.setTiles({ url: cfg.url, minZoom: cfg.minZoom, maxZoom: cfg.maxZoom, attribution: cfg.attribution }));
   if (!quiet) text($("tiles-note"), `저장했습니다: ${PROVIDERS[provider].name} · ${cfg.url}` + (cfg.needsKey ? ". 인증키는 이 폰에만 저장합니다" : ""), "ok");
   return true;
@@ -519,7 +521,8 @@ function applyParcels(rec) {
 // ---- 용도지역 색 (J5-025, ADR-19): 필지 속성이 있을 때만 켤 수 있고, 켬 여부는 이 기기에 저장한다 ----
 // ---- 필지 찾기 (J5-027): 지번·PNU 검색과 현재 위치. 불러온 필지 안에서만 찾고, 위치는 누를 때 한 번 읽어 그리기만 한다 (저장·전송 없음) ----
 function applySearchUi() {
-  const has = state.parcelsCount > 0;
+  // 가져온 필지가 있거나, 배경 지도에 VWorld 기본 지도를 켜 온라인으로 찾을 수 있으면 찾기 칸을 보인다 (J5-082)
+  const has = state.parcelsCount > 0 || state.tiles?.provider === "vworld_base";
   $("parcel-search-form").hidden = !has;
   $("map-locate").disabled = !("geolocation" in navigator);
   $("map-locate").hidden = !("geolocation" in navigator);
@@ -605,9 +608,14 @@ function searchParcels(q) {
   list.replaceChildren();
   list.hidden = true;
   openSheet();
-  if (!feats.length) return text($("parcel-search-note"), "필지 자료가 없어 찾을 수 없습니다. 설정에서 PC 자료 파일을 가져옵니다.", "warn");
+  const online = state.tiles?.provider === "vworld_base";
+  // 가져온 필지에서 먼저 찾고, 없거나 못 찾으면 VWorld 주소 검색으로 찾는다 (J5-082)
+  if (!feats.length) return online ? searchOnline(q) : text($("parcel-search-note"), "필지 자료가 없어 찾을 수 없습니다. 설정에서 PC 자료 파일을 가져오거나, 배경 지도에 VWorld 기본 지도를 켜면 주소로 찾을 수 있습니다.", "warn");
   const r = findParcels(feats, q);
-  if (!r.query) return text($("parcel-search-note"), "지번(예: 182-13, 산1-2, 예지동 182-13)이나 필지 번호 19자리를 넣습니다.", "warn");
+  if (!r.query || !r.matches.length) {
+    if (online) return searchOnline(q);
+    if (!r.query) return text($("parcel-search-note"), "지번(예: 182-13, 산1-2, 예지동 182-13)이나 필지 번호 19자리를 넣습니다.", "warn");
+  }
   if (!r.matches.length) return text($("parcel-search-note"), `'${String(q).trim()}' 필지가 가져온 ${feats.length}개 안에 없습니다. 동 이름과 지번을 확인하거나, PC 에서 범위를 넓혀 자료 파일을 다시 만듭니다.`, "warn");
   if (r.matches.length === 1) {
     openParcel(r.matches[0]);
@@ -617,6 +625,45 @@ function searchParcels(q) {
     el("button", { class: "secondary", text: "열기", onclick: () => { openParcel(f); list.hidden = true; } }))));
   list.hidden = false;
   text($("parcel-search-note"), `${r.total}개 찾음${r.total > r.matches.length ? ` (앞 ${r.matches.length}개만 보입니다)` : ""}. 하나를 고릅니다.`, "pencil");
+}
+
+/** VWorld 주소 검색 (J5-082): 결과가 하나면 그 자리로 옮겨 필지를 조회하고, 여럿이면 목록에서 고른다. 검색어는 VWorld 로 전송된다 */
+let searchSeq = 0;
+async function searchOnline(q) {
+  const list = $("parcel-search-results");
+  const query = searchQuery(q);
+  if (!query) return text($("parcel-search-note"), "주소나 지번(예: 종로5가 193-17)을 넣습니다.", "warn");
+  const key = String((await state.store.getMeta("tiles_key")) ?? "").trim();
+  if (!key) return text($("parcel-search-note"), "주소로 찾으려면 설정의 배경 지도에 VWorld 인증키를 넣어 저장합니다.", "warn");
+  if (!navigator.onLine) return text($("parcel-search-note"), "오프라인이라 주소로 찾을 수 없습니다.", "warn");
+  const seq = ++searchSeq;
+  text($("parcel-search-note"), `'${query}' 찾는 중…`, "pencil");
+  let items = [], failed = null;
+  try {
+    // 지번 주소로 먼저 찾고, 없으면 도로명 주소로 찾는다
+    for (const category of ["parcel", "road"]) {
+      const r = parseSearchResponse(await vworldBridge().search(query, key, location.origin, category));
+      if (seq !== searchSeq) return;
+      if (r.status !== "OK") { failed = r.error ?? r.status; continue; }
+      if (r.items.length) { items = r.items; failed = null; break; }
+    }
+  } catch (e) {
+    if (seq !== searchSeq) return;
+    const code = String(e?.message || e);
+    return text($("parcel-search-note"), `찾지 못했습니다: ${LOOKUP_ERRORS[code] ?? code}.`, "bad");
+  }
+  if (!items.length) return text($("parcel-search-note"), failed ? `찾지 못했습니다: VWorld 응답 ${failed}.` : `'${query}' 을 찾지 못했습니다. 동 이름과 지번(예: 종로5가 193-17)이나 도로명 주소로 넣습니다.`, failed ? "bad" : "warn");
+  const go = (it) => {
+    list.hidden = true;
+    text($("parcel-search-note"), "", "note");
+    mapCall((m) => m.centerOn(it.lonlat, 18));
+    lookupAt(it.lonlat);
+  };
+  if (items.length === 1) return go(items[0]);
+  list.replaceChildren(...items.map((it) => el("li", {}, el("span", { class: "title", text: it.title }),
+    el("button", { class: "secondary", text: "열기", onclick: () => go(it) }))));
+  list.hidden = false;
+  text($("parcel-search-note"), `${items.length}곳 찾음 (VWorld 주소 검색). 하나를 고릅니다.`, "pencil");
 }
 
 function locateMe() {

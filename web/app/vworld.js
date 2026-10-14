@@ -156,6 +156,32 @@ export function aroundQueryBox(vb, pad = 0.25, maxSpan = MAX_BOX_DEG) {
   return [cx - hw, cy - hh, cx + hw, cy + hh].map((v) => Number(v.toFixed(6)));
 }
 
+/** 찾기 글 → VWorld 주소 검색어. 앞뒤 공백·겹친 공백을 줄이고, 검색에 쓸 수 없는 글자(꺾쇠·따옴표·제어문자)는 빼며 80자로 자른다. 빈 글이면 null */
+export function searchQuery(q) {
+  const s = String(q ?? "").replace(/[\u0000-\u001f<>"'`\\]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+  return s || null;
+}
+
+/**
+ * 주소 검색 응답 → [{ title, lonlat }] (J5-082). 결과 목록은 response.result.items, 자리는 point.x·point.y(경위도), 이름은 address.parcel·address.road 를 읽는다.
+ * 이 필드 이름은 아직 폰 실측 전이다. 다르면 결과를 읽지 못해 빈 목록이 되고(자리를 짐작하지 않는다), 찾은 자리의 필지 정보는 실측한 데이터 API 로 다시 조회한다.
+ */
+export function parseSearchResponse(doc) {
+  const r = doc?.response;
+  if (!r || typeof r !== "object") return { status: "bad_response", items: [] };
+  if (r.status === "NOT_FOUND") return { status: "OK", items: [] };
+  if (r.status !== "OK") return { status: "ERROR", error: typeof r.error?.text === "string" ? r.error.text.slice(0, 200) : null, items: [] };
+  const raw = Array.isArray(r.result?.items) ? r.result.items : [];
+  const items = [];
+  for (const it of raw.slice(0, 10)) {
+    const lon = num(it?.point?.x), lat = num(it?.point?.y);
+    if (!inKorea([lon, lat])) continue;
+    const title = str(it?.address?.parcel) ?? str(it?.address?.road) ?? str(it?.title) ?? null;
+    items.push({ title: title ?? `${lat.toFixed(5)}, ${lon.toFixed(5)}`, lonlat: [lon, lat] });
+  }
+  return { status: "OK", items };
+}
+
 /** 원/㎡ → "1,234만 원/㎡ · 4,079만 원/평" 처럼 */
 export function fmtJiga(wonPerM2) {
   if (!Number.isFinite(wonPerM2)) return null;
@@ -203,6 +229,15 @@ export function createVworldBridge(doc = document, { src = "vworld-frame.html", 
     promise.then(() => clearTimeout(t), () => {});
     return promise;
   };
+  const send = async (body) => {
+    await ensure();
+    const id = ++seq;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { pending.delete(id); reject(new Error("timeout")); }, timeoutMs);
+      pending.set(id, { resolve, reject, timer });
+      frame.contentWindow.postMessage({ type: "j5-vworld-req", id, ...body }, "*");
+    });
+  };
   const destroy = () => {
     win.removeEventListener("message", onMsg);
     frame?.remove();
@@ -214,14 +249,12 @@ export function createVworldBridge(doc = document, { src = "vworld-frame.html", 
   return {
     /** where: [경도, 위도](누른 자리) 또는 { box: [서, 남, 동, 북] }(화면 범위, 한 변 0.02° 이하). opts.size: 받을 수(1~1000) */
     async request(data, where, key, domain, opts = {}) {
-      await ensure();
-      const id = ++seq;
       const geo = Array.isArray(where) ? { lon: where[0], lat: where[1] } : { box: where.box };
-      return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => { pending.delete(id); reject(new Error("timeout")); }, timeoutMs);
-        pending.set(id, { resolve, reject, timer });
-        frame.contentWindow.postMessage({ type: "j5-vworld-req", id, key, domain, data, ...geo, ...(opts.size ? { size: opts.size } : {}) }, "*");
-      });
+      return send({ key, domain, data, ...geo, ...(opts.size ? { size: opts.size } : {}) });
+    },
+    /** 주소·지번 찾기 (J5-082). category: parcel(지번 주소)·road(도로명 주소) */
+    async search(query, key, domain, category = "parcel") {
+      return send({ api: "search", key, domain, query, category });
     },
     destroy,
   };

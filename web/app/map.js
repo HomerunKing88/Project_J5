@@ -476,6 +476,12 @@ export function createMap(svgEl, { onSelect, onSelectParcel, onSelectDeal, onTil
       render();
       return around.length;
     },
+    /** 경위도 한 점을 덮이지 않은 영역 가운데로 옮긴다 (J5-082 주소 찾기). zoom 보다 덜 확대돼 있으면 그 단계까지 확대하고, 더 확대돼 있으면 유지 */
+    centerOn(lonlat, zoom = 18) {
+      measure();
+      view = centerAt(mercator(lonlat), clampScale(Math.max(view.scale, 256 * 2 ** zoom)));
+      render();
+    },
     /** 지금 확대 단계 (타일 확대 단계와 같은 눈금, 소수) */
     zoom() { return Math.log2(view.scale / 256); },
     /** 덮이지 않은 영역의 경위도 범위 [서, 남, 동, 북] */

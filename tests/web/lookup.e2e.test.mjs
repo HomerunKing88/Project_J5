@@ -34,8 +34,13 @@ test("온라인 필지 조회: 키 없으면 안내, 키가 있으면 지도를 
         type = "application/javascript";
         const data = url.searchParams.get("data");
         const isBox = (url.searchParams.get("geomFilter") ?? "").startsWith("BOX(");
+        const isSearch = url.pathname === "/req/search";
         const ring = (dx) => [[[127.0019 + dx, 37.5709], [127.0020 + dx, 37.5709], [127.0020 + dx, 37.5710], [127.0019 + dx, 37.5710], [127.0019 + dx, 37.5709]]];
-        const doc = isBox
+        const doc = isSearch
+          ? (url.searchParams.get("query") === "없는주소 1" ? { response: { status: "NOT_FOUND" } }
+            : url.searchParams.get("category") !== "parcel" ? { response: { status: "NOT_FOUND" } }
+            : { response: { status: "OK", result: { items: [{ id: "1111016300101930017", address: { parcel: "서울특별시 종로구 종로5가 193-17" }, point: { x: "127.00195", y: "37.57095" } }] } } })
+          : isBox
           ? { response: { status: "OK", record: { total: "3", current: "3" }, result: { featureCollection: { features: [0, 1, 2].map((i) => ({ type: "Feature",
               geometry: { type: "MultiPolygon", coordinates: [ring(i * 0.0001)] }, properties: { pnu: `111101630010193001${i}`, jibun: `193-1${i}대` } })) } } } }
           : data === "LP_PA_CBND_BUBUN"
@@ -55,7 +60,7 @@ test("온라인 필지 조회: 키 없으면 안내, 키가 있으면 지도를 
     await cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
 
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.41')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.42')");
     await cdp.eval("document.getElementById('study-id').value = 'lookup-study'; document.getElementById('save-settings').click(); 'ok'");
     await cdp.waitFor("document.getElementById('settings-note').textContent === '저장했습니다'");
     const tapMap = async (x = 195, y = 300) => {
@@ -117,9 +122,26 @@ test("온라인 필지 조회: 키 없으면 안내, 키가 있으면 지도를 
     await cdp.waitFor("document.querySelectorAll('#map-svg path.around-parcel').length === 0", 8000);
     await cdp.eval(`document.getElementById('nav-settings').click(); document.getElementById('tiles-provider').value = 'vworld_base'; document.getElementById('tiles-key').value = ${JSON.stringify(KEY)}; document.getElementById('tiles-save').click(); document.getElementById('nav-map').click(); 'ok'`);
 
-    // 5. 필지가 없는 자리
+    // 5. 주소로 찾기 (J5-082): 가져온 필지가 없어도 VWorld 키가 있으면 찾기 칸이 보이고, 찾은 자리로 옮겨 그 필지를 조회한다
+    await cdp.waitFor("document.getElementById('tiles-note').textContent.startsWith('저장했습니다: VWorld 기본 지도')");
+    await cdp.waitFor("!document.getElementById('parcel-search-form').hidden", 8000);   // VWorld 기본 지도를 켜면 찾기 칸
+    await cdp.eval("document.getElementById('lookup-close').click(); document.getElementById('parcel-search').value = '종로5가 193-17'; document.getElementById('parcel-search-form').requestSubmit(); 'ok'");
+    const pointOf = (u) => new URL(u).searchParams.get("geomFilter");
+    for (let i = 0; i < 100 && !seen.some((u) => pointOf(u) === "POINT(127.00195 37.57095)"); i++) await new Promise((r) => setTimeout(r, 100));
+    assert.ok(seen.some((u) => pointOf(u) === "POINT(127.00195 37.57095)"), "찾은 자리로 필지 조회: " + seen.filter((u) => u.includes("POINT")).map(pointOf).join(" "));
+    await cdp.waitFor("!document.getElementById('lookup-panel').hidden && !document.getElementById('lookup-body').hidden", 20000);
+    const searchReqs = seen.filter((u) => u.includes("/req/search"));
+    assert.ok(searchReqs.length === 1 && searchReqs[0].includes("category=parcel") && searchReqs[0].includes("callback=__j5vw") && searchReqs[0].includes("type=address"));
+    // 없는 주소: 지번 주소·도로명 주소 둘 다 찾고 안내
+    await cdp.eval("document.getElementById('parcel-search').value = '없는주소 1'; document.getElementById('parcel-search-form').requestSubmit(); 'ok'");
+    await cdp.waitFor("document.getElementById('parcel-search-note').textContent.includes('찾지 못했습니다')", 20000);
+    assert.equal(seen.filter((u) => u.includes("/req/search") && u.includes(encodeURIComponent("없는주소").slice(0, 9))).length >= 1, true);
+
+    // 6. 필지가 없는 자리
     parcelReply = "none";
-    await tapMap(195, 260);
+    // 찾기로 지도가 3단계에서 만든 대상 쪽으로 옮겨졌으므로 그 점이 없는 자리를 누른다
+    await tapMap(90, 230);
+    assert.equal(await cdp.eval("document.getElementById('map-selected').hidden"), true, "대상 점이 아닌 빈 자리");
     await cdp.waitFor("document.getElementById('lookup-status').textContent.includes('필지가 없습니다')", 20000);
     assert.equal(await cdp.eval("document.getElementById('lookup-body').hidden"), true);
   } finally {
