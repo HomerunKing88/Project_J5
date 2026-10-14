@@ -508,9 +508,11 @@ def coverage_by_year(db: Db, lawd_cd: str, kind: str | RtKind | None = None) -> 
 
 
 def coverage_rows(db: Db) -> list[dict]:
-    """모든 시군구의 연도별 수집 개월 [{lawd_cd, year, months_complete, months_any, kind_months}] (시군구·연도 순). 파생본 transactions.json 의 coverage (J5-047).
+    """모든 시군구의 연도별 수집 개월 [{lawd_cd, year, months_complete, months_any, kind_months, kind_months_any}] (시군구·연도 순). 파생본 transactions.json 의 coverage (J5-047).
     개월 수는 종류를 가리지 않고 센다(PC parcels-years 와 같다). kind_months 는 종류마다 그해 완전히 받은 개월 수 {nrg·sh·land 순, 1 이상만} (J5-065):
-    한 종류는 12개월, 다른 종류는 1개월만 받은 해를 모든 종류를 받은 해로 보이지 않게 폰이 종류별 개월을 적는다 (리뷰 반영 PR #112)."""
+    한 종류는 12개월, 다른 종류는 1개월만 받은 해를 모든 종류를 받은 해로 보이지 않게 폰이 종류별 개월을 적는다 (리뷰 반영 PR #112).
+    kind_months_any 는 종류마다 그해 결과와 무관하게 실행이 있는 개월 수 {1 이상만} (J5-073): 종류를 고른 폰 연도별 시세가 그 종류를 시도했다 실패한 해와
+    시도하지 않은 해를 PC parcels-comps 처럼 가른다."""
     if not db._has_table("collection_runs"):
         return []
     rows = []
@@ -519,7 +521,8 @@ def coverage_rows(db: Db) -> list[dict]:
         by_kind = {k.name: coverage_by_year(db, lawd, k) for k in KINDS.values() if k.provider in providers}
         for y, c in sorted(coverage_by_year(db, lawd).items()):
             kind_months = {n: cy[y]["complete"] for n, cy in by_kind.items() if cy.get(y, {}).get("complete")}
-            rows.append({"lawd_cd": lawd, "year": int(y), "months_complete": c["complete"], "months_any": c["any"], "kind_months": kind_months})
+            kind_any = {n: cy[y]["any"] for n, cy in by_kind.items() if cy.get(y, {}).get("any")}
+            rows.append({"lawd_cd": lawd, "year": int(y), "months_complete": c["complete"], "months_any": c["any"], "kind_months": kind_months, "kind_months_any": kind_any})
     return rows
 
 

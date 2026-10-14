@@ -23,6 +23,11 @@
     "nrg": 12,
     "sh": 12,
     "land": 12
+   },
+   "kind_months_any": {
+    "nrg": 12,
+    "sh": 12,
+    "land": 12
    }
   },
   {
@@ -31,6 +36,11 @@
    "months_complete": 12,
    "months_any": 12,
    "kind_months": {
+    "nrg": 12,
+    "sh": 12,
+    "land": 12
+   },
+   "kind_months_any": {
     "nrg": 12,
     "sh": 12,
     "land": 12
@@ -45,6 +55,11 @@
     "nrg": 12,
     "sh": 12,
     "land": 12
+   },
+   "kind_months_any": {
+    "nrg": 12,
+    "sh": 12,
+    "land": 12
    }
   },
   {
@@ -53,6 +68,11 @@
    "months_complete": 12,
    "months_any": 12,
    "kind_months": {
+    "nrg": 12,
+    "sh": 12,
+    "land": 12
+   },
+   "kind_months_any": {
     "nrg": 12,
     "sh": 12,
     "land": 12
@@ -67,6 +87,11 @@
     "nrg": 12,
     "sh": 12,
     "land": 12
+   },
+   "kind_months_any": {
+    "nrg": 12,
+    "sh": 12,
+    "land": 12
    }
   },
   {
@@ -78,6 +103,11 @@
     "nrg": 12,
     "sh": 12,
     "land": 12
+   },
+   "kind_months_any": {
+    "nrg": 12,
+    "sh": 12,
+    "land": 12
    }
   },
   {
@@ -86,6 +116,11 @@
    "months_complete": 12,
    "months_any": 12,
    "kind_months": {
+    "nrg": 12,
+    "sh": 12,
+    "land": 12
+   },
+   "kind_months_any": {
     "nrg": 12,
     "sh": 12,
     "land": 12

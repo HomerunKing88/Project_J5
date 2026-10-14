@@ -274,6 +274,13 @@ def _verify_tx_extras(tx: dict) -> None:
                                                                 for k, v in km.items())):
             ok = False
             break
+        # J5-073: 종류마다 그해 시도한 개월 수 (없으면 이전 형식). 종류를 가리지 않은 시도 개월보다 클 수 없고, 그 종류의 완전 개월보다 작을 수 없다
+        ka = c.get("kind_months_any")
+        if ka is not None and not (isinstance(ka, dict) and all(k in RT_KINDS and isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= c["months_any"]
+                                                                and v >= (km or {}).get(k, 0) for k, v in ka.items())
+                                   and all(ka.get(k, 0) >= v for k, v in (km or {}).items())):
+            ok = False
+            break
     if not ok:
         raise ProjectionError("verify_transactions_coverage", "transactions.json 의 coverage 형식이 맞지 않는다 (시군구 5자리·연도·수집 개월 0~12, 완전 ≤ 전체, 중복 없음)")
 

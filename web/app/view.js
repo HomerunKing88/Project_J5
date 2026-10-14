@@ -90,7 +90,11 @@ export function validateTransactionsDoc(doc) {
       const ok = c && typeof c === "object" && typeof c.lawd_cd === "string" && /^\d{5}$/.test(c.lawd_cd) && Number.isInteger(c.year)
         && Number.isInteger(c.months_complete) && Number.isInteger(c.months_any) && c.months_complete >= 0 && c.months_complete <= c.months_any && c.months_any <= 12 && !seen.has(key)
         && (c.kind_months === undefined || (c.kind_months && typeof c.kind_months === "object" && !Array.isArray(c.kind_months)
-          && Object.entries(c.kind_months).every(([k, v]) => knownKind(k) && Number.isInteger(v) && v >= 1 && v <= c.months_complete)));
+          && Object.entries(c.kind_months).every(([k, v]) => knownKind(k) && Number.isInteger(v) && v >= 1 && v <= c.months_complete)))
+        // J5-073: 종류마다 시도한 개월 (그 종류의 완전 개월 이상, 종류를 가리지 않은 시도 개월 이하)
+        && (c.kind_months_any === undefined || (c.kind_months_any && typeof c.kind_months_any === "object" && !Array.isArray(c.kind_months_any)
+          && Object.entries(c.kind_months_any).every(([k, v]) => knownKind(k) && Number.isInteger(v) && v >= 1 && v <= c.months_any && v >= (c.kind_months?.[k] ?? 0))
+          && Object.entries(c.kind_months ?? {}).every(([k, v]) => (c.kind_months_any[k] ?? 0) >= v)));
       seen.add(key);
       return !ok;
     });
@@ -654,9 +658,9 @@ export const TREND_MIN_CASES = COMP_MIN_RATIOS;
  * from 은 첫 연도(주지 않으면 거래의 가장 이른 해), today 의 해까지 줄을 만든다. kind 는 고른 종류(수집 개월을 그 종류로 본다).
  * years: [{year, count, n, median, min, max, months, kinds, partial}] 오래된 해부터. count 는 그해 거래 수(지분·면적 없음 포함), n 은 대지 평당이 있는 사례 수(없으면 median 등 null).
  * counted 는 거래 수를 셀 수 있는지: 그해 거래가 있거나 그 종류를 받은 달이 있으면 "counted", 시도는 했으나 실패·부분만이면 "incomplete",
- *   실행이 없으면 "not_collected", 수집 현황이 없는 파일이면 "unknown". 종류를 고르면 그 종류의 시도 개월이 파일에 없어, 완전히 받은 달이 없고
- *   그해 시도가 있으면 "unknown" 이다 (PC 는 종류별로 가른다). counted 가 아니면 count 0 은 0 건이 아니다 (리뷰 반영 PR #118·#119).
- * monthsAny 는 모든 종류일 때 그해 시도한 개월(결과와 무관), 종류를 고르면 null.
+ *   실행이 없으면 "not_collected", 수집 현황이 없는 파일이면 "unknown". 종류를 고르면 그 종류의 시도 개월(kind_months_any, J5-073)로 가른다.
+ *   그 칸이 없는 이전 파일은 완전히 받은 달이 없고 그해 시도가 있으면 "unknown" 이다. counted 가 아니면 count 0 은 0 건이 아니다 (리뷰 반영 PR #118·#119).
+ * monthsAny 는 그해 시도한 개월(결과와 무관, 종류를 고르면 그 종류), 알 수 없으면 null.
  * months 는 이 시군구에서 그해 그 종류를 완전히 받은 개월(수집 현황이 없는 파일이면 null), kinds 는 모든 종류일 때 일부 종류만 받은 해의 메모, partial 은 today 의 해(오늘까지).
  * change: 대지 평당 사례가 TREND_MIN_CASES 건 이상인 가장 이른 해와 가장 늦은 해의 중간값 변동 { from, to, pct } 또는 { missing: 사유 }.
  * 거래가 없으면 null.
@@ -680,9 +684,11 @@ export function compsByYear(c, txDoc, feature, { from = null, today = null, kind
     const r = cov.get(y);
     const months = !hasCov ? null : !r ? 0 : kind === "all" || !r.kind_months ? r.months_complete : r.kind_months[kind] ?? 0;
     const kinds = kind === "all" && r?.kind_months ? kindsOnlyText({ tx: "counted", kindMonths: r.kind_months, monthsComplete: r.months_complete }) : "";
-    const any = !hasCov ? null : r?.months_any ?? 0;
-    const counted = inYear.length || (months != null && months > 0) ? "counted" : months == null ? "unknown" : any > 0 ? (kind === "all" ? "incomplete" : "unknown") : "not_collected";
-    years.push({ year: y, count: inYear.length, counted, monthsAny: kind === "all" ? any : null, n: lands.length, median: median(lands), min: lands.length ? Math.min(...lands) : null, max: lands.length ? Math.max(...lands) : null,
+    const any = !hasCov ? null : !r ? 0 : kind === "all" ? r.months_any : r.kind_months_any ? r.kind_months_any[kind] ?? 0 : null;
+    // 종류별 시도 개월이 없는 이전 파일에서 종류를 고르면, 그해 다른 종류라도 시도가 있으면 실패인지 미수집인지 모른다
+    const counted = inYear.length || (months != null && months > 0) ? "counted" : months == null ? "unknown"
+      : any == null ? (r.months_any > 0 ? "unknown" : "not_collected") : any > 0 ? "incomplete" : "not_collected";
+    years.push({ year: y, count: inYear.length, counted, monthsAny: any, n: lands.length, median: median(lands), min: lands.length ? Math.min(...lands) : null, max: lands.length ? Math.max(...lands) : null,
                  months, kinds, partial: y === thisYear });
   }
   const q = years.filter((r) => r.n >= TREND_MIN_CASES);

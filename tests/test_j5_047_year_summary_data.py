@@ -38,8 +38,8 @@ def test_coverage_and_zone_rule_in_transactions_file(db, home, server, tmp_path)
     run = collect_months(home, key=KEY, key_source="test", lawd_cd="11110", months=["202508"], endpoint=server, sleep=lambda s: None)
     load_run(db, home, "11110", run.run_id)
     assert coverage_by_year(db, "11110") == {"2026": {"complete": 2, "any": 2}, "2025": {"complete": 0, "any": 1}}
-    assert coverage_rows(db) == [{"lawd_cd": "11110", "year": 2025, "months_complete": 0, "months_any": 1, "kind_months": {}},
-                                 {"lawd_cd": "11110", "year": 2026, "months_complete": 2, "months_any": 2, "kind_months": {"nrg": 2}}]
+    assert coverage_rows(db) == [{"lawd_cd": "11110", "year": 2025, "months_complete": 0, "months_any": 1, "kind_months": {}, "kind_months_any": {"nrg": 1}},
+                                 {"lawd_cd": "11110", "year": 2026, "months_complete": 2, "months_any": 2, "kind_months": {"nrg": 2}, "kind_months_any": {"nrg": 2}}]
     apply_rules(db, load_rules(rules_file(tmp_path)))
     r = build_projection(db, home)
     assert r.outcome == "published", r.findings
@@ -75,5 +75,5 @@ def test_file_with_zero_transactions_keeps_coverage(db, home, server, tmp_path):
     assert r.outcome == "published" and r.counts["transactions"] == 0, r.findings
     out = home / r.output_dir
     tx = json.loads((out / "transactions.json").read_text(encoding="utf-8"))
-    assert tx["count"] == 0 and tx["transactions"] == [] and tx["coverage"] == [{"lawd_cd": "11110", "year": 2026, "months_complete": 2, "months_any": 2, "kind_months": {"nrg": 2}}]
+    assert tx["count"] == 0 and tx["transactions"] == [] and tx["coverage"] == [{"lawd_cd": "11110", "year": 2026, "months_complete": 2, "months_any": 2, "kind_months": {"nrg": 2}, "kind_months_any": {"nrg": 2}}]
     assert verify_projection_dir(out)["counts"]["transactions"] == 0
