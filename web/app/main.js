@@ -18,7 +18,7 @@ import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
 import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummaryInfo, yearSummaryRow, yearSummaryCells, recentDeals, parcelSummaryItems, fmtKrw, placeDeals, dealKind, dealValueText, dealDetailText, dealsSince, dealSince, compsChartData, compsByYear, TREND_MIN_CASES, niceTicks, DEAL_MODES, DEAL_YEARS, nearbyComps, COMP_LIST_MAX, DEAL_KIND_NAMES, DEAL_KIND_FILTERS, dealsOfKind, dealKindsPresent } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.38";
+export const APP_VERSION = "0.2.39";
 /** 자료가 없을 때 지도가 처음 보이는 곳: 종로5가역 부근 [경도, 위도] (J5-062, 배경 지도만 켠 경우) */
 const FIELD_HOME = [127.0019, 37.5709];
 const PARCEL_CARD_YEARS = 5;   // 필지 카드의 연도별 표에 보이는 최근 연도 수 (J5-055)
@@ -161,6 +161,16 @@ function applyTileSettings({ provider, key, template }, { quiet = false } = {}) 
   mapCall((m) => m.setTiles({ url: cfg.url, minZoom: cfg.minZoom, maxZoom: cfg.maxZoom, attribution: cfg.attribution }));
   if (!quiet) text($("tiles-note"), `저장했습니다: ${PROVIDERS[provider].name} · ${cfg.url}` + (cfg.needsKey ? ". 인증키는 이 폰에만 저장합니다" : ""), "ok");
   return true;
+}
+
+/** 빈 지도의 '배경 지도 켜기' (J5-079): 설정의 배경 지도 칸으로 가서 VWorld 기본 지도를 고르고 인증키 칸에 커서를 둔다. 저장은 사용자가 누른다 */
+function openTileSetup() {
+  state.nav.show("settings");
+  if (!$("tiles-provider").value) $("tiles-provider").value = "vworld_base";
+  updateTileFields();
+  $("tiles-title").scrollIntoView({ block: "start" });
+  const target = $("tiles-key-field").hidden ? $("tiles-provider") : $("tiles-key");
+  target.focus({ preventScroll: true });
 }
 
 async function saveTileSettings() {
@@ -1963,6 +1973,7 @@ async function main() {
   $("tiles-provider").addEventListener("change", updateTileFields);
   $("tiles-template").addEventListener("input", updateTileFields);
   $("tiles-save").addEventListener("click", saveTileSettings);
+  $("map-empty-tiles").addEventListener("click", openTileSetup);
   $("tiles-prefetch").addEventListener("click", prefetchTiles);
   $("tiles-clear").addEventListener("click", clearTileCache);
   $("view-file").addEventListener("change", (e) => loadViewFile(e.target));

@@ -26,7 +26,7 @@
   <h2 id="map-title" class="sr-only">현장</h2>
   <div class="field-map map-wrap">
     <svg id="map-svg" role="img" aria-label="대상 위치와 필지 경계 지도"></svg>
-    <div id="map-empty" class="map-empty"><div><strong>지도에 표시할 위치가 없습니다</strong>자료를 가져오면 대상과 필지가 여기에 그려집니다. 설정에서 배경 지도를 켜면 지도에서 자리를 골라 바로 기록할 수 있습니다.</div></div>
+    <div id="map-empty" class="map-empty"><div><strong>지도에 표시할 위치가 없습니다</strong>자료를 가져오면 대상과 필지가 여기에 그려집니다. 설정에서 배경 지도를 켜면 지도에서 자리를 골라 바로 기록할 수 있습니다.<button id="map-empty-tiles" type="button" class="secondary map-empty-action">배경 지도 켜기</button></div></div>
     <div id="map-top" class="map-top">
       <form id="parcel-search-form" class="map-search" role="search" hidden>
         <label for="parcel-search" class="sr-only">지번으로 필지 찾기</label>
@@ -350,7 +350,7 @@
         <select id="tiles-provider">
           <option value="">쓰지 않음 (대상·필지·윤곽만)</option>
           <option value="custom">직접 입력 (타일 주소 또는 같은 출처의 타일 폴더)</option>
-          <option value="vworld_base" disabled>VWorld 기본 지도 · 공식 문서 확인 전</option>
+          <option value="vworld_base">VWorld 기본 지도 (국토교통부)</option>
           <option value="vworld_satellite" disabled>VWorld 항공사진 · 확인 전</option>
           <option value="vworld_hybrid" disabled>VWorld 항공사진 + 라벨 · 확인 전</option>
         </select>

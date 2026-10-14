@@ -207,6 +207,7 @@ ul.plain li.empty { color: var(--pencil); }
 .field-map { position: absolute; inset: 0; }
 #map-svg { display: block; width: 100%; height: 100%; background: var(--map-bg); touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; cursor: grab; }
 .map-empty { position: absolute; inset: 0 0 auto 0; height: 38%; display: grid; place-items: center; text-align: center; padding: var(--s-5); color: var(--pencil); font-size: var(--t-s); pointer-events: none; }
+.map-empty .map-empty-action { pointer-events: auto; display: block; margin: var(--s-3) auto 0; }   /* J5-079: 빈 지도에서 배경 지도 설정으로 */
 .map-empty strong { display: block; color: var(--ink); font-size: var(--t-m); margin-bottom: 4px; }
 /* 자료가 없을 때는 지도 조작을 감춘다 (누를 것이 없다) */
 .field-map:has(#map-empty:not([hidden])) .map-tools, .field-map:has(#map-empty:not([hidden])) .map-chips { visibility: hidden; }   /* 자리는 남겨 지도 맞추기의 위쪽 여백이 바뀌지 않게 */

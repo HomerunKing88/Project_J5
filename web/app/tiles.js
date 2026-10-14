@@ -17,7 +17,8 @@ export const KEY_PLACEHOLDER = "{key}";
  * 미검증 주소로 수천 건을 요청·저장하지 않는다. 확인이 끝나면 verified 에 날짜를 적고 enabled 를 true 로 바꾼다). 그 전에는 사용자가 제공자 문서의 형식을 "직접 입력" 에 넣는다.
  */
 export const PROVIDERS = Object.freeze({
-  vworld_base: { name: "VWorld 기본 지도 (국토교통부)", host: "api.vworld.kr", template: "/req/wmts/1.0.0/{key}/Base/{z}/{y}/{x}.png", minZoom: 6, maxZoom: 19, needsKey: true, attribution: "배경: VWorld (국토교통부)", verified: null, enabled: false },
+  // J5-079: 기본 지도는 배포 주소의 iPhone Safari 에서 실제 키로 z17 타일(256×256 PNG, 종로5가역 일대)을 받아 확인했다(2026-10-14, J5-078 기기 시험). 항공사진 두 가지는 아직 확인 전
+  vworld_base: { name: "VWorld 기본 지도 (국토교통부)", host: "api.vworld.kr", template: "/req/wmts/1.0.0/{key}/Base/{z}/{y}/{x}.png", minZoom: 6, maxZoom: 19, needsKey: true, attribution: "배경: VWorld (국토교통부)", verified: "2026-10-14", enabled: true },
   vworld_satellite: { name: "VWorld 항공사진", host: "api.vworld.kr", template: "/req/wmts/1.0.0/{key}/Satellite/{z}/{y}/{x}.jpeg", minZoom: 6, maxZoom: 19, needsKey: true, attribution: "배경: VWorld (국토교통부)", verified: null, enabled: false },
   vworld_hybrid: { name: "VWorld 항공사진 + 라벨", host: "api.vworld.kr", template: "/req/wmts/1.0.0/{key}/Hybrid/{z}/{y}/{x}.png", minZoom: 6, maxZoom: 19, needsKey: true, attribution: "배경: VWorld (국토교통부)", verified: null, enabled: false },
   custom: { name: "직접 입력 (허용 호스트 또는 같은 출처)", host: null, template: "", minZoom: 0, maxZoom: 22, needsKey: false, attribution: "배경: 사용자 지정 타일", verified: null, enabled: true },
