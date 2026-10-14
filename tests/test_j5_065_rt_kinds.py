@@ -203,7 +203,12 @@ def test_projection_exports_kind_and_verifier(db, home, tmp_path):
                          (lambda t: t["coverage"][0].update(kind_months_any={"nrg": 2, "sh": 1, "land": 1}), "verify_transactions_coverage"),
                          (lambda t: t["coverage"][0].update(kind_months_any={"nrg": 1, "sh": 1}), "verify_transactions_coverage"),
                          (lambda t: t["coverage"][0].update(kind_months_any={"nrg": 0, "sh": 1, "land": 1}), "verify_transactions_coverage"),
-                         (lambda t: t["coverage"][0].update(kind_months_any=[]), "verify_transactions_coverage")):
+                         (lambda t: t["coverage"][0].update(kind_months_any=[]), "verify_transactions_coverage"),
+                         # J5-075 (리뷰 반영 PR #120): 칸이 있는데 null 이면 폰처럼 거절한다 (칸이 없는 이전 형식은 받는다)
+                         (lambda t: t["coverage"][0].update(kind_months=None), "verify_transactions_coverage"),
+                         (lambda t: t["coverage"][0].update(kind_months_any=None), "verify_transactions_coverage"),
+                         (lambda t: t["transactions"][0].update(land_category=3), "verify_transaction_kind"),
+                         (lambda t: t["transactions"][0].update(deal_kind=["nrg"]), "verify_transaction_kind")):
         tamper(out, change)
         with pytest.raises(ProjectionError) as e:
             verify_projection_dir(out)
