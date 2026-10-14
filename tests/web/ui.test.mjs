@@ -1,7 +1,7 @@
 // ui.js 순수 함수 (J5-020): 해시 → 화면, 짧은 시각, 물건별 기록 요약, 다음 대상, 내보내기 단계. DOM 없음.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { pickLabel, pickPoint, PICK_NAME_MAX, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, VIEWS, DEFAULT_VIEW, MODE_LABEL } from "../../web/app/ui.js";
+import { pickLabel, pickPoint, PICK_NAME_MAX, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, VIEWS, DEFAULT_VIEW, MODE_LABEL, retireModeTo } from "../../web/app/ui.js";
 
 const ev = (asset, saved, status = "no_change", photos = 0, exported = false) => ({
   asset_id: asset, saved_at: saved, status: exported ? "exported" : "saved",
@@ -70,4 +70,12 @@ test("pickPoint: 경도를 -180~180 으로 감고 범위 밖 위도·숫자 아�
   for (const bad of [null, [1], [NaN, 1], [1, Infinity], [1, 91], [1, -91]]) assert.equal(pickPoint(bad), null, JSON.stringify(bad));
   const [lon, lat] = pickPoint([540.5, 85]);
   assert.ok(lon >= -180 && lon <= 180 && lat <= 90);
+});
+
+test("retireModeTo: 연습용으로 저장되고 연습용 기록이 없을 때만 실제로 (J5-077)", () => {
+  assert.equal(retireModeTo("synthetic", []), "private_real");
+  assert.equal(retireModeTo("synthetic", [{ data_mode: "private_real" }]), "private_real");
+  assert.equal(retireModeTo("synthetic", [{ data_mode: "private_real" }, { data_mode: "synthetic" }]), null, "연습용 기록이 남으면 그대로");
+  assert.equal(retireModeTo("private_real", []), null);
+  assert.equal(retireModeTo(null, []), null, "저장한 적 없으면 바꾸지 않는다(기본값이 실제)");
 });

@@ -9,6 +9,13 @@ export const VIEW_ALIASES = { home: "map", export: "records" };
 export const MODE_LABEL = { synthetic: "연습용 자료", private_real: "실제 자료 (비공개)" };
 export const MODE_SHORT = { synthetic: "연습용", private_real: "실제" };
 
+/** 연습용 모드가 아닌 폰에서 저장된 자료 종류를 실제로 바꿀지 (J5-077). 연습용으로 저장돼 있고 연습용 기록이 하나도 없을 때만 바꾼다.
+ *  연습용 기록이 남아 있으면 보내기 묶음(study_id·data_mode)이 갈리지 않게 그대로 둔다. */
+export function retireModeTo(mode, records) {
+  if (mode !== "synthetic") return null;
+  return records.some((r) => r?.data_mode === "synthetic") ? null : "private_real";
+}
+
 /** 해시(#map 등)를 화면 이름으로. 모르는 값은 기본 화면. */
 export function viewFromHash(hash) {
   const raw = String(hash || "").replace(/^#/, "");
