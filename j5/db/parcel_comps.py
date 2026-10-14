@@ -59,7 +59,8 @@ def _stats(values: list[float]) -> dict:
     return {"n": len(values), "median": median(values), "min": min(values) if values else None, "max": max(values) if values else None}
 
 
-def parcel_comps(db: Db, pnu: str, *, years: int = 5, kind: str = "all", on_date: str | None = None) -> dict:
+def parcel_comps(db: Db, pnu: str, *, years: int = 5, kind: str = "all", on_date: str | None = None, cache: dict | None = None) -> dict:
+    """cache 를 주면 같은 동의 거래·필지 색인과 필지의 공시지가 추이를 여러 필지 사이에 다시 쓴다 (comps_table, J5-074). 한 번의 표 안에서만 쓴다."""
     if not PNU_RE.match(pnu or ""):
         raise DbError("bad_pnu", f"PNU 는 19자리 숫자: {pnu}")
     if years not in COMP_YEARS:
@@ -69,20 +70,26 @@ def parcel_comps(db: Db, pnu: str, *, years: int = 5, kind: str = "all", on_date
     on_date = on_date or db.now()[:10]
     if parse_date(on_date) is None:   # 달력에 없는 날(2026-02-31)도 거절한다 (리뷰 반영 PR #119)
         raise DbError("bad_date", f"기준일은 달력에 있는 YYYY-MM-DD: {on_date}")
+    cache = {} if cache is None else cache
+    series: dict[str, list] = cache.setdefault("series", {})
     h = attribute_history(db, pnu)   # 정본에 없으면 parcel_missing
+    series.setdefault(pnu, h["price_series"])
     me = db.conn.execute("SELECT emd_code, emd_name FROM parcels WHERE pnu = ?", (pnu,)).fetchone()
     sgg, emd = me["emd_code"][:5], me["emd_name"]
     since = _since(years, on_date)
     from_year = int(since[:4]) if since else None
-    rows = []
-    if db._has_table("transactions") and emd is not None:
-        rows = [t for t in db.conn.execute("SELECT * FROM transactions WHERE emd_name = ? AND cancel_status <> 'cancelled'", (emd,))
-                if (t["lawd_cd"] is None or t["lawd_cd"] == sgg) and (kind == "all" or _kind(t) == kind)]
-    # 지번이 온전한 거래가 닿는 필지 (같은 시군구·법정동·산·본번·부번). 공시지가 이력은 필지마다 한 번 읽는다
-    parcels = {}
-    for p in db.conn.execute("SELECT pnu, mountain, bon, bu FROM parcels WHERE emd_name = ? AND substr(emd_code, 1, 5) = ?", (emd, sgg)):
-        parcels.setdefault((bool(p["mountain"]), p["bon"], p["bu"] or 0), p["pnu"])
-    series: dict[str, list] = {}
+    dong = cache.setdefault("dong", {})
+    if (sgg, emd, kind) not in dong:
+        rows = []
+        if db._has_table("transactions") and emd is not None:
+            rows = [t for t in db.conn.execute("SELECT * FROM transactions WHERE emd_name = ? AND cancel_status <> 'cancelled'", (emd,))
+                    if (t["lawd_cd"] is None or t["lawd_cd"] == sgg) and (kind == "all" or _kind(t) == kind)]
+        # 지번이 온전한 거래가 닿는 필지 (같은 시군구·법정동·산·본번·부번). 공시지가 이력은 필지마다 한 번 읽는다
+        index = {}
+        for p in db.conn.execute("SELECT pnu, mountain, bon, bu FROM parcels WHERE emd_name = ? AND substr(emd_code, 1, 5) = ?", (emd, sgg)):
+            index.setdefault((bool(p["mountain"]), p["bon"], p["bu"] or 0), p["pnu"])
+        dong[(sgg, emd, kind)] = (rows, index)
+    rows, parcels = dong[(sgg, emd, kind)]
 
     def comp(t) -> dict:
         j = parse_jibun(t["jibun_raw"])
@@ -91,7 +98,7 @@ def parcel_comps(db: Db, pnu: str, *, years: int = 5, kind: str = "all", on_date
         pr = None
         if exact is not None:
             if exact not in series:
-                series[exact] = attribute_history(db, exact)["price_series"] if exact != pnu else h["price_series"]
+                series[exact] = attribute_history(db, exact)["price_series"]
             pr = _price_for_year(series[exact], int(t["deal_ymd"][:4]))
         ok = land is not None and pr is not None and pr["price"] > 0
         return {"transaction_id": t["transaction_id"], "deal_date": _deal_date(t), "deal_kind": _kind(t), "jibun": t["jibun_raw"], "jibun_masked": bool(t["jibun_masked"]),
@@ -205,4 +212,83 @@ def comps_text(r: dict) -> str:
             col = (f"수집 실패·부분만 ({y['months_any']}개월 시도)" if y["months_any"] else "미수집") if y["months"] == 0 else f"수집 {y['months']}/12개월" + (f", {y['kinds']}" if y["kinds"] else "")
             lines.append(f"    {y['year']}{' (오늘까지)' if y['partial'] else ''}: 거래 {cnt} · 대지 평당 " + (f"중간 {_py(y['median'])} ({y['n']}건)" if y["n"] else "사례 없음") + f" · {col}")
     lines.append("실거래 신고 자료에서 계산한 단가와 배율이며 감정평가가 아니다. 지분 거래는 단가에서 뺀다. 번지대 거래는 어느 필지로도 확정하지 않는다.")
+    return "\n".join(lines) + "\n"
+
+
+# ---- 여러 필지의 주변 사례 요약표 (J5-074): 관찰목록·찾은 필지 목록을 한 표로. 필지마다 parcel_comps 와 같은 값 ----
+
+TABLE_FIELDS = ("pnu", "parcel", "sgg_code", "emd_name", "years", "since", "kind", "count",
+                "land_n", "land_median_krw_py", "land_min_krw_py", "land_max_krw_py", "floor_n", "floor_median_krw_py",
+                "ratio_n", "ratio_median", "reference_unit_krw_py", "reference_price_krw_m2", "reference_price_year", "reference_missing",
+                "own_count", "own_last_date", "own_last_amount_krw", "own_last_land_unit_krw_py",
+                "trend_from", "trend_to", "trend_pct", "trend_missing")
+
+
+def comps_table(db: Db, pnus: list[str], *, years: int = 5, kind: str = "all", on_date: str | None = None) -> dict:
+    """필지마다 한 줄 {rows, parcels, years, kind, on_date}. 값은 필지마다 parcel_comps 와 같다(같은 동의 거래·공시지가 추이는 한 번만 읽는다).
+    own_* 는 이 필지에 지번이 온전히 닿는 기간 안 거래(취소 확정 제외)의 수와 가장 최근 거래. 순서는 입력 순서, 같은 PNU 는 한 번."""
+    from j5.db.parcel_years import MAX_PARCELS
+    pnus = list(dict.fromkeys(pnus))
+    bad = [p for p in pnus if not PNU_RE.match(p)]
+    if bad:
+        raise DbError("bad_pnu", f"PNU 는 19자리 숫자: {', '.join(bad[:5])}")
+    if not pnus:
+        raise DbError("no_pnu", "대상 필지가 없다 (PNU, --pnu, --csv 또는 --watchlist)")
+    if len(pnus) > MAX_PARCELS:
+        raise DbError("too_many", f"한 번에 {MAX_PARCELS}필지까지 ({len(pnus)}필지). 대상을 좁히거나 나눠 만든다")
+    missing = [p for p in pnus if db.conn.execute("SELECT 1 FROM parcels WHERE pnu = ?", (p,)).fetchone() is None]
+    if missing:
+        raise DbError("parcel_missing", f"정본에 없는 필지: {', '.join(missing[:5])}" + (f" 외 {len(missing) - 5}개" if len(missing) > 5 else ""))
+    cache: dict = {}
+    out = []
+    on = None
+    for pnu in pnus:
+        r = parcel_comps(db, pnu, years=years, kind=kind, on_date=on_date, cache=cache)
+        on = r["on_date"]
+        ref, ch = r["reference"], (r["by_year"] or {}).get("change") or {"missing": "거래가 없다"}
+        own = [c for c in r["comps"] if c["mine"]]
+        last = own[0] if own else None   # 사례는 최근 먼저
+        out.append({"pnu": pnu, "parcel": r["parcel"], "sgg_code": r["sgg_code"], "emd_name": r["emd_name"], "years": years, "since": r["since"], "kind": kind,
+                    "count": r["count"], "land_n": r["land"]["n"], "land_median_krw_py": r["land"]["median"], "land_min_krw_py": r["land"]["min"], "land_max_krw_py": r["land"]["max"],
+                    "floor_n": r["floor"]["n"], "floor_median_krw_py": r["floor"]["median"], "ratio_n": r["ratio"]["n"], "ratio_median": r["ratio"]["median"],
+                    "reference_unit_krw_py": ref.get("unit_krw_py"), "reference_price_krw_m2": ref.get("price_krw_m2"), "reference_price_year": ref.get("price_year"),
+                    "reference_missing": ref.get("missing"), "own_count": len(own), "own_last_date": last["deal_date"] if last else None,
+                    "own_last_amount_krw": last["amount_krw"] if last else None, "own_last_land_unit_krw_py": last["land_unit_krw_py"] if last else None,
+                    "trend_from": ch.get("from"), "trend_to": ch.get("to"), "trend_pct": ch.get("pct"), "trend_missing": ch.get("missing")})
+    return {"parcels": len(pnus), "years": years, "kind": kind, "on_date": on, "rows": out}
+
+
+def _num(v) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, float):
+        return f"{v:.6g}" if abs(v) < 1000 else str(round(v))
+    return str(v)
+
+
+def table_csv(t: dict) -> str:
+    import csv
+    import io
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\n")
+    w.writerow(TABLE_FIELDS)
+    for row in t["rows"]:
+        w.writerow([_num(row[k]) for k in TABLE_FIELDS])
+    return buf.getvalue()
+
+
+def table_text(t: dict) -> str:
+    scope = f"최근 {t['years']}년" if t["years"] else "전체 기간"
+    lines = [f"필지 {t['parcels']}개 주변 사례 요약 ({scope}" + ("" if t["kind"] == "all" else f", {KIND_SHORT[t['kind']]}") + f", 기준일 {t['on_date']}). 필지마다 같은 동의 거래로 계산한다."]
+    for r in t["rows"]:
+        parts = [f"거래 {r['count']}건"]
+        if r["count"]:
+            parts.append(f"대지 평당 중간 {_py(r['land_median_krw_py'])} ({r['land_n']}건)" if r["land_n"] else "대지 평당 사례 없음")
+            parts.append(f"배율 중간 {r['ratio_median']:.2f}배 ({r['ratio_n']}건)" if r["ratio_n"] else "배율 사례 없음")
+            parts.append(f"참고 추정 {_py(r['reference_unit_krw_py'])} ({r['reference_price_year']}년 공시지가 기준)" if r["reference_unit_krw_py"] is not None else "참고 추정 없음")
+            parts.append(f"변동 {r['trend_from']}→{r['trend_to']}년 {r['trend_pct']:+.1f}%" if r["trend_pct"] is not None else "변동 없음")
+        if r["own_count"]:
+            parts.append(f"이 필지 거래 {r['own_count']}건 (최근 {r['own_last_date']} {fmt_krw(r['own_last_amount_krw'])}, 대지 {_py(r['own_last_land_unit_krw_py'])})")
+        lines.append(f"  {r['parcel']} (PNU {r['pnu']}): " + " · ".join(parts))
+    lines.append("값이 없는 칸의 사유는 CSV·JSON 의 *_missing 열에 있다. 실거래 신고 자료에서 계산한 단가와 배율이며 감정평가가 아니다.")
     return "\n".join(lines) + "\n"
