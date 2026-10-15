@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { Cdp, WEB, findChrome, serve } from "./cdp.mjs";
 
 const chrome = findChrome();
-const appUp = "document.getElementById('status-line').textContent.includes('앱 0.2.40')";
+const appUp = "document.getElementById('status-line').textContent.includes('앱 0.2.42')";
 const shown = (id) => `(() => { const e = document.getElementById('${id}'); return !!e && !e.hidden && getComputedStyle(e).display !== 'none' && e.getClientRects().length > 0; })()`;
 
 test("연습용 모드: 기본은 실제 자료, ?demo=1 에서만 연습용 자료, 끄면 걷어 냄", { skip: chrome ? false : "Chromium 없음" }, async () => {

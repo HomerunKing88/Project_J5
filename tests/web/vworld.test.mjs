@@ -105,3 +105,51 @@ test("createVworldBridge: 격리 프레임을 sandbox=allow-scripts 로 만들�
   bridge.destroy();
   assert.equal(frame.removed, true);
 });
+
+test("parseParcelsInBox: 범위 응답의 필지 목록, 형식 이상은 건너뜀, 일부만 받았는지 (J5-081)", async () => {
+  const { parseParcelsInBox } = await import("../../web/app/vworld.js");
+  const feat = (pnu, jibun, geometry = { type: "MultiPolygon", coordinates: [square] }) => ({ type: "Feature", geometry, properties: { pnu, jibun } });
+  const d = { response: { status: "OK", record: { total: "3", current: "3" }, result: { featureCollection: { features: [
+    feat("1111016300101930017", "193-17대"), feat("123", "1대"), feat("1111016300101930018", "193-18 대", { type: "Point", coordinates: [127, 37.5] })] } } } };
+  const r = parseParcelsInBox(d);
+  assert.equal(r.status, "OK");
+  assert.deepEqual(r.parcels.map((p) => [p.pnu, p.lot]), [["1111016300101930017", "193-17"]]);
+  assert.equal(r.truncated, false);
+  d.response.record.total = "1500";
+  assert.equal(parseParcelsInBox(d).truncated, true, "전체 수가 받은 수보다 많으면 일부만");
+  assert.deepEqual(parseParcelsInBox({ response: { status: "NOT_FOUND" } }), { status: "OK", parcels: [], total: 0, truncated: false });
+  assert.equal(parseParcelsInBox({ response: { status: "ERROR", error: { text: "x" } } }).status, "ERROR");
+});
+
+test("zoningSummary: 실측 필드 uname·dyear 로 한 줄, 같은 이름은 한 번, 이름 없는 결과는 뺌 (J5-081)", async () => {
+  const { zoningSummary } = await import("../../web/app/vworld.js");
+  assert.equal(zoningSummary([[["uname", "일반상업지역"], ["dyear", "2023"], ["dnum", "0243"]], [["dyear", "2000"], ["dnum", "0000"]]]), "일반상업지역 (2023 고시)");
+  assert.equal(zoningSummary([[["uname", "일반상업지역"]], [["uname", "일반상업지역"], ["dyear", "2020"]], [["uname", "제3종일반주거지역"], ["dyear", "x"]]]), "일반상업지역, 제3종일반주거지역");
+  assert.equal(zoningSummary([[["dyear", "2000"]]]), null);
+});
+
+test("aroundQueryBox: 사방 25% 여유, 한 변 0.02° 상한은 가운데 기준 (J5-081)", async () => {
+  const { aroundQueryBox, MAX_BOX_DEG } = await import("../../web/app/vworld.js");
+  assert.deepEqual(aroundQueryBox([127, 37.5, 127.004, 37.503]), [126.999, 37.49925, 127.005, 37.50375]);
+  const big = aroundQueryBox([126.9, 37.4, 127.1, 37.6]);
+  assert.ok(big[2] - big[0] <= MAX_BOX_DEG && big[3] - big[1] <= MAX_BOX_DEG);
+  assert.ok(Math.abs((big[0] + big[2]) / 2 - 127) < 1e-6 && Math.abs((big[1] + big[3]) / 2 - 37.5) < 1e-6, "가운데 유지");
+});
+
+test("searchQuery·parseSearchResponse: 주소 찾기 (J5-082, 응답 필드는 실측 전)", async () => {
+  const { searchQuery, parseSearchResponse } = await import("../../web/app/vworld.js");
+  assert.equal(searchQuery("  종로5가   193-17 "), "종로5가 193-17");
+  assert.equal(searchQuery('<b>종로"5가</b>'), "b 종로 5가 /b");
+  assert.equal(searchQuery("   "), null);
+  assert.equal(searchQuery("가".repeat(100)).length, 80);
+  const ok = parseSearchResponse({ response: { status: "OK", result: { items: [
+    { id: "1111016300101930017", address: { parcel: "서울특별시 종로구 종로5가 193-17", road: "" }, point: { x: "127.0021", y: "37.5705" } },
+    { address: { road: "서울특별시 종로구 종로 200" }, point: { x: 127.003, y: 37.571 } },
+    { address: { parcel: "범위 밖" }, point: { x: "0", y: "0" } },
+    { address: { parcel: "자리 없음" } }] } } });
+  assert.equal(ok.status, "OK");
+  assert.deepEqual(ok.items, [{ title: "서울특별시 종로구 종로5가 193-17", lonlat: [127.0021, 37.5705] }, { title: "서울특별시 종로구 종로 200", lonlat: [127.003, 37.571] }]);
+  assert.deepEqual(parseSearchResponse({ response: { status: "NOT_FOUND" } }), { status: "OK", items: [] });
+  assert.equal(parseSearchResponse({ response: { status: "ERROR", error: { text: "키 오류" } } }).error, "키 오류");
+  assert.equal(parseSearchResponse({}).status, "bad_response");
+});

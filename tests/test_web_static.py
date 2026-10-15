@@ -45,7 +45,9 @@ def test_no_external_urls_in_app_code():
         if rel == VWORLD_FRAME_JS:
             hosts = {m.group(1).lower() for m in re.finditer(r"https?://([a-z0-9.-]+)", text, re.IGNORECASE)}
             assert hosts == {"api.vworld.kr"}, f"{p}: VWorld 밖 호스트 {hosts}"
-            assert 's.src = VWORLD + "?" + q.toString();' in text and "DATASETS[m.data] === true" in text, "격리 프레임은 정해 둔 VWorld 데이터 주소만 만든다"
+            assert 's.src = base + "?" + q.toString();' in text and "DATASETS[m.data] === true" in text, "격리 프레임은 정해 둔 VWorld 주소만 만든다"
+            assert re.findall(r"base = (\w+);", text) == ["SEARCH", "VWORLD"], "주소는 정해 둔 두 곳(검색·데이터)만 (J5-082)"
+            assert "CATEGORIES[m.category] === true" in text
             for token in ("indexedDB", "localStorage", "document.cookie", "fetch(", "XMLHttpRequest"):
                 assert token not in text, f"{p}: {token} 사용 금지"
             continue

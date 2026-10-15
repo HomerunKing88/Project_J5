@@ -531,3 +531,6 @@ pre { white-space: pre-wrap; word-break: break-all; font-size: var(--t-xs); back
 
 /* 온라인 조회 필지 (J5-080): 지도를 눌러 VWorld 에서 받은 필지의 경계 */
 .layer-lookup .lookup-parcel { fill: rgba(37, 99, 235, 0.14); stroke: #1d4ed8; stroke-width: 2.5; pointer-events: none; }
+/* 화면 범위의 필지 경계 (J5-081): VWorld 에서 받은 주변 필지. 배경 지도 위에 가늘게 */
+.layer-around .around-parcel { fill: none; stroke: rgba(220, 38, 38, 0.55); stroke-width: 1; pointer-events: none; }
+.layer-around-labels .around-label { font-size: 11px; fill: #7f1d1d; text-anchor: middle; dominant-baseline: central; paint-order: stroke; stroke: rgba(255,255,255,0.85); stroke-width: 3px; pointer-events: none; }

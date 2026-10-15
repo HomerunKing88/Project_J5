@@ -1,7 +1,7 @@
 // 최소 앱 캐시 (ADR-01: 서비스 워커에는 앱 실행 파일만 캐시한다). 사진·관측·시드 파일은 캐시하지 않는다.
 // 버전을 올리면 이전 캐시를 지운다. 네트워크 없이도 아래 파일로 앱이 뜬다.
 const CACHE_PREFIX = "j5-app-";
-const CACHE = CACHE_PREFIX + "v0.2.40"; // 캐시한 앱 파일이 바뀌면 올린다 (J5-080: 지도를 눌러 필지 조회)
+const CACHE = CACHE_PREFIX + "v0.2.42"; // 캐시한 앱 파일이 바뀌면 올린다 (J5-082: 주소·지번으로 찾기)
 const APP_FILES = [
   "./",
   "./index.html",
@@ -32,7 +32,8 @@ const APP_FILES = [
 ];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(APP_FILES)).then(() => self.skipWaiting()));
+  // 새 판의 파일은 브라우저의 HTTP 캐시를 거치지 않고 서버에서 받는다(cache: "reload"). 거치면 이전 판 파일이 새 판 캐시에 섞일 수 있다 (J5-081)
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(APP_FILES.map((u) => new Request(u, { cache: "reload" })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener("activate", (e) => {

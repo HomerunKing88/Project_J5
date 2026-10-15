@@ -22,7 +22,7 @@ test("VWorld 직접 연결 시험: 서비스 워커가 있어도 페이지에서
     cdp = await Cdp.launch(chrome, tmp);
     // 앱을 한 번 열어 서비스 워커를 설치한다
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.40')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.42')");
     await cdp.waitFor("navigator.serviceWorker.ready.then(() => !!navigator.serviceWorker.controller)", 15000);
 
     const seen = [];
