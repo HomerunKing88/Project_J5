@@ -184,4 +184,9 @@ test("lookupSnapshot·lookupFacts: 조회 결과를 대상에 남길 모양과 �
   assert.equal(lookupFacts(lookupSnapshot(p, { status: "OK", items: [[["x", "1"]]] }, "2026-10-15T07:35:00+09:00"))[2][1], "자료에 이름 없음");
   assert.equal(lookupFacts(lookupSnapshot(p, { status: "OK", items: [[["x", "1"]]] }, "2026-10-15T07:35:00+09:00"), { rawBelow: true })[2][1], "자료에 이름 없음 (아래 원문)");
   assert.equal(lookupFacts(null).length, 0);
+  // 대상 카드는 주소·필지 번호를 앞에 둔다 (리뷰 반영 PR #129). 용도지역 자리는 그만큼 뒤로
+  const wid = lookupFacts(s, { withId: true });
+  assert.deepEqual(wid.map(([k]) => k), ["주소", "필지 번호", "지번", "지목", "용도지역", "공시지가", "도형면적"]);
+  assert.deepEqual(wid.slice(0, 2).map(([, v]) => v), [PROPS.addr, PROPS.pnu]);
+  assert.equal(lookupFacts({ ...s, addr: null }, { withId: true })[0][1], "미확인");
 });

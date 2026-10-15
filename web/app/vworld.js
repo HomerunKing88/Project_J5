@@ -142,16 +142,17 @@ export function lookupSnapshot(p, zoning, lookedUpAt) {
     polygons: p.polygons, bbox: p.bbox };
 }
 
-/** 조회 기록 → 카드 줄 [[이름, 값], ...]. rawBelow: 용도지역 원문을 카드 아래에 보일 때 (조회 카드) */
-export function lookupFacts(s, { rawBelow = false } = {}) {
+/** 조회 기록 → 카드 줄 [[이름, 값], ...]. rawBelow: 용도지역 원문을 카드 아래에 보일 때 (조회 카드). withId: 주소·필지 번호를 앞에 (대상 카드, 리뷰 반영 PR #129) */
+export function lookupFacts(s, { rawBelow = false, withId = false } = {}) {
   if (!s) return [];
   const facts = [
+    ...(withId ? [["주소", s.addr ?? "미확인"], ["필지 번호", s.pnu]] : []),
     ["지번", s.lot ?? "미확인"],
     ["지목", s.jimok ?? "미확인"],
     ["공시지가", s.jiga !== null ? `${fmtJiga(s.jiga)}${s.gosi ? ` (${s.gosi} 기준)` : ""}` : "미확인"],
     ["도형면적", s.area_m2 !== null ? `${fmtAreaPyeong(s.area_m2)} · 경계로 계산, 공부면적 아님` : "미확인"],
   ];
-  if (s.zoning_status === "OK") facts.splice(2, 0, ["용도지역", s.zoning ?? (rawBelow ? "자료에 이름 없음 (아래 원문)" : "자료에 이름 없음")]);
+  if (s.zoning_status === "OK") facts.splice(withId ? 4 : 2, 0, ["용도지역", s.zoning ?? (rawBelow ? "자료에 이름 없음 (아래 원문)" : "자료에 이름 없음")]);
   else facts.push(["용도지역", s.zoning_status === "NOT_FOUND" ? "이 자리에 자료 없음" : `조회 실패 (${s.zoning_error ?? s.zoning_status})`]);
   return facts;
 }

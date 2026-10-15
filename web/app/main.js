@@ -28,7 +28,7 @@ const $ = (id) => document.getElementById(id);
 const state = { store: null, parcelFilter: null, assets: [], events: [], target: null, photos: [], prevPhotos: [], saving: false, export: null, map: null, parcels: null, parcelsCount: 0, parcelsRec: null, zoneColors: false, seedLoadedAt: null, seedSource: null, openParcel: null, basemapRec: null, basemapCount: 0, view: null, historyReturnFocus: null, historyAsset: null, tiles: null, prefetching: false, lastMapCounts: null,
                 demo: false, defaultMode: "private_real",   // J5-077: 연습용 자료는 ?demo=1 로 켠 폰에서만. 기본 자료 종류는 실제
                 nav: null, returnFocus: null, mapSelected: null, assetFilter: "all", picking: false,
-                dealView: { on: false, mode: "total", years: 5, kind: "all" }, dealGroups: new Map(), openDealKey: null, compsTrend: "price" };
+                dealView: { on: false, mode: "total", years: 5, kind: "all" }, dealGroups: new Map(), openDealKey: null, compsTrend: "price", lookups: new Map() };
 
 // 대상 목록은 synthetic·private_real, 필지·배경 번들은 synthetic·real 을 쓴다 (리뷰 반영 PR #103)
 const DATA_MODE_TEXT = { synthetic: "연습용 자료", private_real: "실제 자료", real: "실제 자료" };
@@ -414,6 +414,7 @@ function assetSub(a) {
 
 async function renderAssets() {
   state.assets = await state.store.listAssets();
+  state.lookups = await state.store.listAssetLookups();
   state.events = await state.store.listEvents();
   state.seedLoadedAt = (await state.store.getMeta("seed_loaded_at")) ?? null;
   state.seedSource = (await state.store.getMeta("seed_source")) ?? null;
@@ -1234,10 +1235,10 @@ async function createAssetFromParcel(feature, { lookup = null } = {}) {
   if (!pt) return text($("parcel-search-note"), "이 필지 안의 점을 정하지 못해 대상을 만들 수 없습니다.", "warn");
   const dataMode = (await state.store.getMeta("data_mode")) ?? state.defaultMode;
   const asset = { asset_id: uuid4(), label: parcelTitle(feature.properties), location_point: pt, data_mode: dataMode, created_at: isoWithOffset(), notes: null, pnu: feature.id, origin: "device" };
-  // J5-084: 온라인 조회 카드에서 만들면 그때 본 값·경계를 이 폰의 대상에 함께 둔다 (내보내기에는 싣지 않는다, export.js 는 정해진 항목만 옮긴다)
-  if (lookup) asset.lookup = lookup;
+  // J5-084: 온라인 조회 카드에서 만들면 그때 본 값·경계를 이 폰에 함께 둔다. 대상과 따로 두어(asset_lookups) 내보내기에 실리지 않고,
+  // PC 정본이 같은 대상을 돌려줘 기기 사본이 지워져도 남는다 (리뷰 반영 PR #129)
   try {
-    await state.store.addDeviceAsset(asset);
+    await state.store.addDeviceAsset(asset, lookup);
   } catch (e) {
     return text($("parcel-search-note"), "대상을 저장하지 못했습니다: " + (e?.message || e), "bad");
   }
@@ -1648,13 +1649,13 @@ function selectOnMap(asset, { focus = true } = {}) {
 
 /** 대상을 만들 때 남긴 온라인 조회 기록 (J5-084): 그때의 값과 경계. 지금 값이 아니므로 조회 시각과 출처를 함께 보인다 */
 function renderSavedLookup(asset) {
-  const s = asset?.lookup ?? null;
+  const s = asset ? state.lookups.get(asset.asset_id) ?? null : null;
   $("map-selected-lookup").hidden = !s;
   if (!s) {
     if ($("lookup-panel").hidden) mapCall((m) => m.setLookup(null));
     return;
   }
-  $("map-selected-lookup-facts").replaceChildren(...lookupFacts(s).map(([k, v]) => el("li", {}, el("span", { class: "k", text: k }), el("span", { class: "v", text: v }))));
+  $("map-selected-lookup-facts").replaceChildren(...lookupFacts(s, { withId: true }).map(([k, v]) => el("li", {}, el("span", { class: "k", text: k }), el("span", { class: "v", text: v }))));
   text($("map-selected-lookup-note"), `${s.source}, ${shortWhen(s.looked_up_at)} 조회한 값입니다. 지금 값과 다를 수 있고, PC 로는 보내지 않습니다.`, "pencil small");
   if (Array.isArray(s.polygons) && Array.isArray(s.bbox)) mapCall((m) => m.setLookup(s.polygons, s.bbox));
 }
