@@ -1,7 +1,7 @@
 // 온라인 필지 조회 응답 해석 (J5-080). 응답 모양은 폰 실측(2026-10-14, 기기 시험 페이지 격리 프레임)에서 확인한 VWorld 연속지적 응답과 같은 구조이고 값은 가상이다.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseParcelResponse, parseZoningResponse, splitJibun, polygonAreaM2, polygonsOfGeometry, canLookup, fmtJiga, fmtAreaPyeong, createVworldBridge, MAX_VERTICES } from "../../web/app/vworld.js";
+import { lookupSnapshot, lookupFacts, parseParcelResponse, parseZoningResponse, splitJibun, polygonAreaM2, polygonsOfGeometry, canLookup, fmtJiga, fmtAreaPyeong, createVworldBridge, MAX_VERTICES } from "../../web/app/vworld.js";
 
 // 경도 0.0001° × 위도 0.0001° 사각형 (위도 37.57 에서 약 8.8m × 11.1m)
 const square = [[[127.0019, 37.5709], [127.0020, 37.5709], [127.0020, 37.5710], [127.0019, 37.5710], [127.0019, 37.5709]]];
@@ -152,4 +152,36 @@ test("searchQuery·parseSearchResponse: 주소 찾기 (J5-082, 응답 필드는 
   assert.deepEqual(parseSearchResponse({ response: { status: "NOT_FOUND" } }), { status: "OK", items: [] });
   assert.equal(parseSearchResponse({ response: { status: "ERROR", error: { text: "키 오류" } } }).error, "키 오류");
   assert.equal(parseSearchResponse({}).status, "bad_response");
+});
+
+test("lookupSnapshot·lookupFacts: 조회 결과를 대상에 남길 모양과 카드 줄 (J5-084)", () => {
+  const p = parseParcelResponse(doc(PROPS)).parcel;
+  const zoning = parseZoningResponse(doc({ uname: "일반상업지역", dyear: "2020" }));
+  const s = lookupSnapshot(p, zoning, "2026-10-15T07:35:00+09:00");
+  assert.deepEqual(Object.keys(s).sort(), ["addr", "area_m2", "bbox", "gosi", "jiga", "jimok", "looked_up_at", "lot", "pnu", "polygons", "source", "zoning", "zoning_error", "zoning_status"]);
+  assert.equal(s.source, "VWorld LP_PA_CBND_BUBUN, LT_C_UQ111");
+  assert.equal(s.looked_up_at, "2026-10-15T07:35:00+09:00");
+  assert.equal(s.pnu, PROPS.pnu);
+  assert.equal(s.jiga, 12345000);
+  assert.equal(s.zoning, "일반상업지역 (2020 고시)");
+  assert.equal(s.zoning_status, "OK");
+  assert.deepEqual(s.polygons, p.polygons);
+  assert.ok(!("feature" in s), "필지 객체(feature)는 넣지 않는다");
+  assert.equal(JSON.stringify(JSON.parse(JSON.stringify(s))), JSON.stringify(s), "JSON 으로 그대로 저장된다");
+  const facts = lookupFacts(s);
+  assert.deepEqual(facts.map(([k]) => k), ["지번", "지목", "용도지역", "공시지가", "도형면적"]);
+  assert.ok(facts[3][1].includes("2025-01 기준") && facts[4][1].includes("공부면적 아님"));
+  // 값이 없으면 미확인, 용도지역 실패는 사유를 맨 끝에
+  const bare = lookupSnapshot({ ...p, lot: null, jimok: null, jiga: null, gosi: null }, { status: "ERROR", error: "timeout", items: [] }, "2026-10-15T07:35:00+09:00");
+  assert.equal(bare.zoning, null);
+  assert.equal(bare.zoning_status, "ERROR");
+  assert.equal(bare.zoning_error, "timeout");
+  const bf = lookupFacts(bare);
+  assert.deepEqual(bf.map(([k]) => k), ["지번", "지목", "공시지가", "도형면적", "용도지역"]);
+  assert.deepEqual(bf.slice(0, 3).map(([, v]) => v), ["미확인", "미확인", "미확인"]);
+  assert.equal(bf[4][1], "조회 실패 (timeout)");
+  assert.equal(lookupFacts(lookupSnapshot(p, { status: "NOT_FOUND", items: [] }, "2026-10-15T07:35:00+09:00")).at(-1)[1], "이 자리에 자료 없음");
+  assert.equal(lookupFacts(lookupSnapshot(p, { status: "OK", items: [[["x", "1"]]] }, "2026-10-15T07:35:00+09:00"))[2][1], "자료에 이름 없음");
+  assert.equal(lookupFacts(lookupSnapshot(p, { status: "OK", items: [[["x", "1"]]] }, "2026-10-15T07:35:00+09:00"), { rawBelow: true })[2][1], "자료에 이름 없음 (아래 원문)");
+  assert.equal(lookupFacts(null).length, 0);
 });

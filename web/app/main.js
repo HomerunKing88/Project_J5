@@ -13,13 +13,13 @@ import { migrationReadiness, migrationText, persistenceText } from "./migrate.js
 import { createNavigator, viewFromHash, shortWhen, assetSummary, nextAsset, exportStep, pickLabel, pickPoint, MODE_LABEL, MODE_SHORT, retireModeTo } from "./ui.js";
 import { externalMapLinks, bboxCenter, LINK_ATTRS } from "./extmap.js";
 import { validateBasemap, LAYERS as BASEMAP_LAYERS, LAYER_LABEL as BASEMAP_LAYER_LABEL } from "./basemap.js";
-import { createVworldBridge, parseParcelResponse, parseZoningResponse, parseParcelsInBox, aroundQueryBox, zoningSummary, searchQuery, parseSearchResponse, canLookup, fmtJiga, fmtAreaPyeong, DATASETS as VWORLD_DATASETS } from "./vworld.js";
+import { createVworldBridge, lookupSnapshot, lookupFacts, parseParcelResponse, parseZoningResponse, parseParcelsInBox, aroundQueryBox, searchQuery, parseSearchResponse, canLookup, DATASETS as VWORLD_DATASETS } from "./vworld.js";
 import { PROVIDERS, resolveTileConfig, prefetchPlan, padBbox, tileUrl, hasKeyLike, TILE_CACHE, PREFETCH_ZOOMS, KEY_PLACEHOLDER } from "./tiles.js";
 import { readViewZip, decodeText, UnzipError, VIEW_LIMITS } from "./unzip.js";
 import { validateViewManifest, parseRecordsJsonl, validateTransactionsDoc, checkProjectionConsistency, assetHistory, parcelHistory, groupByYear, viewSummary, LINK_LABEL, parcelYearSummaryInfo, yearSummaryRow, yearSummaryCells, recentDeals, parcelSummaryItems, fmtKrw, placeDeals, dealKind, dealValueText, dealDetailText, dealsSince, dealSince, compsChartData, compsByYear, TREND_MIN_CASES, niceTicks, DEAL_MODES, DEAL_YEARS, nearbyComps, COMP_LIST_MAX, DEAL_KIND_NAMES, DEAL_KIND_FILTERS, dealsOfKind, dealKindsPresent } from "./view.js";
 // 지도 모듈(map.js)은 선택 기능이라 정적 import 하지 않는다. 로드 실패가 앱 전체(목록·기록·내보내기)를 막지 않도록 initMap 안에서 동적으로 불러온다.
 
-export const APP_VERSION = "0.2.42";
+export const APP_VERSION = "0.2.43";
 /** 자료가 없을 때 지도가 처음 보이는 곳: 종로5가역 부근 [경도, 위도] (J5-062, 배경 지도만 켠 경우) */
 const FIELD_HOME = [127.0019, 37.5709];
 const PARCEL_CARD_YEARS = 5;   // 필지 카드의 연도별 표에 보이는 최근 연도 수 (J5-055)
@@ -1229,11 +1229,13 @@ function showParcel(feature) {
 }
 
 /** 필지에서 물건 만들기 (J5-028, ADR-21): 이 기기에만 있는 임시 매입 단위. 위치점은 필지 안의 점, 이름은 동·지번. 내보내기에 assets.new.json 으로 실려 PC 가 pending 물건으로 만든다. */
-async function createAssetFromParcel(feature) {
+async function createAssetFromParcel(feature, { lookup = null } = {}) {
   const pt = interiorPoint(feature);
   if (!pt) return text($("parcel-search-note"), "이 필지 안의 점을 정하지 못해 대상을 만들 수 없습니다.", "warn");
   const dataMode = (await state.store.getMeta("data_mode")) ?? state.defaultMode;
   const asset = { asset_id: uuid4(), label: parcelTitle(feature.properties), location_point: pt, data_mode: dataMode, created_at: isoWithOffset(), notes: null, pnu: feature.id, origin: "device" };
+  // J5-084: 온라인 조회 카드에서 만들면 그때 본 값·경계를 이 폰의 대상에 함께 둔다 (내보내기에는 싣지 않는다, export.js 는 정해진 항목만 옮긴다)
+  if (lookup) asset.lookup = lookup;
   try {
     await state.store.addDeviceAsset(asset);
   } catch (e) {
@@ -1543,14 +1545,8 @@ function showLookup(p, zoning) {
   mapCall((m) => m.setLookup(p.polygons, p.bbox));
   $("lookup-title").textContent = p.addr ?? p.lot ?? p.pnu;
   $("lookup-pnu").textContent = p.pnu;
-  const facts = [
-    ["지번", p.lot ?? "미확인"],
-    ["지목", p.jimok ?? "미확인"],
-    ["공시지가", p.jiga !== null ? `${fmtJiga(p.jiga)}${p.gosi ? ` (${p.gosi} 기준)` : ""}` : "미확인"],
-    ["도형면적", `${fmtAreaPyeong(p.areaM2)} · 경계로 계산, 공부면적 아님`],
-  ];
-  if (zoning.status !== "OK") facts.push(["용도지역", zoning.status === "NOT_FOUND" ? "이 자리에 자료 없음" : `조회 실패 (${zoning.error ?? zoning.status})`]);
-  else facts.splice(2, 0, ["용도지역", zoningSummary(zoning.items) ?? "자료에 이름 없음 (아래 원문)"]);   // J5-081: 실측한 uname·dyear
+  const snap = lookupSnapshot(p, zoning, isoWithOffset());   // J5-084: 카드 줄과 대상에 남길 값이 같은 것에서 나온다
+  const facts = lookupFacts(snap, { rawBelow: true });       // 용도지역은 실측한 uname·dyear (J5-081)
   $("lookup-facts").replaceChildren(...facts.map(([k, v]) => el("li", {}, el("span", { class: "k", text: k }), el("span", { class: "v", text: v }))));
   const zi = zoning.status === "OK" ? zoning.items : [];
   $("lookup-zoning").hidden = !zi.length;
@@ -1558,7 +1554,7 @@ function showLookup(p, zoning) {
     ...(zi.length > 1 ? [el("li", { class: "muted", text: `결과 ${i + 1}` })] : []),
     ...props.map(([k, v]) => el("li", {}, el("span", { class: "k", text: k }), el("span", { class: "v", text: v }))),
   ]));
-  $("lookup-new-asset").onclick = () => createAssetFromParcel(p.feature);
+  $("lookup-new-asset").onclick = () => createAssetFromParcel(p.feature, { lookup: snap });
   text($("lookup-status"), `VWorld 연속지적도, ${new Date().toTimeString().slice(0, 5)} 조회.`, "pencil small");
   $("lookup-body").hidden = false;
   $("lookup-panel").hidden = false;
@@ -1641,12 +1637,26 @@ function selectOnMap(asset, { focus = true } = {}) {
   $("map-selected-sub").textContent = assetSub(asset) + (s.count ? `. 마지막 기록 ${shortWhen(s.lastAt)}, ${CHANGE_STATUS_LABEL[s.lastStatus] ?? ""}` : ". 아직 기록 없음");
   $("map-selected-badges").replaceChildren(...trackingBadges(asset));
   renderExtLinks($("map-selected-ext"), asset.location_point);
+  renderSavedLookup(asset);
   $("map-selected").hidden = false;
   $("start-observing").hidden = true;
   $("map-selected-start").onclick = () => startObservation(asset);
   $("map-selected-history").onclick = () => openAssetHistory(asset);
   for (const li of $("asset-list").children) li.classList.toggle("selected", li.dataset.assetId === asset.asset_id);
   if (focus) { if (!$("parcel-panel").hidden) closeParcelPanel(); openSheet(); $("field-sheet").querySelector(".sheet-body").scrollTop = 0; mapCall((m) => m.reveal(asset.asset_id)); $("map-selected-start").focus(); }
+}
+
+/** 대상을 만들 때 남긴 온라인 조회 기록 (J5-084): 그때의 값과 경계. 지금 값이 아니므로 조회 시각과 출처를 함께 보인다 */
+function renderSavedLookup(asset) {
+  const s = asset?.lookup ?? null;
+  $("map-selected-lookup").hidden = !s;
+  if (!s) {
+    if ($("lookup-panel").hidden) mapCall((m) => m.setLookup(null));
+    return;
+  }
+  $("map-selected-lookup-facts").replaceChildren(...lookupFacts(s).map(([k, v]) => el("li", {}, el("span", { class: "k", text: k }), el("span", { class: "v", text: v }))));
+  text($("map-selected-lookup-note"), `${s.source}, ${shortWhen(s.looked_up_at)} 조회한 값입니다. 지금 값과 다를 수 있고, PC 로는 보내지 않습니다.`, "pencil small");
+  if (Array.isArray(s.polygons) && Array.isArray(s.bbox)) mapCall((m) => m.setLookup(s.polygons, s.bbox));
 }
 
 function clearMapSelection() {
@@ -1656,6 +1666,7 @@ function clearMapSelection() {
   $("map-selected-start").onclick = null;
   $("map-selected-history").onclick = null;
   renderExtLinks($("map-selected-ext"), null);
+  renderSavedLookup(null);
   mapCall((m) => m.select(null));
   for (const li of $("asset-list").children) li.classList.remove("selected");
 }

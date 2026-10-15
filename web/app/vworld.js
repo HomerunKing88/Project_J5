@@ -131,6 +131,31 @@ export function zoningSummary(items) {
   return seen.size ? [...seen.values()].join(", ") : null;
 }
 
+/**
+ * 조회 결과 → 대상에 남길 기록 (J5-084). 이 폰의 대상(device_assets)에만 두고 내보내기에는 싣지 않는다.
+ * 값은 조회 그때의 VWorld 값이며 없으면 null. area_m2 는 경계로 계산한 도형면적(공부면적 아님). feature 는 넣지 않는다.
+ */
+export function lookupSnapshot(p, zoning, lookedUpAt) {
+  return { source: `VWorld ${DATASETS.parcel}, ${DATASETS.zoning}`, looked_up_at: lookedUpAt, pnu: p.pnu, addr: p.addr ?? null, lot: p.lot ?? null, jimok: p.jimok ?? null,
+    jiga: p.jiga ?? null, gosi: p.gosi ?? null, area_m2: Number.isFinite(p.areaM2) ? p.areaM2 : null,
+    zoning: zoning?.status === "OK" ? zoningSummary(zoning.items) : null, zoning_status: zoning?.status ?? "ERROR", zoning_error: zoning?.status === "OK" ? null : (zoning?.error ?? null),
+    polygons: p.polygons, bbox: p.bbox };
+}
+
+/** 조회 기록 → 카드 줄 [[이름, 값], ...]. rawBelow: 용도지역 원문을 카드 아래에 보일 때 (조회 카드) */
+export function lookupFacts(s, { rawBelow = false } = {}) {
+  if (!s) return [];
+  const facts = [
+    ["지번", s.lot ?? "미확인"],
+    ["지목", s.jimok ?? "미확인"],
+    ["공시지가", s.jiga !== null ? `${fmtJiga(s.jiga)}${s.gosi ? ` (${s.gosi} 기준)` : ""}` : "미확인"],
+    ["도형면적", s.area_m2 !== null ? `${fmtAreaPyeong(s.area_m2)} · 경계로 계산, 공부면적 아님` : "미확인"],
+  ];
+  if (s.zoning_status === "OK") facts.splice(2, 0, ["용도지역", s.zoning ?? (rawBelow ? "자료에 이름 없음 (아래 원문)" : "자료에 이름 없음")]);
+  else facts.push(["용도지역", s.zoning_status === "NOT_FOUND" ? "이 자리에 자료 없음" : `조회 실패 (${s.zoning_error ?? s.zoning_status})`]);
+  return facts;
+}
+
 /** 범위(BOX)로 받은 연속지적 응답 → 필지 목록 [{ pnu, lot, polygons, bbox }] (형식이 맞지 않는 필지는 건너뛴다)와 전체 수.
  *  truncated: VWorld 의 전체 수가 받은 수보다 많아 일부만 받았는지 */
 export function parseParcelsInBox(doc) {

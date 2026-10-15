@@ -62,7 +62,7 @@ test("온라인 필지 조회: 키 없으면 안내, 키가 있으면 지도를 
     await cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
 
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.42')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.43')");
     await cdp.eval("document.getElementById('study-id').value = 'lookup-study'; document.getElementById('save-settings').click(); 'ok'");
     await cdp.waitFor("document.getElementById('settings-note').textContent === '저장했습니다'");
     const tapMap = async (x = 195, y = 300) => {
@@ -104,6 +104,21 @@ test("온라인 필지 조회: 키 없으면 안내, 키가 있으면 지도를 
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg .layer-lookup path').length"), 0, "카드를 닫으면 경계도 지운다");
     await cdp.eval("document.getElementById('cancel-observation').click(); 'ok'");
     await cdp.waitFor("document.getElementById('sec-observe').hidden");
+    // 3b. 그 대상을 고르면 만들 때 본 조회 값·경계가 다시 보인다 (J5-084). 이 폰(IndexedDB)에만 두고 내보내기에는 싣지 않는다
+    await cdp.eval("[...document.querySelectorAll('#asset-list li')].find((li) => li.textContent.includes('182-13')).querySelector('.row-main').click(); 'ok'");
+    await cdp.waitFor(`${shown("map-selected")} && ${shown("map-selected-lookup")}`);
+    const saved = await cdp.eval("document.getElementById('map-selected-lookup').textContent");
+    for (const w of ["182-13", "1,235만 원/㎡", "2025-01 기준", "일반상업지역 (2020 고시)", "공부면적 아님", "VWorld LP_PA_CBND_BUBUN", "조회한 값", "PC 로는 보내지 않습니다"]) assert.ok(saved.includes(w), `대상 카드에 ${w}: ${saved}`);
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg .layer-lookup path.lookup-parcel').length"), 1, "저장한 경계를 다시 그린다");
+    const stored = await cdp.eval(`new Promise((res) => { const q = indexedDB.open('j5'); q.onsuccess = () => { const g = q.result.transaction('device_assets').objectStore('device_assets').getAll(); g.onsuccess = () => { res(g.result.map((a) => a.lookup)); q.result.close(); }; }; })`);
+    assert.equal(stored.length, 1);
+    assert.equal(stored[0].pnu, "1111013800101820013");
+    assert.equal(stored[0].jiga, 12345000);
+    assert.ok(Array.isArray(stored[0].polygons) && stored[0].polygons.length && /^\d{4}-\d{2}-\d{2}T/.test(stored[0].looked_up_at));
+    assert.ok(!JSON.stringify(stored[0]).includes(KEY), "저장한 기록에 키 없음");
+    await cdp.eval("document.getElementById('map-selected-close').click(); 'ok'");
+    await cdp.waitFor("document.getElementById('map-selected').hidden");
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg .layer-lookup path').length"), 0, "선택을 풀면 경계도 지운다");
 
     // 4. 확대 17단계 이상이면 화면 범위의 필지 경계 (J5-081): 범위(BOX) 조회 한 번, 경계 3개
     assert.equal(seen.filter((u) => u.includes("geomFilter=BOX")).length, 0, "확대 전에는 범위 조회를 하지 않는다");
