@@ -134,7 +134,9 @@ test("파일명·manifest", () => {
 
 test("buildPackage: 기기가 만든 물건은 그 묶음의 기록이 가리킬 때만 assets.new.json 으로 싣고 j5 inspect 가 pending 물건으로 받아들인다 (J5-028)", async () => {
   const deviceId = "8e7d6c5b-4a39-4281-9f0e-1d2c3b4a5968";
-  const device = { asset_id: deviceId, label: "가상동 4-2", location_point: [126.9996, 37.5705], data_mode: "synthetic", created_at: "2026-09-22T10:20:00+09:00", notes: null, pnu: "9999900100100040002", origin: "device", source: "device" };
+  const device = { asset_id: deviceId, label: "가상동 4-2", location_point: [126.9996, 37.5705], data_mode: "synthetic", created_at: "2026-09-22T10:20:00+09:00", notes: null, pnu: "9999900100100040002", origin: "device", source: "device",
+    // J5-084: 온라인 조회 기록은 이 폰에만 둔다. 실려 나가면 PC 의 assets_new 스키마(추가 항목 금지)가 거절하므로 아래 inspect 통과가 곧 싣지 않았다는 확인이다
+    lookup: { source: "VWorld LP_PA_CBND_BUBUN, LT_C_UQ111", looked_up_at: "2026-09-22T10:19:00+09:00", pnu: "9999900100100040002", jiga: 1000, polygons: [], bbox: [0, 0, 0, 0] } };
   const other = { ...device, asset_id: uuid4(), label: "다른 필지" };
   const ev = buildEvent({ eventId: uuid4(), assetId: deviceId, observedAt: "2026-09-22", precision: "date", deviceCreatedAt: "2026-09-22T10:21:00+09:00", changeStatus: "no_change", note: "현장에서 만든 물건의 기록", attachments: [] });
   const r = { event_id: ev.event_id, asset_id: deviceId, event: ev, line: lineBytes(ev), study_id: "j5-synthetic-study", data_mode: "synthetic", status: "saved", exported_in: [], saved_at: "2026-09-22T10:21:00.000Z" };

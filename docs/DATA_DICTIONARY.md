@@ -66,7 +66,7 @@ records는 종류별 전체 스냅샷이다. 임장·건물·필지·규제·권
   photos/<sha256>.<approved-extension>
 ```
 
-manifest에는 `format, schema_version, study_id, package_id, created_at, data_mode, files[]`를 둔다. `assets.new.json`은 그 묶음의 관측이 가리키는 기기 생성 물건(`asset_id, label, location_point, data_mode, created_at, notes, pnu, origin=device`)만 담고, 반영기는 정본에 없는 것만 `resolution_status=pending`으로 만든다. files는 경로·바이트·해시를 담는다. `data_mode=synthetic/private_real`을 구분한다. 확장자 자체는 암호화가 아니다.
+manifest에는 `format, schema_version, study_id, package_id, created_at, data_mode, files[]`를 둔다. `assets.new.json`은 그 묶음의 관측이 가리키는 기기 생성 물건(`asset_id, label, location_point, data_mode, created_at, notes, pnu, origin=device`)만 담고, 반영기는 정본에 없는 것만 `resolution_status=pending`으로 만든다. 대상을 만들 때 본 온라인 조회 기록(IndexedDB `asset_lookups`, 대상 ID 로 찾음, J5-084·ADR-27 보정: `asset_id, source, looked_up_at, pnu, addr, lot, jimok, jiga, gosi, area_m2, zoning, zoning_status, zoning_error, polygons, bbox`, 값이 없으면 `null`, `area_m2` 는 경계로 계산한 도형면적)은 기기에만 두고 `assets.new.json` 에 싣지 않으며, 파생본 시드가 같은 대상을 돌려줘도 지우지 않는다. files는 경로·바이트·해시를 담는다. `data_mode=synthetic/private_real`을 구분한다. 확장자 자체는 암호화가 아니다.
 
 관측에는 `event_id, record_type, asset_id, observed_at, device_created_at, route_version_id?, frame_version_id?, payload, attachment_refs[]`를 둔다. R1은 신규 관측과 그 정정 관측만 허용한다. 기존 정본 수정 명령·SQL·거래 연결 명령·관심도 갱신은 허용하지 않는다.
 

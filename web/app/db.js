@@ -1,9 +1,10 @@
 // IndexedDB 저장소. 스토어: meta(설정), assets(시드 물건), events(관측: 객체 + 고정 바이트), photos(sha256 → Blob),
 // parcels(필지 번들 한 벌, v2·J5-013B-1), basemap(배경 도형 번들 한 벌, v3·J5-022), view(PC 조회 파생본의 정본 기록·거래, v4·J5-023),
-// device_assets(이 기기가 필지에서 만든 임시 매입 단위, v5·J5-028: 시드 교체에도 남고, 정본이 같은 ID 를 돌려주면(파생본 시드) 기기 사본을 지운다). 저장 실패(용량 부족 등)는 예외로 올려 화면이 '저장됨'으로 오표시하지 않게 한다. 자동 삭제는 없다.
+// device_assets(이 기기가 필지에서 만든 임시 매입 단위, v5·J5-028: 시드 교체에도 남고, 정본이 같은 ID 를 돌려주면(파생본 시드) 기기 사본을 지운다),
+// asset_lookups(대상을 만들 때 본 온라인 조회 기록, v6·J5-084: PC 로 보내지 않으므로 파생본 시드가 같은 ID 를 돌려줘도 지우지 않는다. 사용자가 그 대상을 지울 때만 함께 지운다). 저장 실패(용량 부족 등)는 예외로 올려 화면이 '저장됨'으로 오표시하지 않게 한다. 자동 삭제는 없다.
 
 export const DB_NAME = "j5";
-export const DB_VERSION = 5; // v3: basemap, v4: view, v5: device_assets 스토어 추가 (기존 스토어·기록은 그대로)
+export const DB_VERSION = 6; // v3: basemap, v4: view, v5: device_assets, v6: asset_lookups 스토어 추가 (기존 스토어·기록은 그대로)
 const PARCELS_KEY = "active";
 const BASEMAP_KEY = "active";
 const VIEW_KEY = "active";
@@ -41,6 +42,7 @@ export async function openDb() {
     if (!db.objectStoreNames.contains("basemap")) db.createObjectStore("basemap");
     if (!db.objectStoreNames.contains("view")) db.createObjectStore("view");
     if (!db.objectStoreNames.contains("device_assets")) db.createObjectStore("device_assets", { keyPath: "asset_id" });
+    if (!db.objectStoreNames.contains("asset_lookups")) db.createObjectStore("asset_lookups", { keyPath: "asset_id" });
   };
   return req(r);
 }
@@ -85,10 +87,18 @@ export class Store {
   }
 
   // ---- 기기가 만든 임시 매입 단위 (J5-028, ADR-21) ----
-  async addDeviceAsset(a) {
-    const tx = this.db.transaction("device_assets", "readwrite");
+  /** lookup(온라인 조회 기록, J5-084)을 주면 같은 트랜잭션으로 asset_lookups 에 둔다 (대상과 기록이 함께 저장되거나 함께 실패한다). */
+  async addDeviceAsset(a, lookup = null) {
+    const tx = this.db.transaction(["device_assets", "asset_lookups"], "readwrite");
     tx.objectStore("device_assets").add(a);
+    if (lookup) tx.objectStore("asset_lookups").add({ ...lookup, asset_id: a.asset_id });
     await done(tx);
+  }
+
+  /** 대상 ID → 온라인 조회 기록 (J5-084). 시드 대상이 된 뒤에도 남아 있다. */
+  async listAssetLookups() {
+    const rows = await req(this.db.transaction("asset_lookups").objectStore("asset_lookups").getAll());
+    return new Map(rows.map((r) => [r.asset_id, r]));
   }
 
   async listDeviceAssets() {
@@ -97,10 +107,11 @@ export class Store {
 
   /** 기록이 하나도 없는 기기 생성 물건만 지운다 (기록이 있으면 거절: 기록의 대상이 사라지지 않게). */
   async deleteDeviceAsset(id) {
-    const tx = this.db.transaction(["device_assets", "events"], "readwrite");
+    const tx = this.db.transaction(["device_assets", "events", "asset_lookups"], "readwrite");
     const n = await req(tx.objectStore("events").index("by_asset").count(id));
     if (n > 0) { tx.abort(); throw new Error(`기록 ${n}건이 이 물건을 가리킨다. 기록이 있는 물건은 지우지 않는다`); }
     tx.objectStore("device_assets").delete(id);
+    tx.objectStore("asset_lookups").delete(id);   // 사용자가 대상을 지우면 그 조회 기록도 버린다 (J5-084)
     await done(tx);
   }
 

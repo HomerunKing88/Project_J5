@@ -62,7 +62,7 @@ test("온라인 필지 조회: 키 없으면 안내, 키가 있으면 지도를 
     await cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
 
     await cdp.navigate(`${base}/index.html`);
-    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.42')");
+    await cdp.waitFor("document.getElementById('status-line').textContent.includes('앱 0.2.43')");
     await cdp.eval("document.getElementById('study-id').value = 'lookup-study'; document.getElementById('save-settings').click(); 'ok'");
     await cdp.waitFor("document.getElementById('settings-note').textContent === '저장했습니다'");
     const tapMap = async (x = 195, y = 300) => {
@@ -104,7 +104,6 @@ test("온라인 필지 조회: 키 없으면 안내, 키가 있으면 지도를 
     assert.equal(await cdp.eval("document.querySelectorAll('#map-svg .layer-lookup path').length"), 0, "카드를 닫으면 경계도 지운다");
     await cdp.eval("document.getElementById('cancel-observation').click(); 'ok'");
     await cdp.waitFor("document.getElementById('sec-observe').hidden");
-
     // 4. 확대 17단계 이상이면 화면 범위의 필지 경계 (J5-081): 범위(BOX) 조회 한 번, 경계 3개
     assert.equal(seen.filter((u) => u.includes("geomFilter=BOX")).length, 0, "확대 전에는 범위 조회를 하지 않는다");
     for (let i = 0; i < 8 && !(await cdp.eval("document.querySelectorAll('#map-svg path.around-parcel').length")); i++) {
@@ -163,6 +162,39 @@ test("온라인 필지 조회: 키 없으면 안내, 키가 있으면 지도를 
     assert.equal(await cdp.eval("document.getElementById('map-selected').hidden"), true, "대상 점이 아닌 빈 자리");
     await cdp.waitFor("document.getElementById('lookup-status').textContent.includes('필지가 없습니다')", 20000);
     assert.equal(await cdp.eval("document.getElementById('lookup-body').hidden"), true);
+
+    // 6b. 3단계에서 만든 대상을 고르면 만들 때 본 조회 값·경계가 다시 보인다 (J5-084). 이 폰(IndexedDB)에만 두고 내보내기에는 싣지 않는다. 고르면 지도가 대상 쪽으로 움직이므로 확대 시험(4단계) 뒤에 둔다
+    await cdp.eval("[...document.querySelectorAll('#asset-list li')].find((li) => li.textContent.includes('182-13')).querySelector('.row-main').click(); 'ok'");
+    await cdp.waitFor(`${shown("map-selected")} && ${shown("map-selected-lookup")}`);
+    const saved = await cdp.eval("document.getElementById('map-selected-lookup').textContent");
+    for (const w of ["서울특별시 종로구 종로5가 182-13", "1111013800101820013", "182-13", "1,235만 원/㎡", "2025-01 기준", "일반상업지역 (2020 고시)", "공부면적 아님", "VWorld LP_PA_CBND_BUBUN", "조회한 값", "PC 로는 보내지 않습니다"]) assert.ok(saved.includes(w), `대상 카드에 ${w}: ${saved}`);
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg .layer-lookup path.lookup-parcel').length"), 1, "저장한 경계를 다시 그린다");
+    const readStore = (name) => cdp.eval(`new Promise((res) => { const q = indexedDB.open('j5'); q.onsuccess = () => { const g = q.result.transaction('${name}').objectStore('${name}').getAll(); g.onsuccess = () => { res(g.result); q.result.close(); }; }; })`);
+    const devices = await readStore("device_assets");
+    assert.equal(devices.length, 1);
+    assert.ok(!("lookup" in devices[0]), "대상 자체에는 조회 기록을 두지 않는다 (내보내기 항목과 분리)");
+    const stored = await readStore("asset_lookups");
+    assert.equal(stored.length, 1);
+    assert.equal(stored[0].asset_id, devices[0].asset_id);
+    assert.equal(stored[0].pnu, "1111013800101820013");
+    assert.equal(stored[0].jiga, 12345000);
+    assert.ok(Array.isArray(stored[0].polygons) && stored[0].polygons.length && /^\d{4}-\d{2}-\d{2}T/.test(stored[0].looked_up_at));
+    assert.ok(!JSON.stringify(stored[0]).includes(KEY), "저장한 기록에 키 없음");
+    await cdp.eval("document.getElementById('map-selected-close').click(); 'ok'");
+    await cdp.waitFor("document.getElementById('map-selected').hidden");
+    assert.equal(await cdp.eval("document.querySelectorAll('#map-svg .layer-lookup path').length"), 0, "선택을 풀면 경계도 지운다");
+
+    // 7. PC 정본이 같은 대상을 돌려주면(파생본 시드) 기기 사본은 지워지지만 조회 기록은 남는다 (리뷰 반영 PR #129). 마지막에 두어 앞 단계의 화면 상태와 섞이지 않게 한다
+    const kept = await cdp.eval(`(async () => {
+      const { Store } = await import('./app/db.js');
+      const st = await Store.open();
+      const [dev] = await st.listDeviceAssets();
+      await st.replaceProjection({ assets: [{ ...dev, origin: undefined }], view: { manifest: {}, records: [] }, source: 'projection_test' });
+      const out = { devices: (await st.listDeviceAssets()).length, lookup: (await st.listAssetLookups()).get(dev.asset_id)?.pnu ?? null };
+      st.db.close();
+      return out;
+    })()`);
+    assert.deepEqual(kept, { devices: 0, lookup: "1111013800101820013" });
   } finally {
     cdp?.close();
     srv.close();
